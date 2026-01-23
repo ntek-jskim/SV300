@@ -1,0 +1,14 @@
+.\proxy.o: ..\src\proxy.c
+.\proxy.o: ..\src\proxy.h
+.\proxy.o: ..\common\os_port.h
+.\proxy.o: ..\src\os_port_config.h
+.\proxy.o: ..\common\compiler_port.h
+.\proxy.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\stddef.h
+.\proxy.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\stdint.h
+.\proxy.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\inttypes.h
+.\proxy.o: ..\common\os_port_rtx.h
+.\proxy.o: C:\Keil_v473\ARM\RV31\INC\rtl.h
+.\proxy.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\string.h
+.\proxy.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\stdio.h
+.\proxy.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\stdlib.h
+.\proxy.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\ctype.h

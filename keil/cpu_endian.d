@@ -1,0 +1,14 @@
+.\cpu_endian.o: ..\common\cpu_endian.c
+.\cpu_endian.o: ..\common\cpu_endian.h
+.\cpu_endian.o: ..\common\os_port.h
+.\cpu_endian.o: ..\src\os_port_config.h
+.\cpu_endian.o: ..\common\compiler_port.h
+.\cpu_endian.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\stddef.h
+.\cpu_endian.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\stdint.h
+.\cpu_endian.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\inttypes.h
+.\cpu_endian.o: ..\common\os_port_rtx.h
+.\cpu_endian.o: C:\Keil_v473\ARM\RV31\INC\rtl.h
+.\cpu_endian.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\string.h
+.\cpu_endian.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\stdio.h
+.\cpu_endian.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\stdlib.h
+.\cpu_endian.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\ctype.h

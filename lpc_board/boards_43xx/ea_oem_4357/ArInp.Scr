@@ -1,0 +1,15 @@
+--create .\keil_output\core_m4\lib_lpc_board_ea_oem_4357.lib
+.\keil_output\core_m4\board.o
+.\keil_output\core_m4\board_sysinit.o
+.\keil_output\core_m4\calibrate.o
+.\keil_output\core_m4\ea_lcd_board.o
+.\keil_output\core_m4\lcdb_eeprom.o
+.\keil_output\core_m4\lpc_phy_smsc87x0.o
+.\keil_output\core_m4\mem_tests.o
+.\keil_output\core_m4\nand.o
+.\keil_output\core_m4\norflash.o
+.\keil_output\core_m4\pca9532.o
+.\keil_output\core_m4\tda19988.o
+.\keil_output\core_m4\tfp410.o
+.\keil_output\core_m4\tsc2046_touch.o
+.\keil_output\core_m4\uda1380.o

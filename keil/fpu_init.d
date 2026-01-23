@@ -1,0 +1,12 @@
+.\fpu_init.o: ..\lpc_chip\chip_common\fpu_init.c
+.\fpu_init.o: ..\lpc_chip\chip_18xx_43xx\config_43xx\sys_config.h
+.\fpu_init.o: ..\lpc_chip\chip_18xx_43xx\cmsis.h
+.\fpu_init.o: ..\lpc_chip\chip_common\lpc_types.h
+.\fpu_init.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\stdint.h
+.\fpu_init.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\stdbool.h
+.\fpu_init.o: ..\lpc_chip\chip_18xx_43xx\config_43xx\cmsis_43xx.h
+.\fpu_init.o: ..\third_party\cmsis\include\core_cm4.h
+.\fpu_init.o: ..\third_party\cmsis\include\cmsis_version.h
+.\fpu_init.o: ..\third_party\cmsis\include\cmsis_compiler.h
+.\fpu_init.o: ..\third_party\cmsis\include\cmsis_armcc.h
+.\fpu_init.o: ..\third_party\cmsis\include\mpu_armv7.h

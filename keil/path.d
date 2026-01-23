@@ -1,0 +1,14 @@
+.\path.o: ..\common\path.c
+.\path.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\string.h
+.\path.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\ctype.h
+.\path.o: ..\common\path.h
+.\path.o: ..\common\os_port.h
+.\path.o: ..\src\os_port_config.h
+.\path.o: ..\common\compiler_port.h
+.\path.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\stddef.h
+.\path.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\stdint.h
+.\path.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\inttypes.h
+.\path.o: ..\common\os_port_rtx.h
+.\path.o: C:\Keil_v473\ARM\RV31\INC\rtl.h
+.\path.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\stdio.h
+.\path.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\stdlib.h

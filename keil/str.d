@@ -1,0 +1,15 @@
+.\str.o: ..\common\str.c
+.\str.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\stdio.h
+.\str.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\string.h
+.\str.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\ctype.h
+.\str.o: ..\common\str.h
+.\str.o: ..\common\os_port.h
+.\str.o: ..\src\os_port_config.h
+.\str.o: ..\common\compiler_port.h
+.\str.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\stddef.h
+.\str.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\stdint.h
+.\str.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\inttypes.h
+.\str.o: ..\common\os_port_rtx.h
+.\str.o: C:\Keil_v473\ARM\RV31\INC\rtl.h
+.\str.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\stdlib.h
+.\str.o: ..\common\error.h

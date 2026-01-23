@@ -1,0 +1,14 @@
+.\ftp_client_demo_sram\proxy.o: ..\src\proxy.c
+.\ftp_client_demo_sram\proxy.o: ..\src\proxy.h
+.\ftp_client_demo_sram\proxy.o: ..\..\..\..\..\common\os_port.h
+.\ftp_client_demo_sram\proxy.o: ..\src\os_port_config.h
+.\ftp_client_demo_sram\proxy.o: ..\..\..\..\..\common\compiler_port.h
+.\ftp_client_demo_sram\proxy.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\stddef.h
+.\ftp_client_demo_sram\proxy.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\stdint.h
+.\ftp_client_demo_sram\proxy.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\inttypes.h
+.\ftp_client_demo_sram\proxy.o: ..\..\..\..\..\common\os_port_rtx.h
+.\ftp_client_demo_sram\proxy.o: C:\Keil_v473\ARM\RV31\INC\rtl.h
+.\ftp_client_demo_sram\proxy.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\string.h
+.\ftp_client_demo_sram\proxy.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\stdio.h
+.\ftp_client_demo_sram\proxy.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\stdlib.h
+.\ftp_client_demo_sram\proxy.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\ctype.h

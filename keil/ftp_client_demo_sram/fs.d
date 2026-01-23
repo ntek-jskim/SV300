@@ -1,0 +1,17 @@
+.\ftp_client_demo_sram\fs.o: ..\src\FS.c
+.\ftp_client_demo_sram\fs.o: C:\Keil_v473\ARM\RV31\INC\RTL.h
+.\ftp_client_demo_sram\fs.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\stdio.h
+.\ftp_client_demo_sram\fs.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\string.h
+.\ftp_client_demo_sram\fs.o: C:\Keil_v473\ARM\RV31\INC\File_Config.h
+.\ftp_client_demo_sram\fs.o: ..\src\terminal.h
+.\ftp_client_demo_sram\fs.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\stdlib.h
+.\ftp_client_demo_sram\fs.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\time.h
+.\ftp_client_demo_sram\fs.o: ..\src\meter.h
+.\ftp_client_demo_sram\fs.o: ..\..\..\..\..\common\os_port.h
+.\ftp_client_demo_sram\fs.o: ..\src\os_port_config.h
+.\ftp_client_demo_sram\fs.o: ..\..\..\..\..\common\compiler_port.h
+.\ftp_client_demo_sram\fs.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\stddef.h
+.\ftp_client_demo_sram\fs.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\stdint.h
+.\ftp_client_demo_sram\fs.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\inttypes.h
+.\ftp_client_demo_sram\fs.o: ..\..\..\..\..\common\os_port_rtx.h
+.\ftp_client_demo_sram\fs.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\ctype.h
