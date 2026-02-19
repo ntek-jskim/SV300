@@ -2285,7 +2285,7 @@ void initADE9000(uint8_t id)
 	
 	// chan 0 : 32k, chan 1: 8k로 변경
 //	(id == 0) ? configWave32kCapture(id) : configWave8kCapture(id);
-	configWave32kCapture(id);
+	configWave8kCapture(id);
 	enableCapture(id);
 	printf("Enable WaveCapture ...\n");
 	
@@ -2599,6 +2599,121 @@ void checkPqEvent(int id) {
 // sag                : 5% ~ 90%(198V)
 // short interruption : 5%(11V), < 60s
 // long  interruption : 5%(11V), > 60s
+uint64_t ts_irq[2], ts_delta[2];
+
+void meter_scan_2(uint8_t id)
+{
+	uint32_t chipId, flag, zxtMask;
+	uint16_t version, runCmd=0, wtemp, fr;
+	uint32_t rms, stat0, stat1, vlevel, dtemp, i, cnt=0, mask;
+	void *msg;
+	uint64_t tick64, zxTo;
+	PQ_EVENT	*pqE = &meter[id].cntl.pqe;
+	PQ_EVENT_INFO *pInf;
+#ifdef __FREERTOS		
+	uint32_t ulNotificationValue;
+	if (xTaskNotifyWait(0, 0xFFFFFFFF, &ulNotificationValue, pdMS_TO_TICKS(20)) == 0)
+#else
+	if (os_evt_wait_and(0x1, 20) == OS_R_TMO) 
+#endif	
+	{
+		printf(">>> ZX timeout ...\n");
+		 // wave sampling를 다시시작한다 
+ //		if (id == 0) 
+ //			w8kQ.fr = w8kQ.re = 0;
+ //		else
+ //			w32kQ.fr = w32kQ.re = 0;
+		wQ[id].fr = wQ[id].re = 0;
+	}	
+// 	ts_delta[id] = sysTick64 - ts_irq[id];
+//	ts_irq[id] = sysTick64;
+ 
+	tick64 = sysTick64;
+	read_reg32(id, AD9X_STATUS0, &stat0);	
+	read_reg32(id, AD9X_STATUS1, &stat1);	
+	// Energy READY, period = 1s
+	if (stat0 & (1<<0)) {
+		readEnergy(id);
+	}			
+	// capture Wave Form
+	if (stat0 & (1<<17)) {
+		//(id ==0) ? readWFB32k_Data(id) : readWFB8k_Data(id);
+		readWFB32k_Data(id);		
+	}
+	// RMS 1 cycle 
+	if (stat0 & (1<<19)) {
+		readPeriod(id);
+		readPhaseFastRMS(id);
+		checkPqEvent(id);
+	}
+	
+	// RMS 10/12 cycle
+	// 전압은 12 cycle(200ms) 간격으로 수집, (zero cross와 관계 없다)
+	if (stat0 & (1<<20)) {
+		readRmsAngle(id);
+	}
+	// PWR_READY (1s 단위로 읽는다 (PWR_TIME : 1s)
+	if (stat0 & (1<<18)) {
+		readPhasePower(id);
+	}	
+	// THD READY
+	if (stat0 & (1<<21)) {
+		readPhaseTHD(id);
+		//printf("IRQ: THD & PF ...\n");
+	}				
+	
+	if (stat0 & (1<<25)) {
+		readTemp(id);
+	}
+	// clear status0
+	write_reg32(id, AD9X_STATUS0, &stat0);		
+	
+	//
+	//--------------------------------------------------------------------------------
+	// Wiring Mode별로 다르게 처리해야 한다, 현재 3P4W 만 처리 함.
+	// ZxToV(a,b,c)
+	if (stat1 & (1<<9)) {
+		if (meter[id].cntl.zxMonCnt == 0) {					
+				//printf("ZX DETECT ...\n");
+		}
+		meter[id].cntl.zxMonCnt++;
+	}
+		
+	if (stat1 & (1<<6)) {
+		if (meter[id].cntl.zxMonCnt != 0) {
+			//printf("ZXTOUT ...\n");
+		}
+		meter[id].cntl.zxMonCnt = 0;
+	}
+
+
+	if (meter[id].cntl.rstEvtList == 0x1234) {
+		meter[id].cntl.rstEvtList = 0;
+		clearEventList();		
+	}
+	
+	// clear status0 & status1	
+	write_reg32(id, AD9X_STATUS1, &stat1);	
+
+	if (meter[id].cntl.wCalF[0]) {		
+		if (meter[id].cntl.wCalF[1] == 1) {			
+			writeGainU(id);
+		}
+		else if (meter[id].cntl.wCalF[1] == 2) {
+			writeGainI(id);
+		}
+		else if (meter[id].cntl.wCalF[1] == 3) {
+			writeGainW(id);
+		}
+		else if (meter[id].cntl.wCalF[1] == 4) {			
+			writeGainPh(id);
+		}			
+		else if (meter[id].cntl.wCalF[1] == 5) {
+			writeGainIn(id);
+		}
+		meter[id].cntl.wCalF[0] = meter[id].cntl.wCalF[1] = 0;
+	}
+}
 
 void meter_scan(uint8_t id)
 {
@@ -2628,6 +2743,8 @@ void meter_scan(uint8_t id)
 //			w32kQ.fr = w32kQ.re = 0;
 		wQ[id].fr = wQ[id].re = 0;
 	}	
+//	ts_delta[id] = sysTick64 - ts_irq[id];
+//	ts_irq[id] = sysTick64;
  
 	tick64 = sysTick64;
 //	printf("@@@ meter_scan tick, %d\n", tick64);
@@ -2688,22 +2805,21 @@ void meter_scan(uint8_t id)
 	//--------------------------------------------------------------------------------
 	// Wiring Mode별로 다르게 처리해야 한다, 현재 3P4W 만 처리 함.
 	// ZxToV(a,b,c)
-	if(id==1) {
-		if (stat1 & (1<<9)) {
-			if (meter[id].cntl.zxMonCnt == 0) {					
+	if (stat1 & (1<<9)) {
+		if (meter[id].cntl.zxMonCnt == 0) {					
 				//printf("ZX DETECT ...\n");
-			}
-			meter[id].cntl.zxMonCnt++;
 		}
-		
-		if (stat1 & (1<<6)) {
-			if (meter[id].cntl.zxMonCnt != 0) {
-				//printf("ZXTOUT ...\n");
-			}
-			meter[id].cntl.zxMonCnt = 0;
-		}
+		meter[id].cntl.zxMonCnt++;
 	}
-	
+		
+	if (stat1 & (1<<6)) {
+		if (meter[id].cntl.zxMonCnt != 0) {
+			//printf("ZXTOUT ...\n");
+		}
+		meter[id].cntl.zxMonCnt = 0;
+	}
+
+
 	if (meter[id].cntl.rstEvtList == 0x1234) {
 		meter[id].cntl.rstEvtList = 0;
 		clearEventList();		
@@ -2737,7 +2853,7 @@ void meter_scan(uint8_t id)
 		meter[id].cntl.wCalF[0] = meter[id].cntl.wCalF[1] = 0;
 	}
 	
-//	Board_LED_Off(3);	
+	Board_LED_Off(1);	
 }
 
 

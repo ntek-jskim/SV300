@@ -46,7 +46,7 @@ LR_IROM1 0x1A000000 0x80000
       fs_port_rtx.o (+RW +ZI)
       file_config.o (+RW +ZI)
       meter.o (+RW +ZI)
-;      iom.o (+RW +ZI)
+      iom.o (+RW +ZI)
 ;	   .ANY (+RW +ZI)      
    }
 }

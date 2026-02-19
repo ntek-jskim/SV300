@@ -12,9 +12,9 @@
 #include "crc.h"
 #include "alarm.h"
 
-#define	FW_VER	0025
+#define	FW_VER	0001
 #define	FW_BUILD_YEAR 26
-#define	FW_BUILD_MON  1
+#define	FW_BUILD_MON  2
 #define	FW_BUILD_DAY  19
 
 #define	SQRT_2	 1.414213562 
@@ -22,10 +22,9 @@
 //METER_DEF	meter __attribute__ ((section ("EXT_RAM"), zero_init));
 METER_DEF	meter[2] __attribute__ ((section ("EXT_RAM"), zero_init));
 SETTINGS	db[2] __attribute__ ((section ("EXT_RAM"), zero_init));
-ADE9000_REG ade9000[2] __attribute__ ((section ("EXT_RAM"), zero_init));
-
 SIMPLE_DATA	smap __attribute__ ((section ("EXT_RAM"), zero_init));
 SIMPLE_DATA	*psmap=&smap;
+ADE9000_REG ade9000[2] __attribute__ ((section ("EXT_RAM"), zero_init));
 
 METER_CAL	*pcal=&meter[0].cal;
 SETTINGS	*pdb=&meter[0].db;
@@ -141,7 +140,6 @@ uint8_t getHwModel()
 {
 	return pInfo->hwModel;
 }
-
 uint8_t getHwCh()
 {
 	int	mask = 1 << 15;
@@ -190,7 +188,10 @@ void setMeterInfo() {
     printf("  3.  Version        :  V%02X.%02X\n", FW_VER>>8&0xff, FW_VER&0xff);
     printf("  4.  Revision Date  :  %d/%02d/%02d\n", FW_BUILD_YEAR, FW_BUILD_MON, FW_BUILD_DAY);  
     printf("  **********************************************\n\n");	
+#ifdef	GETTHD
     printf("  thd offset :  v[%.1f]/I[%.1f]\n", pcal->v_thd_offset, pcal->i_thd_offset);  
+#endif 
+
 }
 
 uint32_t getThresHold(int type)
@@ -2236,7 +2237,7 @@ void downSampling(WAVE_WINDOW *pww, int hs)
 
 
 
-int copyFftData(int id, WAVE_WINDOW *pww, uint32_t *ptick_10s)
+int copyFftData(int id, WAVE_WINDOW *pww,	uint32_t *ptick_10s)
 {
 	// FFT task로 1600 sample을 공급한다
 	// FFT buffer가 비워있거나 10s가 경과시 fft sample  data를 공급한다  
@@ -2281,9 +2282,9 @@ void Wave_Task(void *arg)
 	uint32_t tick10s[2];
 //	int64_t sum[6]; 
 	int64_t sum[7]; 
-   	uint32_t notificationValue;
+  uint32_t notificationValue;
 	
-   	tick10s[0] = tick10s[1] = sysTick10s;
+	tick10s[0] = tick10s[1] = sysTick10s;
 	_enableTaskMonitor(Tid_Wave, 50);
 	
 	while (1) {
@@ -2322,10 +2323,10 @@ void Wave_Task(void *arg)
 		}
 
 #ifdef __FREERTOS
-		if (tid_fft != 0)
-           xTaskNotify(tid_fft, 0x1, eSetBits);
+			if (tid_fft != 0)
+            xTaskNotify(tid_fft, 0x1, eSetBits);
 #else
-		os_evt_set(0x1, tid_fft);
+			os_evt_set(0x1, tid_fft);
 #endif
 	}
 }
@@ -2386,9 +2387,9 @@ void makeRandomData(void) {
 		meter[id].meter.Uangle[1] = makeRdData(252, 0,7);
 		meter[id].meter.Uangle[2] = makeRdData(122, 0,7);
 	
-		meter[id].meter.Iangle[0] = makeRdData(12+15, 0,7);
-		meter[id].meter.Iangle[1] = makeRdData(252+16, 1,7);
-		meter[id].meter.Iangle[2] = makeRdData(122+17, 2,7);
+		meter[id].meter.Iangle[0] = makeRdData(12+15, i,7);
+		meter[id].meter.Iangle[1] = makeRdData(252+16, i,7);
+		meter[id].meter.Iangle[2] = makeRdData(122+17, i,7);
 	
 		for(i=0; i<2; i++) {
 			meter[id].meter.Ubal[i] = makeRdData(16, i,2);
@@ -3289,11 +3290,11 @@ int loadMaxMin() {
 
 	pmm = &meter[0].maxmin;
 	fread(pmm, sizeof(MAXMIN), 1, fp);	// 현재 max/min
-
+	
 	pmm = &meter[1].maxmin;
 	fread(pmm, sizeof(MAXMIN), 1, fp);	// 현재 max/min
-
-//	fread(&meter.lastmaxmin, sizeof(MAXMIN), 1, fp);	// 과거 max,min
+	
+	//	fread(&meter.lastmaxmin, sizeof(MAXMIN), 1, fp);	// 과거 max,min
 	fclose(fp);	
 	return 0;
 }
@@ -3308,12 +3309,9 @@ int storeMaxMin() {
 
 	pmm = &meter[0].maxmin;
 	fwrite(pmm, sizeof(MAXMIN), 1, fp);	// 현재 max/min
-		
+			
 	pmm = &meter[1].maxmin;
 	fwrite(pmm, sizeof(MAXMIN), 1, fp);	// 현재 max/min
-	
-	// fwrite(pmm, sizeof(MAXMIN), 1, fp);	// 현재 max/min
-	// fwrite(&meter.lastmaxmin, sizeof(MAXMIN), 1, fp);	// 과거 max,min
 	fclose(fp);	
 	return 0;	
 }
@@ -3739,7 +3737,7 @@ void Energy_Task(void *arg)
 	meter[id].cntl.egyTs1D = meter[id].cntl.tod.tm_mday;
 	meter[id].cntl.egyStartTs1D = sysTick1s;
 	
-//	initEnergyLog(id);
+//	initEnergyLog();
 	_enableTaskMonitor(Tid_Energy, 50);
 		
 	while (meter[id].cntl.runFlag) {
@@ -4128,8 +4126,7 @@ void Meter0_Task(void *param)
 	}
 }
 
-void Meter1_Task(void *param) 
-{
+void Meter1_Task(void *param) {
 	int	id=1;
 //	
 	printf("[task Meter#1 started ...\n");
@@ -4144,13 +4141,13 @@ void Meter1_Task(void *param)
 
 //	//init_fftTable();
 //	
-	ExtINTR_Init(id, 2,0);	// PINT1, EINT2
+	ExtINTR_Init(id, 2, 0);	// PINT1, EINT2
 	ExtINTR_Enable(id);	// PINT1
 //	//os_itv_set(5);
-	_enableTaskMonitor(Tid_Meter2, 50);
+_enableTaskMonitor(Tid_Meter2, 50);
 //	
 	while (1) {
-		meter_scan(id);
+		meter_scan_2(id);
 //		//os_dly_wait(1000);
 	}
 }

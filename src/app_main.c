@@ -354,35 +354,35 @@ void db_init(void)
 {
 	int   wmode;
 	// datetime timer
-   Timer1_Init(1000);	
+   	Timer1_Init(1000);	
    
-   // SSP initialization(for Meter)
+   	// SSP initialization(for Meter)
 	Board_SSP_Init(LPC_SSP0, 8, 0, 16000000);	// 0:8bit, 0:Manual/1:Auto
 	Board_SSP_Init(LPC_SSP1, 8, 0, 16000000);	// 0:8bit, 0:Manual/1:Auto
 
 	// SSP0, SSP1 DMA 초기화
 	Board_DMA_Init();
    
-   // Touch & FRAM Controller
-   ChipEepInit();
+   	// Touch & FRAM Controller
+   	ChipEepInit();
 	I2C_Init(I2C0);
    
 #ifdef EXT_RTC
 	ExtRTC_Init();
 #endif   
      
-   // Flash File System
-   FS_Init();
+   	// Flash File System
+   	FS_Init();
 //   init_card ();	
    
-   initAlarmTable();			
+   	initAlarmTable();			
 	
 	// read Setting
 	loadHwSettings(pcal);	
 	setMeterInfo();
-		
-	loadSettings(pdb);
 
+	loadSettings(pdb);
+	
 	loadEnergy();
 	loadDemand();
 	loadMaxMin();
@@ -510,7 +510,7 @@ void app_init(void *params) {
    	{
       	TRACE_ERROR("Failed to create task(Shell)\r\n");
    	}
-	
+
 	// test mode 1, normal 0
 	if(pdb->etc.testMode) {
 		taskParams.priority = OS_TASK_PRIORITY_LOW;
@@ -538,6 +538,7 @@ void app_init(void *params) {
 
 	}
    	else {
+
 		// FFT
 		taskParams.priority = OS_TASK_PRIORITY_LLOW;
 		tid_fft   = osCreateTask("fft", FFT_Task, NULL, &taskParams);
@@ -545,7 +546,7 @@ void app_init(void *params) {
 		{
 			TRACE_ERROR("Failed to create task(FFT)\r\n");
 		}
-		
+
 		// Wave
 		taskParams.priority = OS_TASK_PRIORITY_HHIGH;
 		tid_wave[0] = osCreateTask("wave", Wave_Task, NULL, &taskParams);
@@ -578,6 +579,7 @@ void app_init(void *params) {
 			TRACE_ERROR("Failed to create task(energy)\r\n");
 		}
 				
+#if 1		
 		// Meter
 		taskParams.priority = OS_TASK_PRIORITY_REALTIME;
 		taskParams.stackSize = 256;
@@ -595,7 +597,7 @@ void app_init(void *params) {
 				TRACE_ERROR("Failed to create task(Meter)!\r\n");
 			}
 		}
-
+#endif
 		// FS
 		taskParams.priority = OS_TASK_PRIORITY_LOW;
 		taskParams.stackSize = 256;
@@ -680,14 +682,16 @@ void app_init(void *params) {
 	// 	}
 	// }
 
-   // Wiznet
-   taskParams.priority = OS_TASK_PRIORITY_NORMAL;
-   tid_w5500 = osCreateTask("w5500", W5500_TcpServer, NULL, &taskParams);
-   if(tid_w5500 == OS_INVALID_TASK_ID)
-   {
-      //Debug message
-      TRACE_ERROR("Failed to create task!\r\n");
-   }
+//    // Wiznet
+//    taskParams.priority = OS_TASK_PRIORITY_NORMAL;
+//    tid_w5500 = osCreateTask("w5500", W5500_TcpServer, NULL, &taskParams);
+//    if(tid_w5500 == OS_INVALID_TASK_ID)
+//    {
+//       //Debug message
+//       TRACE_ERROR("Failed to create task!\r\n");
+//    }
+
+   // WDT Enable
    pcntl->wdtEn = 0;
 #ifdef	_WDT_EN
    wdtEnable();
