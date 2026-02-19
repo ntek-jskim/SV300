@@ -780,54 +780,54 @@ void fetchEvent(int cmd) {
 
 
 void _fetchItic(int mode, int cmd) {
-	int i, n, ix;
-	EVENT_FIFO *pFifo = pEvtFifo;
-	ITIC_EVT_LIST *plist = (mode == 0) ? piticlist : piticlist2;
+	// int i, n, ix;
+	// EVENT_FIFO *pFifo = pEvtFifo;
+	// ITIC_EVT_LIST *plist = (mode == 0) ? piticlist : piticlist2;
 	
-	plist->count = pFifo->count;
+	// plist->count = pFifo->count;
 	
-	// update
-	if (cmd == 0) {
-	}
-	// page down
-	else if (cmd == 1) {
-		if (plist->re + N_ITIC_LIST < pFifo->count) 
-			plist->re += N_ITIC_LIST;	
-	}
-	// page up
-	else if (cmd == 2) {
-		if (plist->re - N_ITIC_LIST >= 0) 
-			plist->re -= N_ITIC_LIST;
-	}
-	// top
-	else if (cmd == 3) {
-		plist->re = 0;
-	}
+	// // update
+	// if (cmd == 0) {
+	// }
+	// // page down
+	// else if (cmd == 1) {
+	// 	if (plist->re + N_ITIC_LIST < pFifo->count) 
+	// 		plist->re += N_ITIC_LIST;	
+	// }
+	// // page up
+	// else if (cmd == 2) {
+	// 	if (plist->re - N_ITIC_LIST >= 0) 
+	// 		plist->re -= N_ITIC_LIST;
+	// }
+	// // top
+	// else if (cmd == 3) {
+	// 	plist->re = 0;
+	// }
 	
-	// src
-	ix = (pFifo->fr - plist->re) >= 0 ? (pFifo->fr - plist->re) : (pFifo->fr - plist->re) + N_EVENT_FIFO;
-	// dst
-	plist->fr = plist->re;
-	for (i=0; i<N_ITIC_LIST; i++) {
-		if (plist->fr < pFifo->count) {
-			if (--ix < 0) ix = N_EVENT_FIFO-1;
-			memcpy(&plist->elog[i], &pFifo->elog[ix], sizeof(ITIC_LOG));			
-			// dst
-			plist->fr++;
-		}
-		else {
-			// fill zero
-			memset(&plist->elog[i], 0, sizeof(ITIC_LOG));
-		}
-	}
+	// // src
+	// ix = (pFifo->fr - plist->re) >= 0 ? (pFifo->fr - plist->re) : (pFifo->fr - plist->re) + N_EVENT_FIFO;
+	// // dst
+	// plist->fr = plist->re;
+	// for (i=0; i<N_ITIC_LIST; i++) {
+	// 	if (plist->fr < pFifo->count) {
+	// 		if (--ix < 0) ix = N_EVENT_FIFO-1;
+	// 		memcpy(&plist->elog[i], &pFifo->elog[ix], sizeof(ITIC_LOG));			
+	// 		// dst
+	// 		plist->fr++;
+	// 	}
+	// 	else {
+	// 		// fill zero
+	// 		memset(&plist->elog[i], 0, sizeof(ITIC_LOG));
+	// 	}
+	// }
 }
 
 void fetchItic(int cmd) {
-	_fetchItic(0, cmd);
+//	_fetchItic(0, cmd);
 }
 
 void fetchItic2(int cmd) {
-	_fetchItic(1, cmd);
+//	_fetchItic(1, cmd);
 }
 #endif
 

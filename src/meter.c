@@ -21,15 +21,22 @@
 
 //METER_DEF	meter __attribute__ ((section ("EXT_RAM"), zero_init));
 METER_DEF	meter[2] __attribute__ ((section ("EXT_RAM"), zero_init));
+METER_CAL	meterCal __attribute__ ((section ("EXT_RAM"), zero_init));
 SETTINGS	db[2] __attribute__ ((section ("EXT_RAM"), zero_init));
+ALARM_LIST	alist __attribute__ ((section ("EXT_RAM"), zero_init));
+EVENT_LIST	elist __attribute__ ((section ("EXT_RAM"), zero_init));
+ADE9000_REG ade9000[2] __attribute__ ((section ("EXT_RAM"), zero_init));
+EN50160 pqrpt __attribute__ ((section ("EXT_RAM"), zero_init));;
+
 SIMPLE_DATA	smap __attribute__ ((section ("EXT_RAM"), zero_init));
 SIMPLE_DATA	*psmap=&smap;
-ADE9000_REG ade9000[2] __attribute__ ((section ("EXT_RAM"), zero_init));
 
-METER_CAL	*pcal=&meter[0].cal;
-SETTINGS	*pdb=&meter[0].db;
+//METER_CAL	*pcal=&meter[0].cal;
+METER_CAL	*pcal=&meterCal;
+
+SETTINGS	*pdb=&db[0];
 SETTINGS	*pdbk=&meter[0].setting;
-SETTINGS	*pdb2=&meter[1].db;
+SETTINGS	*pdb2=&db[1];
 SETTINGS	*pdbk2=&meter[1].setting;
 
 METERING 	*pmeter=&meter[0].meter;
@@ -50,10 +57,14 @@ QualLogData	*pqLog=&meter[0].qdLog;
 //SAMPLE_BUF *pSp = &meter.sample;
 GATEWAY_STATUS *pgwst = &meter[0].gwst;
 ALARM_STATUS *palm = &meter[0].alarm;
-ALARM_LIST	*palist=&meter[0].alist;
-EVENT_LIST	*pelist=&meter[0].elist;
-ITIC_EVT_LIST *piticlist=&meter[0].itic;
-ITIC_EVT_LIST *piticlist2=&meter[0].itic2;		// configurator
+
+//ALARM_LIST	*palist=&meter[0].alist;
+//EVENT_LIST	*pelist=&meter[0].elist;
+ALARM_LIST	*palist=&alist;
+EVENT_LIST	*pelist=&elist;
+
+//ITIC_EVT_LIST *piticlist=&meter[0].itic;
+//ITIC_EVT_LIST *piticlist2=&meter[0].itic2;		// configurator
 //PQ_EVENT_COUNT *ppqEvtCnt=&meter[0].pqEvtCnt;
 PQ_EVENT_COUNT pQevt, *ppqEvtCnt=&pQevt;
 

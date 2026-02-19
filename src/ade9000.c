@@ -2824,12 +2824,12 @@ void meter_scan(uint8_t id)
 		meter[id].cntl.rstEvtList = 0;
 		clearEventList();		
 	}
-	if(id==0) {
-		if (meter[id].cntl.rstIticList == 0x1234) {
-			meter[id].cntl.rstIticList = 0;
-			memset(piticlist, 0, sizeof(*piticlist));
-		}
-	}
+	// if(id==0) {
+	// 	if (meter[id].cntl.rstIticList == 0x1234) {
+	// 		meter[id].cntl.rstIticList = 0;
+	// 		memset(piticlist, 0, sizeof(*piticlist));
+	// 	}
+	// }
 	
 	// clear status0 & status1	
 	write_reg32(id, AD9X_STATUS1, &stat1);	
