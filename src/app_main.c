@@ -37,7 +37,7 @@ extern void SMB_rtu_Task2(void *);
 //extern void Gateway_Task(void *);
 //extern void Gateway_MCS_Task(void *);
 extern void Trend_Task(void *);
-//extern void IOM_Task(void *);
+extern void IOM_Task(void *);
 extern void TempScan_Task(void *);
 extern void FTPC_Task(void *);
 extern void Shell_Task(void *);
@@ -617,13 +617,13 @@ void app_init(void *params) {
    	}
 
    // IOM
-//    taskParams.priority = OS_TASK_PRIORITY_LOW;
-//    tid_iom = osCreateTask("iom", IOM_Task, NULL, &taskParams);
-//    if(tid_iom == OS_INVALID_TASK_ID)
-//    {
-//       //Debug message
-//       TRACE_ERROR("Failed to create task(iom)!\r\n");
-//    }
+    taskParams.priority = OS_TASK_PRIORITY_LOW;
+    tid_iom = osCreateTask("iom", IOM_Task, NULL, &taskParams);
+    if(tid_iom == OS_INVALID_TASK_ID)
+    {
+       //Debug message
+       TRACE_ERROR("Failed to create task(iom)!\r\n");
+    }
 //    pdb->comm.comMode = 1;
 
 //	pdb->comm.gwEable = 0x03;	// gems3600 #1,2 enable	
@@ -789,10 +789,14 @@ void Shell_Task(void *arg)
 			ts1s = sysTick1s;
 			for(j=1; j<3; j++) {
 				val = getRstpState(j);
-				if(val == 1)
+				if(val == 1) {
 					pInfo->RSTP_sts[j-1] = STS_ERROR;
-				else
+					Board_LED_On(j+3);
+				}
+				else {
 					pInfo->RSTP_sts[j-1] = STS_OK;
+					Board_LED_Off(j+3);
+				}
 
 //				val = getRstpState(j);
 //				printf("RSTP Status[%d] = %d\n", j-1, pInfo->RSTP_sts[j-1]);

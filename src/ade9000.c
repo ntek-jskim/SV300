@@ -1995,7 +1995,7 @@ void readWFB8k_Data(int id)
 		}
 	}	
 	SSP_SSEL_Mode(id, 0);	// SSEL:Manual
-	Board_LED_Off(2);
+//	Board_LED_Off(1);
 	
 	t2 = sysTick64;
 	if (t2-t1 > 10) printf("tick = %d\n", (int)(t2-t1));
@@ -2060,7 +2060,6 @@ void readWFB32k_Data(int id)
 		}
 	}	
 	SSP_SSEL_Mode(id, 0);	
-	//Board_LED_Off(1);
 
 //	// 8 page 모두 읽은 후 transient task에 알린다 		
 //	if (tid_app[id] != 0) {
@@ -2364,7 +2363,7 @@ void checkPqEvent(int id) {
 		if (meter[id].cntl.zxMonCnt == 0) {
 			if (meter[id].cntl.online) {
 				//printf("+++ OFFLine +++\n");
-//				Board_LED_Off(2);
+//				Board_LED_Off(1);
 			}
 			meter[id].cntl.online = 0;
 		}		
@@ -2764,6 +2763,7 @@ void meter_scan(uint8_t id)
 	// Energy READY, period = 1s
 	if (stat0 & (1<<0)) {
 		readEnergy(id);
+		Board_LED_Toggle(1);	
 	}			
 	// capture Wave Form
 	if (stat0 & (1<<17)) {
@@ -2853,7 +2853,6 @@ void meter_scan(uint8_t id)
 		meter[id].cntl.wCalF[0] = meter[id].cntl.wCalF[1] = 0;
 	}
 	
-	Board_LED_Off(1);	
 }
 
 

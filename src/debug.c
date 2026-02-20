@@ -264,6 +264,8 @@ const uint32_t _LED_GPIO[][2] = {
 	{7, 22},
 	{7, 23},
 	{7, 24},
+	{6, 29},
+	{6, 30}
 };
 
 const uint32_t _ETC_GPIO[][2] = {
@@ -275,16 +277,22 @@ const uint32_t _ETC_GPIO[][2] = {
 
 const uint32_t _WDT_GPIO[][2] = {
    {7, 0}, // enable
-   {7, 1}, // clear
+   {7, 1} // clear
 };
 
 const uint32_t _EINT_GPIO[][2] = {
    {5, 8},  // enable
    {5, 9},  // clear
    {6, 1},  // enable
-   {6, 2},  // clear
+   {6, 2}  // clear
 };
 
+const uint32_t _DI_GPIO[][2] = {
+   {6, 25},  // DI_1
+   {6, 26}, // DI_2
+   {6, 27}, // DI_3
+   {6, 28}  // DI_4
+};
 
 void Board_LED_Toggle(uint8_t ix) {
    int port = _LED_GPIO[ix][0];
@@ -342,7 +350,6 @@ void Board_WDT_Clear() {
 
 void Board_GPIO_Init() 
 {
-#if 1	
    int i;
    
 	// WDT
@@ -377,8 +384,12 @@ void Board_GPIO_Init()
    LPC_SCU->SFSPF_9  = (4 & SCU_SFSPF_9_MODE_Msk);
    //Configure red LED (6.10)/7.23
    LPC_SCU->SFSPF_10 = (4 & SCU_SFSPF_10_MODE_Msk);
+
+   //RSTP Status LED
+   LPC_SCU->SFSPD_15 = (4 & SCU_SFSPD_15_MODE_Msk);
+   LPC_SCU->SFSPD_16 = (4 & SCU_SFSPD_16_MODE_Msk);
    // set output
-   for (i=0; i<3; i++) {
+   for (i=0; i<5; i++) {
       LPC_GPIO_PORT->DIR[_LED_GPIO[i][0]] |= (1<<_LED_GPIO[i][1]);
       LPC_GPIO_PORT->CLR[_LED_GPIO[i][0]]  = (1<<_LED_GPIO[i][1]);
    }
@@ -391,32 +402,16 @@ void Board_GPIO_Init()
    for (i=0; i<4; i++) {
       LPC_GPIO_PORT->DIR[_EINT_GPIO[i][0]] &= ~(1<<_EINT_GPIO[i][1]);
    }
-#else
-	int i;
-		
-	// WDT
-	Chip_SCU_SetPinMuxing(WDT_PIN, sizeof(WDT_PIN) / sizeof(PINMUX_GRP_T));
-	for (i=0; i<2; i++) {
-		Chip_GPIO_SetPinDIR(LPC_GPIO_PORT, WDT_GPIO[i].port, WDT_GPIO[i].num, 1);
-	}
-	
-	// EINT0, EINT1, EINT2, EINT3
-	Chip_SCU_SetPinMuxing(EINT_PIN, sizeof(EINT_PIN) / sizeof(PINMUX_GRP_T));
-	for (i=0; i<4; i++) {
-		Chip_GPIO_SetPinDIR(LPC_GPIO_PORT, EINT_GPIO[i].port, EINT_GPIO[i].num, 0);
-	}	
 
-	// ETC, add PHY reset
-	Chip_SCU_SetPinMuxing(ETC_PIN, sizeof(ETC_PIN) / sizeof(PINMUX_GRP_T));
-	for (i=0; i<3; i++) {
-		Chip_GPIO_SetPinDIR(LPC_GPIO_PORT, ETC_GPIO[i].port, ETC_GPIO[i].num, 1);
-	}		
+	// DI
+   LPC_SCU->SFSPD_11 = ((0 & SCU_SFSPD_11_MODE_Msk));
+   LPC_GPIO_PORT->DIR[_DI_GPIO[0][0]] &= ~(1<<_DI_GPIO[0][1]); 
+   LPC_SCU->SFSPD_12 = ((0 & SCU_SFSPD_12_MODE_Msk));
+   LPC_GPIO_PORT->DIR[_DI_GPIO[1][0]] &= ~(1<<_DI_GPIO[1][1]); 
+   LPC_SCU->SFSPD_13 = ((0 & SCU_SFSPD_13_MODE_Msk));
+   LPC_GPIO_PORT->DIR[_DI_GPIO[2][0]] &= ~(1<<_DI_GPIO[2][1]); 
+   LPC_SCU->SFSPD_14 = ((0 & SCU_SFSPD_14_MODE_Msk));
+   LPC_GPIO_PORT->DIR[_DI_GPIO[3][0]] &= ~(1<<_DI_GPIO[3][1]); 
 
-	Chip_SCU_SetPinMuxing(LED_PIN, sizeof(LED_PIN) / sizeof(PINMUX_GRP_T));
-	for (i=0; i<4; i++) {
-		Chip_GPIO_SetPinDIR(LPC_GPIO_PORT, LED_GPIO[i].port, LED_GPIO[i].num, 1);
-	}
-	// negate PHY reset
-	Chip_GPIO_SetPinOutHigh(LPC_GPIO_PORT, ETC_GPIO[2].port, ETC_GPIO[2].num);
-#endif   
+  
 }

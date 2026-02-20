@@ -78,7 +78,7 @@ int smbTcpProc(uint8_t *prb, int nr, uint8_t *ptb, int *nw, int longFrame)
 		len = modbusMakeTcpFrame(prb, ptb, len);  
 		//nr = readSlaveData(seq, len, largeF, &psrc[6], pdst);
 		if (len > 0) {
-//			Board_LED_Toggle(1);
+			Board_LED_Toggle(2);
 			dprtbuffer(1, "[TX]", ptb, len); 
 			ret = 0;
 		}

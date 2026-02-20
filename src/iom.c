@@ -4,6 +4,7 @@
 #include "crc.h"
 #include "meter.h"
 #include "modbus.h"
+#include "temp_sensor.h"
 #include "stdio.h"
 #include "string.h"
 #include "math.h"
@@ -789,29 +790,38 @@ void eventOutput(int state)
 // }
 
 
-// #ifdef __RTX
-// __task void IOM_Task()
-// #else
-// void IOM_Task(void *arg)
-// #endif
-// {
-// 	int uId=0, nw, nr, i=0, cnt=0, pnt;
-// 	uint32_t ts1s = sysTick1s;
+#ifdef __RTX
+__task void IOM_Task()
+#else
+void IOM_Task(void *arg)
+#endif
+{
+    int16_t temp_c, temp_c10;
+	int ch;
+
+	// 초기화 (시작 시 한 번, 예: app_main 또는 Board 초기화에서)
+	TempSensor_Init();
 	
-// 	printf("sizeof(IOM_MEM_DEF) = %d\n", sizeof(IOM_MEM_DEF));
-// 	printf("sizeof(IOS_DATA) = %d\n", sizeof(IOS_DATA));
-// 	printf("sizeof(SOE_DATA) = %d\n", sizeof(SOE_DATA));
-// 	printf("sizeof(IO_CFG) = %d\n", sizeof(IO_CFG));
-	
-// 	UART_Init(uId, 115200);	
-// 	_enableTaskMonitor(Tid_Iom, 50);
+	_enableTaskMonitor(Tid_Iom, 50);
 // 	pcntl->ioDbFlag = 0x1234;	// fisrst scan 시 db 전송
-// 	pInfo->Io_sts = STS_ERROR;
+//	pInfo->Io_sts = STS_ERROR;
 
-// 	printf("[IOM Scan Task]\n");
+	printf("[IOM Scan Task]\n");
 
-// 	while (1) {
-// 		pcntl->wdtTbl[Tid_Iom].count++;
+	while (1) {
+		pcntl->wdtTbl[Tid_Iom].count++;
+		/* ADC0_1 ~ ADC0_4 총 4채널 온도 읽기 */
+		for (ch = 0; ch < TEMP_SENSOR_NUM_CHANNELS; ch++) {
+			if (TempSensor_ReadTempC(ch, &temp_c))
+				printf("ADC0_%d 온도: %d °C\n", ch + 1, (int)temp_c);
+			else
+				printf("ADC0_%d 온도 읽기 실패\n", ch + 1);
+			if (TempSensor_ReadTempCx10(ch, &temp_c10))
+				printf("ADC0_%d 온도: %d.%d °C\n", ch + 1, temp_c10 / 10, temp_c10 % 10);
+			else
+				printf("ADC0_%d 온도 읽기 실패\n", ch + 1);
+		}
+		osDelayTask(1000);
 
 // 		if(pInfo->Io_sts == STS_ERROR) {
 // 			if (sysTick1s == ts1s) {
@@ -895,6 +905,6 @@ void eventOutput(int state)
 // 			IOMScan(0, uId);	
 // 			osDelayTask(100);
 // 		}
-// 	}
-// }
+	}
+}
 

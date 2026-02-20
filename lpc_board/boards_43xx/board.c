@@ -351,14 +351,14 @@ const PINMUX_GRP_T LED_PIN[] = {
 	{0xf, 8, (SCU_MODE_FUNC4 | SCU_MODE_PULLDOWN)},
 	{0xf, 9, (SCU_MODE_FUNC4 | SCU_MODE_PULLDOWN)},
 	{0xf, 10, (SCU_MODE_FUNC4 | SCU_MODE_PULLDOWN)},
-	{0xf, 11, (SCU_MODE_FUNC4 | SCU_MODE_PULLDOWN)},
+//	{0xf, 11, (SCU_MODE_FUNC4 | SCU_MODE_PULLDOWN)},
 };
 
 const GPIO_ID LED_GPIO[] = {
-	{7, 22},
-	{7, 23},
-	{7, 24},
-	{7, 25},
+	{7, 22},		// run
+	{7, 23},		// sts
+	{7, 24},		// comm
+//	{7, 25},
 };
 // KEY PIN
 const PINMUX_GRP_T KEY_PIN[] = {	
@@ -492,7 +492,7 @@ static void Board_LED_Init()
 	int i;
 	
 	Chip_SCU_SetPinMuxing(LED_PIN, sizeof(LED_PIN) / sizeof(PINMUX_GRP_T));
-	for (i=0; i<4; i++) {
+	for (i=0; i<3; i++) {
 		Chip_GPIO_SetPinDIR(LPC_GPIO_PORT, LED_GPIO[i].port, LED_GPIO[i].num, 1);
 	}
 }

@@ -82,4 +82,5 @@
 .\iom.o: ..\src\crc.h
 .\iom.o: ..\src\meter.h
 .\iom.o: ..\src\modbus.h
+.\iom.o: ..\src\temp_sensor.h
 .\iom.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\math.h

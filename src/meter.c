@@ -3959,12 +3959,12 @@ void PostScan_Task(void *arg)
 					storeAlarmStatus();		
 					// Alarm Fifo 지운다
 					deleteAlarmLog();				
-					Board_LED_Off(1);				// alarm off
+//					Board_LED_Off(1);				// alarm off
 				}
 				else if (alarmProc() > 0) {
 					palm->updateTs = sysTick32;
 					storeAlarmStatus();
-					Board_LED_On(1);				// alarm on
+//					Board_LED_On(1);				// alarm on
 				}
 				
 				Board_LED_Set(1, palm->almCount);
