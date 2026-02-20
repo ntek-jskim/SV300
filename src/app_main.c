@@ -579,7 +579,7 @@ void app_init(void *params) {
 			TRACE_ERROR("Failed to create task(energy)\r\n");
 		}
 				
-#if 1		
+#if 0		
 		// Meter
 		taskParams.priority = OS_TASK_PRIORITY_REALTIME;
 		taskParams.stackSize = 256;
@@ -588,15 +588,15 @@ void app_init(void *params) {
 		{
 			TRACE_ERROR("Failed to create task(Meter)!\r\n");
 		}
-		if(getHwCh()== 0) {
-			taskParams.priority = OS_TASK_PRIORITY_REALTIME;
-			taskParams.stackSize = 256;
-			tid_meter[1] = osCreateTask("meter1", Meter1_Task, NULL, &taskParams);
-			if(tid_meter[1] == OS_INVALID_TASK_ID)
-			{
-				TRACE_ERROR("Failed to create task(Meter)!\r\n");
-			}
-		}
+		// if(getHwCh()== 0) {
+		// 	taskParams.priority = OS_TASK_PRIORITY_REALTIME;
+		// 	taskParams.stackSize = 256;
+		// 	tid_meter[1] = osCreateTask("meter1", Meter1_Task, NULL, &taskParams);
+		// 	if(tid_meter[1] == OS_INVALID_TASK_ID)
+		// 	{
+		// 		TRACE_ERROR("Failed to create task(Meter)!\r\n");
+		// 	}
+		// }
 #endif
 		// FS
 		taskParams.priority = OS_TASK_PRIORITY_LOW;

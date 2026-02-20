@@ -1,0 +1,6 @@
+*.bak
+*.bin
+*.uvgui.*
+*.uvopt
+*.dep
+keil_output/

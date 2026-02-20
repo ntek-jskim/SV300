@@ -355,7 +355,7 @@
             <uSurpInc>0</uSurpInc>
             <VariousControls>
               <MiscControls></MiscControls>
-              <Define>LPC4330 USE_LPCXPRESSO_4337 CMSIS_BITPOSITIONS GPL_LICENSE_TERMS_ACCEPTED CORE_M4 USE_KSZ8863 _WIZCHIP_=W5500 GEMS9000 EXT_RTC _FTP_SERVER VFRMS METER_TEST_DATA DUAL_METER</Define>
+              <Define>LPC4330 USE_LPCXPRESSO_4337 CMSIS_BITPOSITIONS GPL_LICENSE_TERMS_ACCEPTED CORE_M4 USE_KSZ8863 GEMS9000 EXT_RTC _FTP_SERVER VFRMS METER_TEST_DATA DUAL_METER</Define>
               <Undefine></Undefine>
               <IncludePath>..\src;..\third_party\cmsis\include;..\third_party\nxp\devices\lpc43xx;..\third_party\nxp\boards\lpcxpresso_4337;..\third_party\freertos\include;..\third_party\freertos\portable\rvds\arm_cm4f;..\common;..\cyclone_driver\cyclone_stp;..\cyclone_driver\cyclone_tcp;..\cyclone_driver\cyclone_crypto;..\lpc_chip\chip_18xx_43xx\config_43xx;..\lpc_chip\chip_18xx_43xx;..\lpc_chip\chip_common;..\lpc_board\boards_43xx\ea_oem_4357;..\lpc_board\board_common;..\wiznet</IncludePath>
             </VariousControls>
@@ -1906,31 +1906,6 @@
           </Files>
         </Group>
         <Group>
-          <GroupName>Wiznet</GroupName>
-          <Files>
-            <File>
-              <FileName>w5500_init.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\wiznet\w5500_init.c</FilePath>
-            </File>
-            <File>
-              <FileName>wizchip_conf.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\wiznet\wizchip_conf.c</FilePath>
-            </File>
-            <File>
-              <FileName>wiznet_socket.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\wiznet\wiznet_socket.c</FilePath>
-            </File>
-            <File>
-              <FileName>w5500.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\wiznet\W5500\w5500.c</FilePath>
-            </File>
-          </Files>
-        </Group>
-        <Group>
           <GroupName>Application</GroupName>
           <Files>
             <File>
@@ -1989,11 +1964,6 @@
               <FilePath>..\src\crc.c</FilePath>
             </File>
             <File>
-              <FileName>wiznet_thread.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\src\wiznet_thread.c</FilePath>
-            </File>
-            <File>
               <FileName>ETC.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\src\ETC.c</FilePath>
@@ -2017,6 +1987,11 @@
               <FileName>proxy.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\src\proxy.h</FilePath>
+            </File>
+            <File>
+              <FileName>iom.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\iom.c</FilePath>
             </File>
           </Files>
         </Group>
