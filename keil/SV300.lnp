@@ -206,6 +206,7 @@
 ".\getline.o"
 ".\proxy.o"
 ".\iom.o"
+".\temp_sensor.o"
 --strict --scatter ".\SV300.sct"
 --summary_stderr --info summarysizes --map --xref --callgraph --symbols
 --info sizes --info totals --info unused --info veneers

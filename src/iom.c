@@ -813,13 +813,13 @@ void IOM_Task(void *arg)
 		/* ADC0_1 ~ ADC0_4 총 4채널 온도 읽기 */
 		for (ch = 0; ch < TEMP_SENSOR_NUM_CHANNELS; ch++) {
 			if (TempSensor_ReadTempC(ch, &temp_c))
-				printf("ADC0_%d 온도: %d °C\n", ch + 1, (int)temp_c);
+				printf("ADC0_%d Temp : %d\n", ch + 1, (int)temp_c);
 			else
-				printf("ADC0_%d 온도 읽기 실패\n", ch + 1);
-			if (TempSensor_ReadTempCx10(ch, &temp_c10))
-				printf("ADC0_%d 온도: %d.%d °C\n", ch + 1, temp_c10 / 10, temp_c10 % 10);
-			else
-				printf("ADC0_%d 온도 읽기 실패\n", ch + 1);
+				printf("ADC0_%d Temp Read Error\n", ch + 1);
+			// if (TempSensor_ReadTempCx10(ch, &temp_c10))
+			// 	printf("ADC0_%d 온도: %d.%d °C\n", ch + 1, temp_c10 / 10, temp_c10 % 10);
+			// else
+			// 	printf("ADC0_%d Temp Read Error\n", ch + 1);
 		}
 		osDelayTask(1000);
 

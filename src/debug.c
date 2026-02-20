@@ -413,5 +413,4 @@ void Board_GPIO_Init()
    LPC_SCU->SFSPD_14 = ((0 & SCU_SFSPD_14_MODE_Msk));
    LPC_GPIO_PORT->DIR[_DI_GPIO[3][0]] &= ~(1<<_DI_GPIO[3][1]); 
 
-  
 }

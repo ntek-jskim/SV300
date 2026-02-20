@@ -1,12 +1,11 @@
 .\temp_sensor.o: ..\src\temp_sensor.c
-.\temp_sensor.o: ..\src\temp_sensor.h
-.\temp_sensor.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\stdint.h
-.\temp_sensor.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\stdbool.h
 .\temp_sensor.o: ..\lpc_board\boards_43xx\ea_oem_4357\board.h
 .\temp_sensor.o: ..\lpc_chip\chip_18xx_43xx\chip.h
 .\temp_sensor.o: ..\lpc_chip\chip_18xx_43xx\config_43xx\sys_config.h
 .\temp_sensor.o: ..\lpc_chip\chip_18xx_43xx\cmsis.h
 .\temp_sensor.o: ..\lpc_chip\chip_common\lpc_types.h
+.\temp_sensor.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\stdint.h
+.\temp_sensor.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\stdbool.h
 .\temp_sensor.o: ..\lpc_chip\chip_18xx_43xx\config_43xx\cmsis_43xx.h
 .\temp_sensor.o: ..\third_party\cmsis\include\core_cm4.h
 .\temp_sensor.o: ..\third_party\cmsis\include\cmsis_version.h
@@ -80,3 +79,4 @@
 .\temp_sensor.o: ..\lpc_board\board_common\lpc_phy.h
 .\temp_sensor.o: ..\lpc_board\boards_43xx\ea_oem_4357\board.h
 .\temp_sensor.o: ..\lpc_board\board_common\uda1380.h
+.\temp_sensor.o: ..\src\temp_sensor.h
