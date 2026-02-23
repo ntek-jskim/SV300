@@ -80,3 +80,4 @@
 .\temp_sensor.o: ..\lpc_board\boards_43xx\ea_oem_4357\board.h
 .\temp_sensor.o: ..\lpc_board\board_common\uda1380.h
 .\temp_sensor.o: ..\src\temp_sensor.h
+.\temp_sensor.o: C:\Keil_v473\ARM\ARMCC\bin\..\include\math.h

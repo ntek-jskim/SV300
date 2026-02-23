@@ -1,10 +1,31 @@
 /**
  * @brief Temperature sensor driver using LPC43xx ADC0 channels 1~4 (ADC0_1 ~ ADC0_4)
+ *        NTC thermistor (10k @ 25°C) with 10k series resistor, Steinhart-Hart.
+ *
+ * [미연결 채널 영향]
+ * - 1채널에만 NTC를 연결하고 나머지는 비어 있으면, 다른 채널 값이 1채널에 영향을 받는 것처럼 보일 수 있음.
+ * - 원인 1: ADC0_2~4 핀이 플로팅이면 전압이 불안정하고, 인접한 ADC0_1 노이즈/전압에 유도됨.
+ * - 원인 2: 내부 멀티플렉서/샘플홀드에 이전 채널(1번) 변환 전압이 잔류한 상태에서 다음 채널 변환 시
+ *           그 값이 섞여 나올 수 있음 (채널 전환 직후 변환 시).
+ * - 권장: 미사용 채널 핀은 GND 또는 Vref/2에 10k~100k 저항으로 연결하여 플로팅 제거.
  */
 #include "board.h"
 #include "chip.h"
 #include "temp_sensor.h"
 #include <string.h>
+#include <math.h>
+
+/** NTC: 10kΩ 직렬 저항, 25°C 기준 10kΩ NTC, Steinhart-Hart 계수 */
+#define NTC_SERIES_R_OHM    10000.0f
+#define NTC_VREF             3.3f
+#define NTC_ADC_MAX          1024.0f   /* 10-bit ADC */
+// #define NTC_C1A              0.001129148f
+// #define NTC_C2A              0.000234125f
+// #define NTC_C3A              0.0000000876743f
+#define NTC_C1A              0.002775575
+#define NTC_C2A              0.00024804
+#define NTC_C3A              0.002775575
+#define NTC_K_TEMP           273.15f
 
 static ADC_CLOCK_SETUP_T adcSetup;
 static bool s_initialized = false;
@@ -26,9 +47,13 @@ static bool readAdcRaw(uint8_t adcChannel, uint16_t *raw)
 	if (adcChannel > ADC_CH7 || !raw)
 		return false;
 
-	/* 한 번에 한 채널만 선택하여 변환 (비버스트 모드) */
+	/* 비버스트 모드: 여러 채널이 선택되면 LPC43xx는 최하위 채널만 변환하므로,
+	   변환할 채널만 선택 (나머지 채널 비트 제거) */
 	cr_save = LPC_ADC0->CR;
-	LPC_ADC0->CR = (cr_save & ~ADC_CR_START_MASK) | ADC_CR_CH_SEL(adcChannel);
+	LPC_ADC0->CR = (cr_save & ~ADC_CR_START_MASK & ~(0xFFUL)) | ADC_CR_CH_SEL(adcChannel);
+
+	/* 채널 전환 후 멀티플렉서/입력 정착 시간 (미연결 채널은 이전 채널 전압 잔류 가능) */
+	{ volatile uint32_t d = 20; while (d--) (void)0; }
 
 	Chip_ADC_SetStartMode(LPC_ADC0, ADC_START_NOW, ADC_TRIGGERMODE_RISING);
 	while (Chip_ADC_ReadStatus(LPC_ADC0, adcChannel, ADC_DR_DONE_STAT) != SET && --timeout)
@@ -65,6 +90,7 @@ void TempSensor_Init(void)
 bool TempSensor_ReadTempC(int channel, int16_t *temp_c)
 {
 	uint16_t raw;
+	float tVolt, tCurr, tRVal, fval, temp, logval;
 
 	if (!s_initialized || !temp_c || channel < 0 || channel >= TEMP_SENSOR_NUM_CHANNELS)
 		return false;
@@ -72,9 +98,23 @@ bool TempSensor_ReadTempC(int channel, int16_t *temp_c)
 	if (!readAdcRaw((uint8_t)s_adcChannels[channel], &raw))
 		return false;
 
-	/* Simple linear conversion: 10-bit ADC, assume 0~3.3V -> 0~100°C scale
-	 * temp_c = (raw * 100) / 1024; calibrate per hardware if needed */
-	*temp_c = (int16_t)((raw * 100) / 1024);
+#if 1
+	*temp_c = raw;
+#else
+	/* NTC: V = ADC * 3.3/1024, I = V/10k, R_ntc = 3.3/I - 10k, Steinhart-Hart */
+	tVolt = (float)raw / NTC_ADC_MAX * NTC_VREF;
+	tCurr = tVolt / NTC_SERIES_R_OHM;
+
+	if (tCurr > 0.0f) {
+		tRVal = NTC_VREF / tCurr - NTC_SERIES_R_OHM;
+		fval = tRVal / 1000.0f;   /* kΩ */
+		logval = (float)log((double)fval);
+		temp = 1.0f / (NTC_C1A + NTC_C2A * logval + NTC_C3A * logval * logval * logval) - NTC_K_TEMP;
+		*temp_c = (int16_t)(temp + (temp >= 0.0f ? 0.5f : -0.5f));
+	} else {
+		*temp_c = 0;
+	}
+#endif
 	return true;
 }
 

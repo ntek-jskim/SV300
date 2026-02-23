@@ -364,12 +364,6 @@ void Board_GPIO_Init()
    LPC_GPIO_PORT->DIR[_ETC_GPIO[0][0]] |= (1<<_ETC_GPIO[0][1]);   
    LPC_GPIO_PORT->CLR[_ETC_GPIO[0][0]]  = (1<<_ETC_GPIO[0][1]);	// 0:3p4W, 1:3p3w
 	
-	// Key in
-   LPC_SCU->SFSPF_11 = ((0 & SCU_SFSPF_11_MODE_Msk));
-   LPC_GPIO_PORT->DIR[_ETC_GPIO[1][0]] &= ~(1<<_ETC_GPIO[1][1]);   
-   LPC_SCU->SFSP9_3 = ((0 & SCU_SFSP9_3_MODE_Msk));
-   LPC_GPIO_PORT->DIR[_ETC_GPIO[2][0]] &= ~(1<<_ETC_GPIO[2][1]);   
-
    // DM8603 Reset
    LPC_SCU->SFSP9_0 = ((0 & SCU_SFSP9_0_MODE_Msk));               // P9.0
    LPC_GPIO_PORT->DIR[_ETC_GPIO[3][0]] |= (1<<_ETC_GPIO[3][1]);   // 4.12
@@ -404,13 +398,43 @@ void Board_GPIO_Init()
    }
 
 	// DI
-   LPC_SCU->SFSPD_11 = ((0 & SCU_SFSPD_11_MODE_Msk));
+   LPC_SCU->SFSPD_11 = ((0 & SCU_SFSPD_11_MODE_Msk) | SCU_SFSPD_11_EZI_Msk);
    LPC_GPIO_PORT->DIR[_DI_GPIO[0][0]] &= ~(1<<_DI_GPIO[0][1]); 
-   LPC_SCU->SFSPD_12 = ((0 & SCU_SFSPD_12_MODE_Msk));
+   LPC_SCU->SFSPD_12 =((0 & SCU_SFSPD_12_MODE_Msk) | SCU_SFSPD_12_EZI_Msk);
    LPC_GPIO_PORT->DIR[_DI_GPIO[1][0]] &= ~(1<<_DI_GPIO[1][1]); 
-   LPC_SCU->SFSPD_13 = ((0 & SCU_SFSPD_13_MODE_Msk));
+   LPC_SCU->SFSPD_13 = ((0 & SCU_SFSPD_13_MODE_Msk) | SCU_SFSPD_13_EZI_Msk);
    LPC_GPIO_PORT->DIR[_DI_GPIO[2][0]] &= ~(1<<_DI_GPIO[2][1]); 
-   LPC_SCU->SFSPD_14 = ((0 & SCU_SFSPD_14_MODE_Msk));
+   LPC_SCU->SFSPD_14 = ((0 & SCU_SFSPD_13_MODE_Msk) | SCU_SFSPD_14_EZI_Msk);
    LPC_GPIO_PORT->DIR[_DI_GPIO[3][0]] &= ~(1<<_DI_GPIO[3][1]); 
 
+	// Key in (KEY1=P7.25, KEY2=P4.15), DI와 동일: SCU 모드0 + GPIO 입력
+   LPC_SCU->SFSPF_11 = ((0 & SCU_SFSPF_11_MODE_Msk) | SCU_SFSPF_11_EZI_Msk);
+   LPC_GPIO_PORT->DIR[_ETC_GPIO[1][0]] &= ~(1<<_ETC_GPIO[1][1]); 
+   LPC_SCU->SFSP9_3  = ((0 & SCU_SFSP9_3_MODE_Msk) | SCU_SFSP9_3_EZI_Msk);
+   LPC_GPIO_PORT->DIR[_ETC_GPIO[2][0]] &= ~(1<<_ETC_GPIO[2][1]); 
+
 }
+
+uint32_t DI_Read(int n)
+{
+	if (n < 0 || n > 3)
+		return 0;
+	{
+		uint32_t port = _DI_GPIO[n][0];
+		uint32_t pin  = _DI_GPIO[n][1];
+		return (LPC_GPIO_PORT->PIN[port] >> pin) & 1UL;
+	}
+}
+
+/** KEY: _ETC_GPIO[1]=KEY1, _ETC_GPIO[2]=KEY2. n=0 -> KEY1, n=1 -> KEY2. returns 0 or 1 */
+uint32_t KEY_Read(int n)
+{
+	if (n < 0 || n > 1)
+		return 0;
+	{
+		uint32_t port = _ETC_GPIO[1 + n][0];
+		uint32_t pin  = _ETC_GPIO[1 + n][1];
+		return (LPC_GPIO_PORT->PIN[port] >> pin) & 1UL;
+	}
+}
+

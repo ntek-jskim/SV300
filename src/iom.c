@@ -8,8 +8,20 @@
 #include "stdio.h"
 #include "string.h"
 #include "math.h"
+#include "debug.h"
 
+extern uint32_t DI_Read(int n);
+extern uint32_t KEY_Read(int n);
 
+typedef struct  {
+	uint8_t cos, lastVal, val, accept;
+	uint64_t tick;
+} DI_BUF;
+
+DI_BUF dibuf[6];
+
+/** KEY 상태 (변경 시 print용). KEY1=_ETC_GPIO[1], KEY2=_ETC_GPIO[2] */
+static struct { uint8_t lastVal, val; } keybuf[2];
 // #define	INT_IO_BLINK	0x01
 
 // //2018-6-14
@@ -789,6 +801,42 @@ void eventOutput(int state)
 // 	}
 // }
 
+void scanDI() {
+	int i;
+	for (i=0; i<4; i++) {
+		dibuf[i].val = DI_Read(i);
+		if (dibuf[i].val != dibuf[i].lastVal) {
+			printf("DI%d changed (was %d -> %d)\n", i + 1, dibuf[i].lastVal, dibuf[i].val);
+			dibuf[i].lastVal = dibuf[i].val;
+		}
+	}
+}
+
+void scanKey(void)
+{
+	int i;
+	for (i = 0; i < 2; i++) {
+		keybuf[i].val = (uint8_t)KEY_Read(i);
+		if (keybuf[i].val != keybuf[i].lastVal) {
+			printf("KEY%d changed (was %d -> %d)\n", i + 1, (int)keybuf[i].lastVal, (int)keybuf[i].val);
+			keybuf[i].lastVal = keybuf[i].val;
+		}
+	}
+}
+
+void scanTemp() {
+	int ch;
+	int16_t temp_c, temp_c10;
+
+	for (ch=0; ch<TEMP_SENSOR_NUM_CHANNELS; ch++) {
+		if (TempSensor_ReadTempC(ch, &temp_c)) {
+			if (ntDebugLevel==31) printf("ADC0_%d Temp : %d\n", ch + 1, (int)temp_c);
+		}
+		else
+			printf("ADC0_%d Temp Read Error\n", ch + 1);
+	}
+}
+
 
 #ifdef __RTX
 __task void IOM_Task()
@@ -796,12 +844,18 @@ __task void IOM_Task()
 void IOM_Task(void *arg)
 #endif
 {
-    int16_t temp_c, temp_c10;
 	int ch;
+	DI_BUF *pdi;
 
 	// 초기화 (시작 시 한 번, 예: app_main 또는 Board 초기화에서)
 	TempSensor_Init();
-	
+
+	for (i=0; i<4; i++) {
+		dibuf[i].lastVal = DI_Read(i);
+	}
+	keybuf[0].lastVal = (uint8_t)KEY_Read(0);
+	keybuf[1].lastVal = (uint8_t)KEY_Read(1);
+
 	_enableTaskMonitor(Tid_Iom, 50);
 // 	pcntl->ioDbFlag = 0x1234;	// fisrst scan 시 db 전송
 //	pInfo->Io_sts = STS_ERROR;
@@ -810,17 +864,10 @@ void IOM_Task(void *arg)
 
 	while (1) {
 		pcntl->wdtTbl[Tid_Iom].count++;
-		/* ADC0_1 ~ ADC0_4 총 4채널 온도 읽기 */
-		for (ch = 0; ch < TEMP_SENSOR_NUM_CHANNELS; ch++) {
-			if (TempSensor_ReadTempC(ch, &temp_c))
-				printf("ADC0_%d Temp : %d\n", ch + 1, (int)temp_c);
-			else
-				printf("ADC0_%d Temp Read Error\n", ch + 1);
-			// if (TempSensor_ReadTempCx10(ch, &temp_c10))
-			// 	printf("ADC0_%d 온도: %d.%d °C\n", ch + 1, temp_c10 / 10, temp_c10 % 10);
-			// else
-			// 	printf("ADC0_%d Temp Read Error\n", ch + 1);
-		}
+		scanDI();
+		scanKey();
+		scanTemp();
+
 		osDelayTask(1000);
 
 // 		if(pInfo->Io_sts == STS_ERROR) {
