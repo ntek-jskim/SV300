@@ -1993,6 +1993,11 @@
               <FileType>1</FileType>
               <FilePath>..\src\iom.c</FilePath>
             </File>
+            <File>
+              <FileName>temp_sensor.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\temp_sensor.c</FilePath>
+            </File>
           </Files>
         </Group>
       </Groups>
