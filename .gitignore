@@ -4,3 +4,4 @@
 *.uvopt
 *.dep
 keil_output/
+keil/
