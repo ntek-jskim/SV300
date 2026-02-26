@@ -109,7 +109,6 @@ void TempSensor_Init(void)
 {
 	if (s_initialized)
 		return;
-
 	memset(&adcSetup, 0, sizeof(adcSetup));
 	Chip_ADC_Init(LPC_ADC0, &adcSetup);
 //	Chip_ADC_SetSampleRate(LPC_ADC0, &adcSetup, 400000);
@@ -122,27 +121,65 @@ void TempSensor_Init(void)
 	// Chip_ADC_EnableChannel(LPC_ADC0, ADC_CH3, ENABLE);
 	// Chip_ADC_EnableChannel(LPC_ADC0, ADC_CH4, ENABLE);
 
+<<<<<<< HEAD
 //	Chip_ADC_SetStartMode(LPC_ADC0, ADC_NO_START, ADC_TRIGGERMODE_RISING);
 	{
 		int i;
 		for (i = 0; i < TEMP_SENSOR_NUM_CHANNELS; i++)
 			s_lastValid[i] = false;
 	}
+=======
+#if 1
+	// Burst Mode
+	// 하드웨어 자동화: 한 번 시작(Enable)하면 CPU가 "변환 시작" 명령을 매번 내릴 필요가 없습니다.
+	// 순차 스캔: SEL 비트마스크로 선택된 모든 채널을 낮은 번호부터 높은 번호 순서대로 변환합니다.
+	// 반복 수행: 마지막 채널의 변환이 끝나면 다시 첫 번째 채널로 돌아가 무한 반복합니다.
+	Chip_ADC_SetBurstCmd(LPC_ADC0, ENABLE);
+#else	
+	Chip_ADC_SetStartMode(LPC_ADC0, ADC_NO_START, ADC_TRIGGERMODE_RISING);
+#endif	
+>>>>>>> 52879ba0d3efed72f1eb064b0d311981da2c306c
 	s_initialized = true;
 }
 
 bool TempSensor_ReadTempC(int channel, int16_t *temp_c)
 {
 	uint16_t raw;
+<<<<<<< HEAD
 	float tVolt, tCurr, tRVal, temp, logval;
+=======
+	uint32_t sum = 0;
+	int i, n=10;
+	float tVolt, tCurr, tRVal, fval, temp, logval;
+>>>>>>> 52879ba0d3efed72f1eb064b0d311981da2c306c
 
 	if (!s_initialized || !temp_c || channel < 0 || channel >= TEMP_SENSOR_NUM_CHANNELS)
 		return false;
 
+#if 1
+	// 10 회 연속으로 읽고 평균
+	/* Waiting for A/D conversion complete */
+	for (i=0; i<n; i++) {
+		while (Chip_ADC_ReadStatus(LPC_ADC0, s_adcChannels[channel], ADC_DR_DONE_STAT) != SET) {}
+		/* Read ADC value */
+		Chip_ADC_ReadValue(LPC_ADC0, s_adcChannels[channel], &raw);
+		sum += raw;
+	}				
+   raw = sum / n;
+#else	
 	if (!readAdcRaw((uint8_t)s_adcChannels[channel], &raw))
 		return false;
+<<<<<<< HEAD
 
 	/* V_adc = Vref*R_ntc/(R_series+R_ntc) → R_ntc = R_series*V_adc/(Vref-V_adc) */
+=======
+#endif
+	
+#if 1
+	*temp_c = raw;
+#else
+	/* NTC: V = ADC * 3.3/1024, I = V/10k, R_ntc = 3.3/I - 10k, Steinhart-Hart */
+>>>>>>> 52879ba0d3efed72f1eb064b0d311981da2c306c
 	tVolt = (float)raw / NTC_ADC_MAX * NTC_VREF;
 
 	if (tVolt > 0.0f && tVolt < (float)NTC_VREF - 0.01f) {
