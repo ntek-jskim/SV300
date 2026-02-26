@@ -827,14 +827,18 @@ void scanKey(void)
 void scanTemp() {
 	int ch;
 	int16_t temp_c, temp_c10;
+	int16_t temp[TEMP_SENSOR_NUM_CHANNELS];
 
 	for (ch=0; ch<TEMP_SENSOR_NUM_CHANNELS; ch++) {
 		if (TempSensor_ReadTempC(ch, &temp_c)) {
+			temp[ch] = temp_c;
 			if (ntDebugLevel==31) printf("ADC0_%d Temp : %d\n", ch + 1, (int)temp_c);
 		}
 		else
 			printf("ADC0_%d Temp Read Error\n", ch + 1);
 	}
+	
+	printf("temp: %d %d %d %d\n", temp[0], temp[1], temp[2], temp[3]);
 }
 
 
