@@ -554,7 +554,6 @@ void app_init(void *params) {
 		{
 			TRACE_ERROR("Failed to create task(Wave)\r\n");
 		}
-		
 		// RMSlog
 		taskParams.priority = OS_TASK_PRIORITY_HIGH;
 		tid_rmslog    = osCreateTask("rmslog", RMSLog_Task, NULL, &taskParams);
@@ -578,8 +577,8 @@ void app_init(void *params) {
 		{
 			TRACE_ERROR("Failed to create task(energy)\r\n");
 		}
-				
-#if 0		
+
+		
 		// Meter
 		taskParams.priority = OS_TASK_PRIORITY_REALTIME;
 		taskParams.stackSize = 256;
@@ -588,16 +587,16 @@ void app_init(void *params) {
 		{
 			TRACE_ERROR("Failed to create task(Meter)!\r\n");
 		}
-		// if(getHwCh()== 0) {
-		// 	taskParams.priority = OS_TASK_PRIORITY_REALTIME;
-		// 	taskParams.stackSize = 256;
-		// 	tid_meter[1] = osCreateTask("meter1", Meter1_Task, NULL, &taskParams);
-		// 	if(tid_meter[1] == OS_INVALID_TASK_ID)
-		// 	{
-		// 		TRACE_ERROR("Failed to create task(Meter)!\r\n");
-		// 	}
-		// }
-#endif
+		if(getHwCh()== 0) {
+			taskParams.priority = OS_TASK_PRIORITY_REALTIME;
+			taskParams.stackSize = 256;
+			tid_meter[1] = osCreateTask("meter1", Meter1_Task, NULL, &taskParams);
+			if(tid_meter[1] == OS_INVALID_TASK_ID)
+			{
+				TRACE_ERROR("Failed to create task(Meter)!\r\n");
+			}
+		}
+
 		// FS
 		taskParams.priority = OS_TASK_PRIORITY_LOW;
 		taskParams.stackSize = 256;

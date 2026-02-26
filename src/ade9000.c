@@ -2005,7 +2005,7 @@ void readWFB8k_Data(int id)
 WVPG *getWave32kBuf(WAVE_PGBUF *pWQ) 
 {
 	WVPG *pb = &pWQ->wb[pWQ->fr];
-	if (++pWQ->fr >= PG32K_CNT) {
+	if (++pWQ->fr >= PG_BUF_CNT) {
 		pWQ->fr = 0;
 	}	
 	pWQ->count++;
@@ -2050,11 +2050,11 @@ void readWFB32k_Data(int id)
 			wQ[id].lastolc = wQ[id].olc;
 			wQ[id].count = wQ[id].olc = 0;
 			wQ[id].ts = sysTick64-200;	// 시작시간 계산 : 완료시간-200ms
-			if (tid_wave[id] != 0) {
+			if (tid_wave[0] != 0) {
 #ifdef __FREERTOS			
-            	if (tid_wave[id] != 0) xTaskNotify(tid_wave[id], 0x1, eSetBits);
+            	if (tid_wave[0] != 0) xTaskNotify(tid_wave[0], 0x1, eSetBits);
 #else
-				if (tid_wave[id] != 0) os_evt_set(0x1, tid_wave[id]);
+				if (tid_wave[0] != 0) os_evt_set(0x1, tid_wave[0]);
 #endif				
 			}			
 		}
@@ -2284,6 +2284,7 @@ void initADE9000(uint8_t id)
 	
 	// chan 0 : 32k, chan 1: 8k로 변경
 //	(id == 0) ? configWave32kCapture(id) : configWave8kCapture(id);
+
 	configWave8kCapture(id);
 	enableCapture(id);
 	printf("Enable WaveCapture ...\n");
@@ -2293,6 +2294,7 @@ void initADE9000(uint8_t id)
 #endif
 
 	setPqEventLevel(id);	// 5%
+
 }
 
 void meterIrqSvc(int id) {
@@ -2316,6 +2318,12 @@ void PIN_INT0_IRQHandler()
 {
 	Chip_PININT_ClearIntStatus(LPC_GPIO_PIN_INT, PININTCH(0));
 	meterIrqSvc(0);
+}
+
+void PIN_INT1_IRQHandler()
+{
+	Chip_PININT_ClearIntStatus(LPC_GPIO_PIN_INT, PININTCH(1));
+	meterIrqSvc(1);
 }
 
 
@@ -2607,13 +2615,11 @@ void meter_scan_2(uint8_t id)
 	uint32_t rms, stat0, stat1, vlevel, dtemp, i, cnt=0, mask;
 	void *msg;
 	uint64_t tick64, zxTo;
-	PQ_EVENT	*pqE = &meter[id].cntl.pqe;
-	PQ_EVENT_INFO *pInf;
 #ifdef __FREERTOS		
 	uint32_t ulNotificationValue;
 	if (xTaskNotifyWait(0, 0xFFFFFFFF, &ulNotificationValue, pdMS_TO_TICKS(20)) == 0)
 #else
-	if (os_evt_wait_and(0x1, 20) == OS_R_TMO) 
+	if (os_evt_wait_and(0x1, 200) == OS_R_TMO) 
 #endif	
 	{
 		printf(">>> ZX timeout ...\n");
@@ -2721,8 +2727,6 @@ void meter_scan(uint8_t id)
 	uint32_t rms, stat0, stat1, vlevel, dtemp, i, cnt=0, mask;
 	void *msg;
 	uint64_t tick64, zxTo;
-	PQ_EVENT	*pqE = &meter[id].cntl.pqe;
-	PQ_EVENT_INFO *pInf;
 
 	//PG_FULL intr: 기본 발생 주기
 	// 8K: (Max 8ms) -> Hi/Low 적용시 4ms

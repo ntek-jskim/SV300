@@ -30,6 +30,22 @@ void TempSensor_Init(void);
 bool TempSensor_ReadTempC(int channel, int16_t *temp_c);
 
 /**
+ * @brief Read temperature in °C (float) for the given channel
+ * @param channel Channel index 0~3 (ADC0_1 ~ ADC0_4)
+ * @param temp_c  Output temperature in °C (float)
+ * @return true on success, false on failure
+ */
+bool TempSensor_ReadTempCFloat(int channel, float *temp_c);
+
+/**
+ * @brief Read NTC resistance in ohms (for debugging/validation)
+ * @param channel Channel index 0~3 (ADC0_1 ~ ADC0_4)
+ * @param r_ohm   Output resistance in ohms (Ω)
+ * @return true on success, false on failure
+ */
+bool TempSensor_ReadResistanceOhms(int channel, float *r_ohm);
+
+/**
  * @brief Read temperature in °C x 10 for the given channel (e.g. 253 = 25.3°C)
  * @param channel  Channel index 0~3 (ADC0_1 ~ ADC0_4)
  * @param temp_c10 Output temperature * 10

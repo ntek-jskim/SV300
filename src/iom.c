@@ -824,19 +824,28 @@ void scanKey(void)
 	}
 }
 
-void scanTemp() {
-	int ch;
-	int16_t temp_c, temp_c10;
+#if 1
+void scanTemp(int ch)
+{
+	float r_ohm;
 
-	for (ch=0; ch<TEMP_SENSOR_NUM_CHANNELS; ch++) {
-		if (TempSensor_ReadTempC(ch, &temp_c)) {
-			if (ntDebugLevel==31) printf("ADC0_%d Temp : %d\n", ch + 1, (int)temp_c);
-		}
+	if (!TempSensor_ReadTempCFloat(ch, &r_ohm))
+	    printf("ADC0_%d R Read Error\n", ch + 1);
+}
+#else
+void scanTemp(void)
+{
+	int ch;
+	float r_ohm;
+
+	for (ch = 0; ch < 4; ch++) {
+		if (TempSensor_ReadTempCFloat(ch, &r_ohm))
+			printf("ADC0_%d R : %.0f Temp\n", ch + 1, (double)r_ohm);
 		else
-			printf("ADC0_%d Temp Read Error\n", ch + 1);
+			printf("ADC0_%d R Read Error\n", ch + 1);
 	}
 }
-
+#endif
 
 #ifdef __RTX
 __task void IOM_Task()
@@ -844,7 +853,7 @@ __task void IOM_Task()
 void IOM_Task(void *arg)
 #endif
 {
-	int ch;
+	static int ch;
 	DI_BUF *pdi;
 
 	// 초기화 (시작 시 한 번, 예: app_main 또는 Board 초기화에서)
@@ -866,7 +875,10 @@ void IOM_Task(void *arg)
 		pcntl->wdtTbl[Tid_Iom].count++;
 		scanDI();
 		scanKey();
-		scanTemp();
+		scanTemp(ch++);
+
+		if(ch>1)
+			ch = 0;
 
 		osDelayTask(1000);
 

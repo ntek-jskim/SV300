@@ -2285,11 +2285,10 @@ int copyFftData(int id, WAVE_WINDOW *pww,	uint32_t *ptick_10s)
 // Meter_Scan Task로 부터 매 200ms 마다 호출된다
 void Wave_Task(void *arg)
 {
-	int id, i, j, dx, sx, initF=0, bx, bF=0, wr, re, mask;
+	int id, i, j, dx, sx, initF=0, bx, bF=0, wr, re, mask,cnt;
 	int32_t *pwv;
 	WAVE_WINDOW *pww;
 	uint64_t Ts;
-	PQ_EVENT *pqE = &meter[id].cntl.pqe;
 	uint32_t tick10s[2];
 //	int64_t sum[6]; 
 	int64_t sum[7]; 
@@ -2304,9 +2303,12 @@ void Wave_Task(void *arg)
 #else
       os_evt_wait_and(0x1, 0xffff);
 #endif		
-		meter[id].cntl.wdtTbl[Tid_Wave].count++;
-
-		for (id=0; id<2; id++) {
+		meter[0].cntl.wdtTbl[Tid_Wave].count++;
+		if(getHwCh()== 0)
+		    cnt = 2;
+		else
+			cnt = 1;
+		for (id=0; id<cnt; id++) {
 			if (wQ[id].halfFull) {
 				//printf("--> ready wave buffer full, id=%d, ix=%d, re=%d\n", id, wvblk[id].ix, wQ[id].re);
 				// 10/12 cycle동안 수집한 wave data(32k:400 page, 8k: 100 page )를 
@@ -2337,7 +2339,7 @@ void Wave_Task(void *arg)
 			if (tid_fft != 0)
             xTaskNotify(tid_fft, 0x1, eSetBits);
 #else
-			os_evt_set(0x1, tid_fft);
+//			os_evt_set(0x1, tid_fft);
 #endif
 	}
 }
@@ -2522,7 +2524,7 @@ void FS_task(void *arg)
 		//printf("[Fs:%d]\n", sysTick32-t3);
 		t3 = sysTick32;
 		
-		meter[id].cntl.wdtTbl[Tid_Fs].count++;
+		meter[0].cntl.wdtTbl[Tid_Fs].count++;
 		
 		if (fsQ.fr != fsQ.re) {
 			t1 = sysTick64;
@@ -3758,7 +3760,7 @@ void Energy_Task(void *arg)
 		os_evt_wait_and(0x1, 0xffff);
 #endif		
 		for (id=0; id<2; id++) {
-			meter[id].cntl.wdtTbl[Tid_Energy].count++;
+			meter[0].cntl.wdtTbl[Tid_Energy].count++;
 		
 			//printf("tick : %d\n", sysTick32);
 			if (ade9000[id].efr != ade9000[id].ere) {
@@ -3791,7 +3793,7 @@ void RMSLog_Task(void *arg)
 #else
 		os_evt_wait_and(0x1, 0xffff);
 #endif		
-		meter[id].cntl.wdtTbl[Tid_Rmslog].count++;
+		meter[0].cntl.wdtTbl[Tid_Rmslog].count++;
 		
 		if (rmsWin.fr != rmsWin.re) {
 			if (bF) {
@@ -3917,14 +3919,14 @@ void PostScan_Task(void *arg)
 	
 	_enableTaskMonitor(Tid_PostScan, 50);
 	
-	while (meter[id].cntl.runFlag) {
+	while(meter[id].cntl.runFlag) {
 #ifdef __FREERTOS		
 		xTaskNotifyWait(0, 0xFFFFFFFF, &notificationValue, pdMS_TO_TICKS(100));
 #else
 		os_evt_wait_or(0xf, 100);
 #endif		
 		for (id=0; id<2; id++) {
-			meter[id].cntl.wdtTbl[Tid_PostScan].count++;
+			meter[0].cntl.wdtTbl[Tid_PostScan].count++;
 			
 			// 1초 단위로 호출 (5번의 10/12 cycle 마다 호출된다)
 			if (meter[id].cntl.rmsCalcF) {
@@ -4104,17 +4106,15 @@ void Meter0_Task(void *param)
 	printf("demand:   %d\n", sizeof(DEMAND));
 	
 	
-	initADE9000(id);
-	
-	// for test 
-	//loadCalData();
-	
-	initTransientTrigger(id);
 	
 	memset(&wQ[id], 0, sizeof(wQ[id]));
 	
 	wbFFT8k[id].fr = wbFFT8k[id].re = 0;
+
+	initADE9000(id);
 	
+	initTransientTrigger(id);
+
 	ExtINTR_Init(0, 0, 0);	// PINT0, EINT0, active low
 	ExtINTR_Enable(0);	// PINT0
 	//os_itv_set(5);
@@ -4122,18 +4122,13 @@ void Meter0_Task(void *param)
 	// 처음 시작 하거나 재시작할때 대책 ????
 	initPQHeader(id);
 	
-#if 1	// 2025--3-13, 	
-#else
-	// ITIC event를 적재한다, loadEventList 에서 itic data 읽는다
-	loadITICevent();
-#endif	
 	_enableTaskMonitor(Tid_Meter, 50);
 	
 	while (1) {
-		meter[id].cntl.wdtTbl[Tid_Meter].count++;
+		meter[0].cntl.wdtTbl[Tid_Meter].count++;
 		
 		meter_scan(id);
-		//os_dly_wait(1000);
+//		os_dly_wait(1000);
 	}
 }
 
@@ -4142,6 +4137,10 @@ void Meter1_Task(void *param) {
 //	
 	printf("[task Meter#1 started ...\n");
 //	
+	memset(&wQ[id], 0, sizeof(wQ[id]));
+		
+	wbFFT8k[id].fr = wbFFT8k[id].re = 0;
+
 	initADE9000(id);
 //	
 //	memset(&wQ, 0, sizeof(wQ));
@@ -4155,9 +4154,10 @@ void Meter1_Task(void *param) {
 	ExtINTR_Init(id, 2, 0);	// PINT1, EINT2
 	ExtINTR_Enable(id);	// PINT1
 //	//os_itv_set(5);
-_enableTaskMonitor(Tid_Meter2, 50);
+	_enableTaskMonitor(Tid_Meter2, 50);
 //	
 	while (1) {
+		meter[0].cntl.wdtTbl[Tid_Meter2].count++;
 		meter_scan_2(id);
 //		//os_dly_wait(1000);
 	}

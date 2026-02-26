@@ -426,14 +426,14 @@ const PINMUX_GRP_T EINT_PIN[] = {
 	{0x3, 2, (SCU_MODE_FUNC4 | SCU_MODE_INBUFF_EN | SCU_MODE_PULLUP)},
 	{0xC, 2, (SCU_MODE_FUNC4 | SCU_MODE_INBUFF_EN | SCU_MODE_PULLUP)},
 	{0xC, 3, (SCU_MODE_FUNC4 | SCU_MODE_INBUFF_EN | SCU_MODE_PULLUP)},
-	{0xC, 9, (SCU_MODE_FUNC4 | SCU_MODE_INBUFF_EN | SCU_MODE_PULLUP)},
+//	{0xC, 9, (SCU_MODE_FUNC4 | SCU_MODE_INBUFF_EN | SCU_MODE_PULLUP)},
 };
 const GPIO_ID EINT_GPIO[] = {
 	{5, 8},	// Meter0 IRQ#0
 	{5, 9},	// Meter0 IRQ#1, unused
 	{6, 1},	// Meter1 IRQ#0, unused
 	{6, 2},	// Meter1 IRQ#1, unused
-	{6, 8}, // TSC
+//	{6, 8}, // TSC
 };
 //	/* SSP0 */
 
