@@ -3736,7 +3736,6 @@ void Energy_Task(void *arg)
 {
    uint32_t notificationValue;
    int	id=0;
-   ADE9000_REG *pchip = &ade9000[id];
  
 	// demand time stamp 초기화
 	meter[id].cntl.dmdTs = sysTickDemand;
@@ -3753,7 +3752,7 @@ void Energy_Task(void *arg)
 //	initEnergyLog();
 	_enableTaskMonitor(Tid_Energy, 50);
 		
-	while (meter[id].cntl.runFlag) {
+	while (pcntl->runFlag) {
 #ifdef __FREERTOS		
 		xTaskNotifyWait(0, 0xFFFFFFFF, &notificationValue, portMAX_DELAY);
 #else
@@ -3919,7 +3918,7 @@ void PostScan_Task(void *arg)
 	
 	_enableTaskMonitor(Tid_PostScan, 50);
 	
-	while(meter[id].cntl.runFlag) {
+	while(pcntl->runFlag) {
 #ifdef __FREERTOS		
 		xTaskNotifyWait(0, 0xFFFFFFFF, &notificationValue, pdMS_TO_TICKS(100));
 #else
