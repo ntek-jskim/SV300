@@ -353,14 +353,14 @@ void Board_GPIO_Init()
    int i;
    
 	// WDT
-   LPC_SCU->SFSPE_0 = ((0 & SCU_SFSPE_0_MODE_Msk) | SCU_SFSPE_0_EPD_Msk);  // PE.0
-   LPC_SCU->SFSPE_1 = ((0 & SCU_SFSPE_1_MODE_Msk) | SCU_SFSPE_1_EPD_Msk);  // PE.1
+   LPC_SCU->SFSPE_0 = ((4 & SCU_SFSPE_0_MODE_Msk) | SCU_SFSPE_0_EPD_Msk);  // PE.0
+   LPC_SCU->SFSPE_1 = ((4 & SCU_SFSPE_1_MODE_Msk) | SCU_SFSPE_1_EPD_Msk);  // PE.1
    LPC_GPIO_PORT->DIR[_WDT_GPIO[0][0]] |= (1<<_WDT_GPIO[0][1]);   // 0.10
    LPC_GPIO_PORT->DIR[_WDT_GPIO[1][0]] |= (1<<_WDT_GPIO[1][1]);   // 0.11
    Board_WDT_Disable();
    
 	// SelWire
-   LPC_SCU->SFSPE_2 = ((0 & SCU_SFSPE_2_MODE_Msk));
+   LPC_SCU->SFSPE_2 = ((4 & SCU_SFSPE_2_MODE_Msk));
    LPC_GPIO_PORT->DIR[_ETC_GPIO[0][0]] |= (1<<_ETC_GPIO[0][1]);   
    LPC_GPIO_PORT->CLR[_ETC_GPIO[0][0]]  = (1<<_ETC_GPIO[0][1]);	// 0:3p4W, 1:3p3w
 	
@@ -398,17 +398,17 @@ void Board_GPIO_Init()
    }
 
 	// DI
-   LPC_SCU->SFSPD_11 = ((0 & SCU_SFSPD_11_MODE_Msk) | SCU_SFSPD_11_EZI_Msk);
+   LPC_SCU->SFSPD_11 = ((4 & SCU_SFSPD_11_MODE_Msk) | SCU_SFSPD_11_EZI_Msk);
    LPC_GPIO_PORT->DIR[_DI_GPIO[0][0]] &= ~(1<<_DI_GPIO[0][1]); 
-   LPC_SCU->SFSPD_12 =((0 & SCU_SFSPD_12_MODE_Msk) | SCU_SFSPD_12_EZI_Msk);
+   LPC_SCU->SFSPD_12 =((4 & SCU_SFSPD_12_MODE_Msk) | SCU_SFSPD_12_EZI_Msk);
    LPC_GPIO_PORT->DIR[_DI_GPIO[1][0]] &= ~(1<<_DI_GPIO[1][1]); 
-   LPC_SCU->SFSPD_13 = ((0 & SCU_SFSPD_13_MODE_Msk) | SCU_SFSPD_13_EZI_Msk);
+   LPC_SCU->SFSPD_13 = ((4 & SCU_SFSPD_13_MODE_Msk) | SCU_SFSPD_13_EZI_Msk);
    LPC_GPIO_PORT->DIR[_DI_GPIO[2][0]] &= ~(1<<_DI_GPIO[2][1]); 
-   LPC_SCU->SFSPD_14 = ((0 & SCU_SFSPD_13_MODE_Msk) | SCU_SFSPD_14_EZI_Msk);
+   LPC_SCU->SFSPD_14 = ((4 & SCU_SFSPD_13_MODE_Msk) | SCU_SFSPD_14_EZI_Msk);
    LPC_GPIO_PORT->DIR[_DI_GPIO[3][0]] &= ~(1<<_DI_GPIO[3][1]); 
 
 	// Key in (KEY1=P7.25, KEY2=P4.15), DI와 동일: SCU 모드0 + GPIO 입력
-   LPC_SCU->SFSPF_11 = ((0 & SCU_SFSPF_11_MODE_Msk) | SCU_SFSPF_11_EZI_Msk);
+   LPC_SCU->SFSPF_11 = ((4 & SCU_SFSPF_11_MODE_Msk) | SCU_SFSPF_11_EZI_Msk);
    LPC_GPIO_PORT->DIR[_ETC_GPIO[1][0]] &= ~(1<<_ETC_GPIO[1][1]); 
    LPC_SCU->SFSP9_3  = ((0 & SCU_SFSP9_3_MODE_Msk) | SCU_SFSP9_3_EZI_Msk);
    LPC_GPIO_PORT->DIR[_ETC_GPIO[2][0]] &= ~(1<<_ETC_GPIO[2][1]); 

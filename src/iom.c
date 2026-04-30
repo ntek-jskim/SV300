@@ -824,25 +824,6 @@ void scanKey(void)
 	}
 }
 
-<<<<<<< HEAD
-#if 1
-void scanTemp(int ch)
-{
-	float r_ohm;
-
-	if (!TempSensor_ReadTempCFloat(ch, &r_ohm))
-	    printf("ADC0_%d R Read Error\n", ch + 1);
-}
-#else
-void scanTemp(void)
-{
-	int ch;
-	float r_ohm;
-
-	for (ch = 0; ch < 4; ch++) {
-		if (TempSensor_ReadTempCFloat(ch, &r_ohm))
-			printf("ADC0_%d R : %.0f Temp\n", ch + 1, (double)r_ohm);
-=======
 void scanTemp() {
 	int ch;
 	int16_t temp_c, temp_c10;
@@ -853,14 +834,12 @@ void scanTemp() {
 			temp[ch] = temp_c;
 			if (ntDebugLevel==31) printf("ADC0_%d Temp : %d\n", ch + 1, (int)temp_c);
 		}
->>>>>>> 52879ba0d3efed72f1eb064b0d311981da2c306c
 		else
 			printf("ADC0_%d R Read Error\n", ch + 1);
 	}
 	
 	printf("temp: %d %d %d %d\n", temp[0], temp[1], temp[2], temp[3]);
 }
-#endif
 
 #ifdef __RTX
 __task void IOM_Task()
