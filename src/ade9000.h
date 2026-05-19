@@ -651,7 +651,17 @@ void readHalfCycleRMS(void);
 WVPG *getWave8kBuf(WAVE_PGBUF *, int *);
 WVPG *getWave32kBuf(WAVE_PGBUF *);
 
+/* ADE9000 채널별 진단 정보 구조체 (ade9000.c 내부 정의와 동기) */
+typedef struct {
+	uint8_t  online;
+	uint32_t chipId;
+	uint16_t version;
+	uint32_t failCount;
+	uint32_t retryCount;
+} ADE_STATUS;
+
 void initADE9000(uint8_t);
+const ADE_STATUS *getAdeStatus(int id);
 void meterIrqSvc();
 
 void calcSeqComponent(float *mag, float *angle, float *seq);

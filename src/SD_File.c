@@ -9,6 +9,7 @@
  *----------------------------------------------------------------------------*/
 
 #include "board.h"
+#include "meter.h"
 //#include <LPC43xx.h>                    /* LPC43xx Definitions                */
 #include <RTL.h>                        /* RTL kernel functions & defines     */
 #include <stdio.h>                      /* standard I/O .h-file               */
@@ -21,6 +22,8 @@
 #include "time.h"
 #include "stdlib.h"
 #include "stdint.h"
+
+extern uint32_t RTC_GetTimeUTC(void);
 
 /* Local variables */
 static char in_line[160];
@@ -199,8 +202,11 @@ void setDcOffset(void) {
 	}
 	
 	if (i<5) {
-		printf("DC V OS: %d, %d, %d\n", pcal->vdcos[0], pcal->vdcos[1], pcal->vdcos[2]);
-		printf("DC I OS: %d, %d, %d\n", pcal->idcos[0], pcal->idcos[1], pcal->idcos[2]);
+		int m;
+		for (m = 0; m < METER_CH_COUNT; m++) {
+			printf("M%d DC V OS: %d, %d, %d\n", m, pcal->vdcos[m][0], pcal->vdcos[m][1], pcal->vdcos[m][2]);
+			printf("M%d DC I OS: %d, %d, %d\n", m, pcal->idcos[m][0], pcal->idcos[m][1], pcal->idcos[m][2]);
+		}
 	}
 	else {
 		printf("Can't get DC Offset ...\n");
@@ -225,37 +231,59 @@ void setDcOffset(void) {
 
 static void cmd_datetime(char *par) {
 	struct tm ltm;
-  char *dt[6], *next;
+	char *dt[6], *next;
 	int i;
 	time_t utc;
-	
-	for (i=0; i<6; i++) {
-		dt[i] = get_entry (par, &next);
-		if (dt[i] == NULL) {
-			printf ("\nmissing argument ...\n");
+	uint32_t rtcUtc;
+
+	dt[0] = get_entry(par, &next);
+	if (par == NULL || *par == 0 || dt[0] == NULL || dt[0][0] == 0) {
+		uLocalTime(&sysTick1s, &ltm);
+		printf("Current (app): %04d-%02d-%02d %02d:%02d:%02d  unix=%lu\n",
+		       ltm.tm_year + 1900, ltm.tm_mon + 1, ltm.tm_mday,
+		       ltm.tm_hour, ltm.tm_min, ltm.tm_sec,
+		       (unsigned long)sysTick1s);
+		rtcUtc = RTC_GetTimeUTC();
+		uLocalTime(&rtcUtc, &ltm);
+		printf("Current (RTC): %04d-%02d-%02d %02d:%02d:%02d  unix=%lu\n",
+		       ltm.tm_year + 1900, ltm.tm_mon + 1, ltm.tm_mday,
+		       ltm.tm_hour, ltm.tm_min, ltm.tm_sec,
+		       (unsigned long)rtcUtc);
+		return;
+	}
+
+	par = next;
+	for (i = 1; i < 6; i++) {
+		if (par == NULL) {
+			printf("\nDATETIME: need 6 integers (year month day hour min sec), or no args to show time.\n");
+			return;
+		}
+		dt[i] = get_entry(par, &next);
+		if (dt[i] == NULL || dt[i][0] == 0) {
+			printf("\nDATETIME: need 6 integers (year month day hour min sec), or no args to show time.\n");
 			return;
 		}
 		par = next;
-  }
+	}
 
-	memset(&ltm, 0, sizeof(ltm));	
+	memset(&ltm, 0, sizeof(ltm));
 	ltm.tm_year = atoi(dt[0]) - 1900;
 	ltm.tm_mon  = atoi(dt[1]) - 1;
 	ltm.tm_mday = atoi(dt[2]);
 	ltm.tm_hour = atoi(dt[3]);
 	ltm.tm_min  = atoi(dt[4]);
-	ltm.tm_sec  = atoi(dt[5]);	
-	
+	ltm.tm_sec  = atoi(dt[5]);
+
 	if (ltm.tm_year < 0 || ltm.tm_mon < 0) {
 		printf("Invalid Year(%d) or Month(%d) ...\n", ltm.tm_year, ltm.tm_mon);
 		return;
 	}
-	
+
 	utc = mktime(&ltm);
-	
-	printf("[%d-%d-%d, %d:%d:%d] => {%d}\n", ltm.tm_year+1900, ltm.tm_mon+1, ltm.tm_mday, ltm.tm_hour, ltm.tm_min, ltm.tm_sec, utc);
-	tickSet(utc, 0,1);
-	RTC_SetTimeUTC(utc);
+
+	printf("[%d-%d-%d, %d:%d:%d] => {%d}\n", ltm.tm_year+1900, ltm.tm_mon+1, ltm.tm_mday, ltm.tm_hour, ltm.tm_min, ltm.tm_sec, (int)utc);
+	tickSet((uint32_t)utc, 0, 1);
+	RTC_SetTimeUTC((uint32_t)utc);
 }
 
 
@@ -1074,6 +1102,22 @@ static void cmd_help (char *par) {
  *        Initialize a Flash Memory Card
  *----------------------------------------------------------------------------*/
 static void init_card (void) {
+#ifdef CH3
+  {
+    U32 retv;
+
+    retv = finit (NULL);
+    if (retv != 0 && retv != 1) {
+      printf ("\nSPI Flash: finit=%u, try FORMAT\n", (unsigned)retv);
+      strcpy (&in_line[0], "KEIL\r\n");
+      cmd_format (&in_line[0]);
+      retv = finit (NULL);
+    }
+    if (retv != 0) {
+      printf ("\nSPI Flash FS finit failed (%u)\n", (unsigned)retv);
+    }
+  }
+#else
   U32 retv;
 
   while ((retv = finit (NULL)) != 0) {        /* Wait until the Card is ready */
@@ -1088,6 +1132,7 @@ static void init_card (void) {
       cmd_format (&in_line[0]);
     }
   }
+#endif
 }
 
 /*-----------------------------------------------------------------------------

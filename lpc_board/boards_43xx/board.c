@@ -466,9 +466,17 @@ const PINMUX_GRP_T SSP0_PIN_AUTO[] = {
 };
 #endif
 
+#ifdef CH3
+/* CH3 보드용 SSP1 수동 SSEL 구성
+ *  - CLK, MISO, MOSI 는 동일하고
+ *  - CS는 GPIO7_16(M0_CS), GPIO3_8(M1_CS), GPIO5_15(M2_CS)를 사용한다.
+ *  - 핀 매핑:
+ *      M1_CS = P7_0  -> GPIO3_8
+ *      M2_CS = P6_7  -> GPIO5_15
+ */
 const PINMUX_GRP_T SSP1_PIN_MAN[] = {
 	{0xF, 4,  (SCU_PINIO_FAST | SCU_MODE_FUNC0)},//SSP1_CLK
-	{0xF, 5,  (SCU_PINIO_FAST | SCU_MODE_FUNC4)},	//SSP0_SSEL -> (GPIO7.19) 
+	{0xF, 5,  (SCU_PINIO_FAST | SCU_MODE_FUNC4)},//기본 SSEL 핀은 GPIO로 사용
 	{0xF, 6,  (SCU_PINIO_FAST | SCU_MODE_FUNC2)},//SSP1_MISO
 	{0xF, 7,  (SCU_PINIO_FAST | SCU_MODE_FUNC2)},//SSP1_MOSI
 };
@@ -480,10 +488,33 @@ const PINMUX_GRP_T SSP1_PIN_AUTO[] = {
 	{0xF, 7,  (SCU_PINIO_FAST | SCU_MODE_FUNC2)},//SSP1_MOSI
 };
 
+/* CH3: M0_CS=GPIO7_16, M1_CS=GPIO3_8, M2_CS=GPIO5_15 */
+const GPIO_ID SSEL_GPIO[] = {
+	{7, 16},	/* M0_CS */
+	{3, 8}, 	/* M1_CS */
+	{5, 15}, 	/* M2_CS */
+};
+#else
+const PINMUX_GRP_T SSP1_PIN_MAN[] = {
+	{0xF, 4,  (SCU_PINIO_FAST | SCU_MODE_FUNC0)},//SSP1_CLK
+	{0xF, 5,  (SCU_PINIO_FAST | SCU_MODE_FUNC4)},	//SSP1_SSEL -> (GPIO7.19) 
+	{0xF, 6,  (SCU_PINIO_FAST | SCU_MODE_FUNC2)},//SSP1_MISO
+	{0xF, 7,  (SCU_PINIO_FAST | SCU_MODE_FUNC2)},//SSP1_MOSI
+};
+
+const PINMUX_GRP_T SSP1_PIN_AUTO[] = {
+	{0xF, 4,  (SCU_PINIO_FAST | SCU_MODE_FUNC0)},//SSP1_CLK
+	{0xF, 5,  (SCU_MODE_FUNC2)},
+	{0xF, 6,  (SCU_PINIO_FAST | SCU_MODE_FUNC2)},//SSP1_MISO
+	{0xF, 7,  (SCU_PINIO_FAST | SCU_MODE_FUNC2)},//SSP1_MOSI
+};
+
+/* 2CH: M0_CS=GPIO7_16, M1_CS=GPIO7_19 */
 const GPIO_ID SSEL_GPIO[] = {
 	{7, 16},
 	{7, 19},
 };
+#endif
 
 
 /* Initializes board LED(s) */
@@ -1319,19 +1350,29 @@ void Board_LCD_Init()
 /* Initializes SDMMC interface */
 void Board_SDMMC_Init(void)
 {
+#ifndef CH3
+	/* PC_0,4..8,10 — SDIO (회로 SD_MMC 장착 시) */
 	Chip_SCU_PinMuxSet(0xC, 4, (SCU_PINIO_FAST | SCU_MODE_FUNC7));	/* PC.4 connected to SDIO_D0 */
 	Chip_SCU_PinMuxSet(0xC, 5, (SCU_PINIO_FAST | SCU_MODE_FUNC7));	/* PC.5 connected to SDIO_D1 */
 	Chip_SCU_PinMuxSet(0xC, 6, (SCU_PINIO_FAST | SCU_MODE_FUNC7));	/* PC.6 connected to SDIO_D2 */
 	Chip_SCU_PinMuxSet(0xC, 7, (SCU_PINIO_FAST | SCU_MODE_FUNC7));	/* PC.7 connected to SDIO_D3 */
 
-	Chip_SCU_PinMuxSet(0xC, 8, (SCU_MODE_INACT | SCU_MODE_INBUFF_EN | SCU_MODE_FUNC7));	/* PC.4 connected to SDIO_CD */
+	Chip_SCU_PinMuxSet(0xC, 8, (SCU_MODE_INACT | SCU_MODE_INBUFF_EN | SCU_MODE_FUNC7));	/* PC.8 connected to SDIO_CD */
 	Chip_SCU_PinMuxSet(0xC, 10, (SCU_PINIO_FAST | SCU_MODE_FUNC7));	/* PC.10 connected to SDIO_CMD */
 	Chip_SCU_PinMuxSet(0xC, 0, (SCU_MODE_INACT | SCU_MODE_HIGHSPEEDSLEW_EN | SCU_MODE_FUNC7));/* PC.0 connected to SDIO_CLK */
+#endif
 }
 
 
 void SSP_SSEL_Mode(int id, int _auto) {
-	int n = sizeof(SSP0_PIN_AUTO) / sizeof(PINMUX_GRP_T);
+#ifdef CH3
+	if (id > 0) {
+		/* CH3: M1/M2 CS는 dma_read32n 내부에서 mutex 보호 하에
+		 * selectMeter/deSelectMeter 로 직접 제어하므로 여기서는 처리하지 않는다. */
+		return;
+	}
+#endif
+	/* 2CH 또는 CH3의 id==0(SSP0): 기존 방식 — PF SSEL 핀 MUX 전환 */
 	// SSEL Index : 1
 	if (id == 0) {
 		if (_auto) {
@@ -1347,13 +1388,13 @@ void SSP_SSEL_Mode(int id, int _auto) {
 		}
 		else {
 			Chip_SCU_PinMuxSet(SSP1_PIN_MAN[1].pingrp, SSP1_PIN_MAN[1].pinnum, SSP1_PIN_MAN[1].modefunc);
-		}		
+		}
 	}
 
 	if (_auto == 0) {
 		Chip_GPIO_SetPinDIR(LPC_GPIO_PORT, SSEL_GPIO[id].port, SSEL_GPIO[id].num, 1);
-		Chip_GPIO_SetPinOutHigh(LPC_GPIO_PORT, SSEL_GPIO[id].port, SSEL_GPIO[id].num);				
-	}		
+		Chip_GPIO_SetPinOutHigh(LPC_GPIO_PORT, SSEL_GPIO[id].port, SSEL_GPIO[id].num);
+	}
 }
 
 /* Initializes SSP interface */
@@ -1372,8 +1413,18 @@ void Board_SSP_Init(LPC_SSP_T *pSSP, int w, int _auto, int speed)
 	else if (pSSP == LPC_SSP1) {
 		if (_auto == 0) {
 			Chip_SCU_SetPinMuxing(SSP1_PIN_MAN, sizeof(SSP1_PIN_MAN) / sizeof(PINMUX_GRP_T));
+#ifdef CH3
+			/* CH3: M1_CS(P7_0/GPIO3_8), M2_CS(P6_7/GPIO5_15)를 GPIO 기능으로 설정 */
+			Chip_SCU_PinMuxSet(0x7, 0, (SCU_PINIO_FAST | SCU_MODE_FUNC0));	/* P7_0 -> GPIO3_8 */
+			Chip_SCU_PinMuxSet(0x6, 7, (SCU_PINIO_FAST | SCU_MODE_FUNC0));	/* P6_7 -> GPIO5_15 */
+#endif
 			Chip_GPIO_SetPinDIR(LPC_GPIO_PORT, SSEL_GPIO[1].port, SSEL_GPIO[1].num, 1);
 			Chip_GPIO_SetPinOutHigh(LPC_GPIO_PORT, SSEL_GPIO[1].port, SSEL_GPIO[1].num);				
+#ifdef CH3
+			/* CH3에서는 M2_CS(GPIO5_15)도 미리 High로 올려둔다. */
+			Chip_GPIO_SetPinDIR(LPC_GPIO_PORT, SSEL_GPIO[2].port, SSEL_GPIO[2].num, 1);
+			Chip_GPIO_SetPinOutHigh(LPC_GPIO_PORT, SSEL_GPIO[2].port, SSEL_GPIO[2].num);
+#endif
 		}
 		else {
 			Chip_SCU_SetPinMuxing(SSP1_PIN_AUTO, sizeof(SSP1_PIN_AUTO) / sizeof(PINMUX_GRP_T));

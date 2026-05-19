@@ -117,10 +117,6 @@ extern void setNumFeeder(int gid, int n);
 // id=0, Ext Comm. Module
 // id=1, gems3500#1
 // id=2, gems3500#2
-//int chkBD3500Com(int id)
-//{
-//	return (pgwst->status[id]);
-//}
 
 uint32_t getUInt32BE(uint8_t *buf, int *os) {
 	uint8_t *p = buf + *os;

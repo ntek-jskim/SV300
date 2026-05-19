@@ -26,6 +26,7 @@ extern void KEY_Task(void *);
 extern void FFT_Task(void *);
 extern void Meter0_Task(void *);
 extern void Meter1_Task(void *);
+extern void Meter2_Task(void *);
 extern void Wave_Task(void *);
 extern void FS_task(void *);
 extern void Test_task(void *);
@@ -587,15 +588,25 @@ void app_init(void *params) {
 		{
 			TRACE_ERROR("Failed to create task(Meter)!\r\n");
 		}
-		if(getHwCh()== 0) {
-			taskParams.priority = OS_TASK_PRIORITY_REALTIME;
-			taskParams.stackSize = 256;
-			tid_meter[1] = osCreateTask("meter1", Meter1_Task, NULL, &taskParams);
-			if(tid_meter[1] == OS_INVALID_TASK_ID)
-			{
-				TRACE_ERROR("Failed to create task(Meter)!\r\n");
-			}
+#ifndef CH1
+		/* M1/M2: 채널 수는 CH3 빌드 매크로로 결정(getHwCh 무관) */
+		taskParams.priority = OS_TASK_PRIORITY_HIGH;
+		taskParams.stackSize = 512;
+		tid_meter[1] = osCreateTask("meter1", Meter1_Task, NULL, &taskParams);
+		if(tid_meter[1] == OS_INVALID_TASK_ID)
+		{
+			TRACE_ERROR("Failed to create task(Meter)!\r\n");
 		}
+#ifdef CH3
+		taskParams.priority = OS_TASK_PRIORITY_HIGH;
+		taskParams.stackSize = 512;
+		tid_meter[2] = osCreateTask("meter2", Meter2_Task, NULL, &taskParams);
+		if(tid_meter[2] == OS_INVALID_TASK_ID)
+		{
+			TRACE_ERROR("Failed to create task(Meter2)!\r\n");
+		}
+#endif
+#endif /* CH1 */
 
 		// FS
 		taskParams.priority = OS_TASK_PRIORITY_LOW;

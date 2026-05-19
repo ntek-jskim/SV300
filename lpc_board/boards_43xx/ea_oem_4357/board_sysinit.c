@@ -56,15 +56,22 @@ STATIC const struct CLK_BASE_STATES InitClkStates[] = {
 	{CLK_BASE_USB1, CLKIN_IDIVD, true, true}
 };
 
-/* SPIFI high speed pin mode setup */
+#ifdef CH3
+/* SPIFI: MX25L1636E 등 외부 Flash — P3_3..P3_8, FUNC3 (LPC4357 UM, CH3 회로) */
 STATIC const PINMUX_GRP_T spifipinmuxing[] = {
-	{0x3, 3,  (SCU_PINIO_FAST | SCU_MODE_FUNC3)},	/* SPIFI CLK */
-	{0x3, 4,  (SCU_PINIO_FAST | SCU_MODE_FUNC3)},	/* SPIFI D3 */
-	{0x3, 5,  (SCU_PINIO_FAST | SCU_MODE_FUNC3)},	/* SPIFI D2 */
-	{0x3, 6,  (SCU_PINIO_FAST | SCU_MODE_FUNC3)},	/* SPIFI D1 */
-	{0x3, 7,  (SCU_PINIO_FAST | SCU_MODE_FUNC3)},	/* SPIFI D0 */
-	{0x3, 8,  (SCU_PINIO_FAST | SCU_MODE_FUNC3)}	/* SPIFI CS/SSEL */
+	{0x3, 3,  (SCU_PINIO_FAST | SCU_MODE_FUNC3)},	/* P3_3  SPIFI_SCK  */
+	{0x3, 4,  (SCU_PINIO_FAST | SCU_MODE_FUNC3)},	/* P3_4  SPIFI_IO3 */
+	{0x3, 5,  (SCU_PINIO_FAST | SCU_MODE_FUNC3)},	/* P3_5  SPIFI_IO2 */
+	{0x3, 6,  (SCU_PINIO_FAST | SCU_MODE_FUNC3)},	/* P3_6  SPIFI_IO1 */
+	{0x3, 7,  (SCU_PINIO_FAST | SCU_MODE_FUNC3)},	/* P3_7  SPIFI_IO0 */
+	{0x3, 8,  (SCU_PINIO_FAST | SCU_MODE_FUNC3)}	/* P3_8  SPIFI_CS# */
 };
+
+void Board_SPIFI_FlashPinInit(void)
+{
+	Chip_SCU_SetPinMuxing(spifipinmuxing, sizeof(spifipinmuxing) / sizeof(PINMUX_GRP_T));
+}
+#endif /* CH3 */
 
 STATIC const PINMUX_GRP_T pinmuxing[] = {
 	/* RMII pin group */
@@ -321,8 +328,10 @@ void Board_SetupMuxing(void)
 	for (i = 0; i < (sizeof(pinclockmuxing) / sizeof(pinclockmuxing[0])); i++) {
 		Chip_SCU_ClockPinMuxSet(pinclockmuxing[i].pinnum, pinclockmuxing[i].modefunc);
 	}
-	/* SPIFI pin setup is done prior to setting up system clocking */
-	Chip_SCU_SetPinMuxing(spifipinmuxing, sizeof(spifipinmuxing) / sizeof(PINMUX_GRP_T));
+#ifdef CH3
+	/* SPIFI 외부 Flash 핀 (CH3 회로에서만 사용) */
+	Board_SPIFI_FlashPinInit();
+#endif
 
 	{
 		int j;

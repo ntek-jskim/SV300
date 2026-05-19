@@ -14,18 +14,26 @@
 
 #define	FW_VER	0001
 #define	FW_BUILD_YEAR 26
-#define	FW_BUILD_MON  2
-#define	FW_BUILD_DAY  19
+#define	FW_BUILD_MON  5
+#define	FW_BUILD_DAY  7
 
 #define	SQRT_2	 1.414213562 
 
 //METER_DEF	meter __attribute__ ((section ("EXT_RAM"), zero_init));
+#ifdef CH3
+METER_DEF	meter[3] __attribute__ ((section ("EXT_RAM"), zero_init));
+#else
 METER_DEF	meter[2] __attribute__ ((section ("EXT_RAM"), zero_init));
+#endif
 METER_CAL	meterCal __attribute__ ((section ("EXT_RAM"), zero_init));
-SETTINGS	db[2] __attribute__ ((section ("EXT_RAM"), zero_init));
+SETTINGS	db[METER_CH_COUNT] __attribute__ ((section ("EXT_RAM"), zero_init));
 ALARM_LIST	alist __attribute__ ((section ("EXT_RAM"), zero_init));
 EVENT_LIST	elist __attribute__ ((section ("EXT_RAM"), zero_init));
+#ifdef CH3
+ADE9000_REG ade9000[3] __attribute__ ((section ("EXT_RAM"), zero_init));
+#else
 ADE9000_REG ade9000[2] __attribute__ ((section ("EXT_RAM"), zero_init));
+#endif
 EN50160 pqrpt __attribute__ ((section ("EXT_RAM"), zero_init));;
 
 SIMPLE_DATA	smap __attribute__ ((section ("EXT_RAM"), zero_init));
@@ -38,6 +46,10 @@ SETTINGS	*pdb=&db[0];
 SETTINGS	*pdbk=&meter[0].setting;
 SETTINGS	*pdb2=&db[1];
 SETTINGS	*pdbk2=&meter[1].setting;
+#if METER_CH_COUNT > 2
+SETTINGS	*pdb3=&db[2];
+SETTINGS	*pdbk3=&meter[2].setting;
+#endif
 
 METERING 	*pmeter=&meter[0].meter;
 CNTL_DATA	*pcntl=&meter[0].cntl;
@@ -49,13 +61,10 @@ VQDATA *pVQ=&meter[0].vq;
 DEMAND *pdm=&meter[0].dm;
 DEMAND_LOG *pdmlog=&meter[0].dlog;	// demand last day log
 MAXMIN *pmm=&meter[0].maxmin; 
-EXT_IO_DATA *piom=&meter[0].iom;
+IOM_DATA *piom=&meter[0].iom;
 //QualDataSet *pQds = &meter.qds;
 //VarDataSet *pVds = &meter.vds;
 QualLogData	*pqLog=&meter[0].qdLog;
-//WAVEFORM_L16	*pWFL16 = &meter.wv;
-//SAMPLE_BUF *pSp = &meter.sample;
-GATEWAY_STATUS *pgwst = &meter[0].gwst;
 ALARM_STATUS *palm = &meter[0].alarm;
 
 //ALARM_LIST	*palist=&meter[0].alist;
@@ -63,26 +72,20 @@ ALARM_STATUS *palm = &meter[0].alarm;
 ALARM_LIST	*palist=&alist;
 EVENT_LIST	*pelist=&elist;
 
-//ITIC_EVT_LIST *piticlist=&meter[0].itic;
-//ITIC_EVT_LIST *piticlist2=&meter[0].itic2;		// configurator
-//PQ_EVENT_COUNT *ppqEvtCnt=&meter[0].pqEvtCnt;
-PQ_EVENT_COUNT pQevt, *ppqEvtCnt=&pQevt;
-
 //ADE9000_REG _ade9000, *pchip=&_ade9000;
 TIME_STAMP freezeTod;
 //COMM_CFG *pComm=&meter.db.comm;
-IO_CFG	*piocfg=&meter[0].db.iom[0];
+IO_CFG	*piocfg=&meter[0].db.iom;
 #if 1	// 2023-9
-EVENT_FIFO *pEvtFifo=&meter[0].eventFifo;
 ALARM_FIFO *pAlmFifo=&meter[0].alarmFifo;
 #endif
 LOG_DATA	*pld=&meter[0].log;
 ENERGY_LOG *pegylog=meter[0].elog;
 
 //WAVE8k_PGBUF	w8kQ  __attribute__ ((section ("EXT_RAM"), zero_init));
-WAVE_PGBUF	wQ[2] __attribute__ ((section ("EXT_RAM"), zero_init));
-WAVE_8K_BUF wbFFT8k[2] __attribute__ ((section ("EXT_RAM"), zero_init)); 
-WAVE_WINDOW_BLK wvblk[2] __attribute__ ((section ("EXT_RAM"), zero_init)); 
+WAVE_PGBUF	wQ[METER_CH_COUNT] __attribute__ ((section ("EXT_RAM"), zero_init));
+WAVE_8K_BUF wbFFT8k[METER_CH_COUNT] __attribute__ ((section ("EXT_RAM"), zero_init)); 
+WAVE_WINDOW_BLK wvblk[METER_CH_COUNT] __attribute__ ((section ("EXT_RAM"), zero_init)); 
 WAVE_HF_CAP wbCap  __attribute__ ((section ("EXT_RAM"), zero_init)); 
 WAVE_LF_CAP wbCapLF __attribute__ ((section ("EXT_RAM"), zero_init)); 
 //WAVE_LF_CAP wbLF  __attribute__ ((section ("EXT_RAM"), zero_init)); 
@@ -90,8 +93,6 @@ WAVE_LF_CAP wbCapLF __attribute__ ((section ("EXT_RAM"), zero_init));
 RMS_CAP	rmsCap __attribute__ ((section ("EXT_RAM"), zero_init)); 
 FAST_RMS_BUF rmsWin __attribute__ ((section ("EXT_RAM"), zero_init)); 
 FFT_CZT fftMem  __attribute__ ((section ("EXT_RAM"), zero_init)); 
-
-EVENT_Q	eventQ __attribute__ ((section ("EXT_RAM"), zero_init)); 
 
 #ifdef	DAQ
 DAQ_BUF	daq	__attribute__ ((section ("EXT_RAM"), zero_init)); 
@@ -125,10 +126,17 @@ int getTzOffset(int tz) {
 }
 
 void putFsQ(FS_MSG *p) {
+	uint32_t primask;
+
+	/* Meter0/1/2 등 여러 태스크가 동시에 큐를 쓰면 fr/re가 깨질 수 있다. */
+	primask = __get_PRIMASK();
+	__disable_irq();
 	memcpy(&fsQ.mQ[fsQ.fr], p, sizeof(*p));
 	if (++fsQ.fr >= FS_MSG_CNT) {
 		fsQ.fr = 0;
 	}
+	__set_PRIMASK(primask);
+
 #ifdef __FREERTOS	
    if (fsQ.tid != 0) 
       xTaskNotify(fsQ.tid, 0x1, eSetBits);
@@ -355,6 +363,24 @@ void build_set_db(void)
 	meter[id].setting.comm.baud = 0;
 	meter[id].setting.comm.parity = 1;
 
+#if METER_CH_COUNT > 2
+	id = 2;
+	meter[id].setting.pt.wiring = 2;	/* 1P2W, M1과 동일 */
+	meter[id].setting.pt.freq = 60;
+	meter[id].setting.pt.vnorm = 220;
+	meter[id].setting.pt.PT1 = 220;
+	meter[id].setting.pt.PT2 = 220;
+	meter[id].setting.ct.inorm = 100;
+	meter[id].setting.ct.CT1 = 100;
+	meter[id].setting.ct.CT2 = 1;
+	meter[id].setting.ct.zctScale = 1000;
+	meter[id].setting.ct.zctType = 1;
+	meter[id].setting.comm.comMode = 0;
+	meter[id].setting.comm.devId = 1;
+	meter[id].setting.comm.baud = 0;
+	meter[id].setting.comm.parity = 1;
+#endif
+
 	// memset(&meter[0].setting.f_setting[0], 0, sizeof(FLOW_SETTING)*4);
 	// memcpy(&pflow->f_setting[0], &pdbk->f_setting[0], sizeof(FLOW_SETTING)*4);
 	reqSaveSettings(0x1234);
@@ -493,6 +519,8 @@ int buildSettings(int id)
 	int ret=0, i;
 	float ptratio;
 	CNTL_DATA	*_pcntl = &meter[id].cntl;
+
+	meter[id].meter.vType = (uint16_t)db[id].pt.wiring;
 	
 	if (db[id].comm.devId > 250) {
 		printf("*** Invalid devId = %d\n", db[id].comm.devId);
@@ -885,11 +913,13 @@ int buildExtSettings(int id)
 	ALARM_DEF *paset = &db[id].alarm;
 	COMM_CFG *pComm=&db[0].comm;
 
-	printf("ipaddress = %d.%d.%d.%d\n", pComm->ip0[0], pComm->ip0[1], pComm->ip0[2], pComm->ip0[3]);
-	printf("netmask  = %d.%d.%d.%d\n", pComm->sm0[0], pComm->sm0[1], pComm->sm0[2], pComm->sm0[3]);
-	printf("Gateway  = %d.%d.%d.%d\n", pComm->gw0[0], pComm->gw0[1], pComm->gw0[2], pComm->gw0[3]);
-	printf("DNS      = %d.%d.%d.%d\n", pComm->dns0[0], pComm->dns0[1], pComm->dns0[2], pComm->dns0[3]);
-	printf("MAC      = %02x:%02x:%02x:%02x\n", pcal->mac[0], pcal->mac[1], pcal->mac[2], pcal->mac[3]);
+	if (id == 0) {
+		printf("ipaddress = %d.%d.%d.%d\n", pComm->ip0[0], pComm->ip0[1], pComm->ip0[2], pComm->ip0[3]);
+		printf("netmask  = %d.%d.%d.%d\n", pComm->sm0[0], pComm->sm0[1], pComm->sm0[2], pComm->sm0[3]);
+		printf("Gateway  = %d.%d.%d.%d\n", pComm->gw0[0], pComm->gw0[1], pComm->gw0[2], pComm->gw0[3]);
+		printf("DNS      = %d.%d.%d.%d\n", pComm->dns0[0], pComm->dns0[1], pComm->dns0[2], pComm->dns0[3]);
+		printf("MAC      = %02x:%02x:%02x:%02x\n", pcal->mac[0], pcal->mac[1], pcal->mac[2], pcal->mac[3]);
+	}
 
 // 2017-12-6
 	if (pComm->baud >= 5) {
@@ -898,7 +928,7 @@ int buildExtSettings(int id)
 	}
 	
 	
-#if 0		// 2025-3-20, doType 사용자가 직접 지정
+#if 0		// 레거시 자동 doType 매핑 로직: 현재는 사용자 설정값을 그대로 유지하므로 참고용으로만 보존
 	// 초기화
 	for(i=0; i<IOMAX_DO; i++)
 		piocfg->doType[i] = DOTYPE_OUT;
@@ -1027,44 +1057,61 @@ void storeHwSettings(METER_CAL *pcal) {
 
 int loadSettings(SETTINGS	*pdb)
 {
-	int ret=0;
+	int ret=0, id;
 	FILE *fp;
 	fp = fopen(SETTING_FILE, "rb");
 	if (fp == NULL) {
 		printf("{{Can't load Settings}}\n");
-		initSettings(0);
-		initSettings(1);
-		build_set_db();		
-		initExtSettings(0);
+		for (id = 0; id < METER_CH_COUNT; id++) {
+			initSettings(id);
+			initExtSettings(id);
+		}
+		build_set_db();
 		
 		fp = fopen(SETTING_FILE, "wb");
 		if (fp != NULL) {
-			fwrite(pdb, 1, sizeof(*pdb)*2, fp);
+			fwrite(pdb, 1, sizeof(*pdb) * METER_CH_COUNT, fp);
 			fclose(fp);
 			printf("[[Create Default Settings(%s)]]\n", SETTING_FILE);
 		}		
 		ret = -1;
 	}
 	else {
-		fread(pdb, 1, sizeof(*pdb)*2, fp);
-		fclose(fp);				
+		long fsize;
+
+		fseek(fp, 0, SEEK_END);
+		fsize = ftell(fp);
+		fseek(fp, 0, SEEK_SET);
+		fread(pdb, 1, sizeof(*pdb) * METER_CH_COUNT, fp);
+		fclose(fp);
 		printf("loadSettings ok\n");
+#if METER_CH_COUNT > 2
+		if (fsize < (long)(sizeof(SETTINGS) * METER_CH_COUNT)) {
+			printf("{{Settings file short (%ld), init db[2]}}\n", fsize);
+			initSettings(2);
+		}
+#endif
 	}
 
+#if METER_CH_COUNT > 1
 	memcpy(&db[1].comm, &db[0].comm, sizeof(COMM_CFG));
+#endif
 	memcpy(&meter[0].setting, &db[0], sizeof(SETTINGS));
+#if METER_CH_COUNT > 1
 	memcpy(&meter[1].setting, &db[1], sizeof(SETTINGS));
+#endif
+#if METER_CH_COUNT > 2
+	memcpy(&meter[2].setting, &db[2], sizeof(SETTINGS));
+#endif
 
-	
-
-	buildSettings(0);
-	buildSettings(1);
+	for (id = 0; id < METER_CH_COUNT; id++)
+		buildSettings(id);
 
 #ifdef	METER_TEST_DATA
 	buildAlarmSettings();	
 #endif	
-	buildExtSettings(0);
-	buildExtSettings(1);
+	for (id = 0; id < METER_CH_COUNT; id++)
+		buildExtSettings(id);
 		
 #ifdef	DAQ
 	db[id].comm.daq_ip[0] = 192;
@@ -1090,7 +1137,7 @@ int loadSettings(SETTINGS	*pdb)
 int saveSettings(SETTINGS	*pdb) {
 	FILE *fp = fopen(SETTING_FILE, "wb");
 	if (fp != NULL) {
-		fwrite(pdb, 1, sizeof(*pdb)*2, fp);
+		fwrite(pdb, 1, sizeof(*pdb) * METER_CH_COUNT, fp);
 		fclose(fp);
 		printf("[[Save Settings(%s)]]\n", SETTING_FILE);
 		return 0;
@@ -1218,7 +1265,7 @@ int maxMinTHD(int id) {
 #else
 	for (i=0; i<4; i++) {
 		pmm->fr += updateMaxMin(&pmm->THD_U[i], meter[id].meter.THD_U[i]);
-		pmm->fr += updateMaxMin(&pmm->THD_Upp[i], meter[id].meter._uppthd[i]);		
+		pmm->fr += updateMaxMin(&pmm->THD_Upp[i], meter[id].meter.THD_Upp[i]);		
 		pmm->fr += updateMaxMin(&pmm->THD_I[i], meter[id].meter.THD_I[i]);		
 	}
 #endif
@@ -1694,7 +1741,7 @@ int TransientEvent(int id, WAVE_WINDOW *pww, int bx, TS_CNTL *ptrg, int mode) {
 				
 				// event list에 추가할지 ???
 				if (mode == 0) {
-					ppqEvtCnt->tvc++;
+					meter[id].pqEvtCnt.tvc++;
 					
 					eTrV.type = E_TrV;
 					eTrV.mask = ptrg->mask;
@@ -1705,7 +1752,7 @@ int TransientEvent(int id, WAVE_WINDOW *pww, int bx, TS_CNTL *ptrg, int mode) {
 					printf(">>> EoTrV(%d): %d\n", mode, i);
 				}
 				else {
-					ppqEvtCnt->tcc++;
+					meter[id].pqEvtCnt.tcc++;
 					
 					eTrC.type = E_TrC;
 					eTrC.mask = ptrg->mask;
@@ -1792,7 +1839,7 @@ int TransientEvent(int id, WAVE_WINDOW *pww, int bx, TS_CNTL *ptrg, int mode) {
 //					res = ptrg->capF = 1;				
 //				}
 //				// event list에 추가할지 ???
-//				ppqEvtCnt->tvc++;
+//				meter[id].pqEvtCnt.tvc++;
 //			}
 //		}
 //		else if (ptrg->st == 1) {	
@@ -1872,7 +1919,7 @@ int TransientEvent(int id, WAVE_WINDOW *pww, int bx, TS_CNTL *ptrg, int mode) {
 //					ptrg->capF = 1;
 //				}
 //				//printf(">>> Capture: %d, %lld\n", i, ptrg->ts1);
-//				ppqEvtCnt->tcc++;
+//				meter[id].pqEvtCnt.tcc++;
 //			}
 //		}
 //		else if (ptrg->st == 1) {						
@@ -2289,12 +2336,14 @@ void Wave_Task(void *arg)
 	int32_t *pwv;
 	WAVE_WINDOW *pww;
 	uint64_t Ts;
-	uint32_t tick10s[2];
+	uint32_t tick10s[METER_CH_COUNT];
 //	int64_t sum[6]; 
 	int64_t sum[7]; 
   uint32_t notificationValue;
 	
-	tick10s[0] = tick10s[1] = sysTick10s;
+	for (id=0; id<METER_CH_COUNT; id++) {
+		tick10s[id] = sysTick10s;
+	}
 	_enableTaskMonitor(Tid_Wave, 50);
 	
 	while (1) {
@@ -2304,10 +2353,7 @@ void Wave_Task(void *arg)
       os_evt_wait_and(0x1, 0xffff);
 #endif		
 		meter[0].cntl.wdtTbl[Tid_Wave].count++;
-		if(getHwCh()== 0)
-		    cnt = 2;
-		else
-			cnt = 1;
+		cnt = ACTIVE_METER_CH_COUNT;
 		for (id=0; id<cnt; id++) {
 			if (wQ[id].halfFull) {
 				//printf("--> ready wave buffer full, id=%d, ix=%d, re=%d\n", id, wvblk[id].ix, wQ[id].re);
@@ -2356,7 +2402,7 @@ float	makeRdData(float v, int i, int j) {
 void makeRandomData(void) {
 	int	id, i,j,k, l;
 
-	for(id=0; id<2; id++) {
+	for(id=0; id<METER_CH_COUNT; id++) {
 		meter[id].meter.utc = sysTick1s;
 		meter[id].meter.Freq = makeRdData(60, 0,7);
 		meter[id].meter.Temp = makeRdData(25, 0,7);
@@ -2391,7 +2437,7 @@ void makeRandomData(void) {
 		meter[id].meter.PF[3] = (meter[id].meter.PF[0] + meter[id].meter.PF[1] + meter[id].meter.PF[2])/3;
 		meter[id].meter.dPF[3] = (meter[id].meter.dPF[0] + meter[id].meter.dPF[1] + meter[id].meter.dPF[2])/3;
 	
-		meter[id].meter.Itot = meter[0].meter.I[0] + meter[0].meter.I[1] + meter[0].meter.I[2];
+		meter[id].meter.Itot = meter[id].meter.I[0] + meter[id].meter.I[1] + meter[id].meter.I[2];
 		meter[id].meter.In = makeRdData(123, 0,7);
 		meter[id].meter.Isum = makeRdData(321, 0,7);
 		meter[id].meter.Ig = makeRdData(98, 0,7);
@@ -2495,6 +2541,57 @@ void Test_task(void *arg)
 // size:115232, 107ms, 234ms,  233ms, 496ms, 509ms, 473ms, 
 // case 2: 새로 만드는 경우 
 // size:115232, 279ms, 145ms, 78ms, 71ms, 169ms, 74ms
+static void trimFixedRecordFileFs(const char *path, uint32_t recSize, uint32_t keepCount) {
+#ifdef USE_CMSIS_RTOS2
+	fsFileInfo info;
+#else
+	FINFO info;
+#endif
+	FILE *ftrim;
+	uint8_t *buf;
+	uint32_t keepBytes, copyOffset;
+
+	info.fileID = 0;
+	if (ffind(path, &info) != 0) {
+		return;
+	}
+
+	keepBytes = recSize * keepCount;
+	if (info.size <= keepBytes) {
+		return;
+	}
+
+	copyOffset = info.size - keepBytes;
+	ftrim = fopen(path, "rb");
+	if (ftrim == NULL) {
+		return;
+	}
+	if (fseek(ftrim, copyOffset, SEEK_SET) != 0) {
+		fclose(ftrim);
+		return;
+	}
+
+	buf = (uint8_t *)malloc(keepBytes);
+	if (buf == NULL) {
+		fclose(ftrim);
+		return;
+	}
+	if (fread(buf, 1, keepBytes, ftrim) != keepBytes) {
+		free(buf);
+		fclose(ftrim);
+		return;
+	}
+	fclose(ftrim);
+
+	ftrim = fopen(path, "wb");
+	if (ftrim != NULL) {
+		fwrite(buf, 1, keepBytes, ftrim);
+		fclose(ftrim);
+		printf("trimFixedRecordFileFs: %s -> keep %u records\n", path, keepCount);
+	}
+	free(buf);
+}
+
 void FS_task(void *arg) 
 {
 	FILE *fp=NULL;
@@ -2505,7 +2602,7 @@ void FS_task(void *arg)
 	uint32_t t3;
 	uint32_t notificationValue;
 	EVENT_U elog;
-	
+
 #ifdef __FREERTOS	
 	fsQ.tid = xTaskGetCurrentTaskHandle();
 #else
@@ -2580,6 +2677,10 @@ void FS_task(void *arg)
 				if (fp != NULL) {
 					fwrite(pmsg->pbuf, pmsg->size, 1, fp);
 					fclose(fp);
+					if ((strcmp(pmsg->mode, "ab") == 0) &&
+						(strncmp(pmsg->fname, EVENT_LIST_FILE, strlen(EVENT_LIST_FILE)) == 0)) {
+						trimFixedRecordFileFs(pmsg->fname, sizeof(EVENT_LOG), EVENT_LOG_CAP);
+					}
 				}
 				t2 = sysTick64;			
 				printf("FS, write(%s, %s, %d), elap=%lld\n", pmsg->fname, pmsg->mode, pmsg->size, t2-t1);
@@ -2592,7 +2693,12 @@ void FS_task(void *arg)
 		else if (meter[id].cntl.saveSetting == 0x1234) {
 			// 저장 후 정지
 			memcpy(&db[0], pdbk, sizeof(*pdb));
+#if METER_CH_COUNT > 1
 			memcpy(&db[1], pdbk2, sizeof(*pdb));
+#endif
+#if METER_CH_COUNT > 2
+			memcpy(&db[2], pdbk3, sizeof(*pdb));
+#endif
 			saveSettings(db);
 
 			meter[id].cntl.saveSetting = 0;
@@ -2602,14 +2708,28 @@ void FS_task(void *arg)
 				pdbk->comm.ip0[0], pdbk->comm.ip0[1], pdbk->comm.ip0[2], pdbk->comm.ip0[3]);
 		}
 		else if (meter[id].cntl.factReset == 0x1234) {
-			// db 초기화 후 정지
-			initSettings(0);		
-			initSettings(1);
-			build_set_db();		
-			initExtSettings(0);
+			/* db 공장초기화: 예전에는 runFlag=0만 하고 끝나 taskMonitor가 WDT로
+			 * 재부팅될 때까지 측정/스캔 태스크는 멈췄는데 리셋은 늦어져 멈춘 것처럼 보임 */
+			{
+				int ch;
 
+				for (ch = 0; ch < METER_CH_COUNT; ch++) {
+					initSettings(ch);
+					initExtSettings(ch);
+				}
+			}
+			build_set_db();
+			{
+				int ch;
+
+				for (ch = 0; ch < METER_CH_COUNT; ch++)
+					memcpy(&db[ch], &meter[ch].setting, sizeof(SETTINGS));
+			}
 			saveSettings(db);
 			meter[id].cntl.factReset = 0;
+			meter[id].cntl.saveSetting = 0;
+			printf("[[INITDB: saved, NVIC_SystemReset]]\n");
+			NVIC_SystemReset();
 			meter[id].cntl.runFlag = 0;
 		}
 		else if (meter[id].cntl.rebootFlag == 0x1234) {			
@@ -2739,7 +2859,7 @@ void updatePresentDemand(int id) {
 	dInterval = meter[id].cntl.mInterval;
 	mult = 3600./dInterval;
 	
-	for (i=0; i<2; i++) {
+	for (i=0; i<DEMAND_PQ_DIR_COUNT; i++) {
 		pdm->CD_P[i] = meter[id].cntl.dmdP[i]*mult;
 		pdm->CD_Q[i] = meter[id].cntl.dmdQ[i]*mult;		
 	}
@@ -2766,7 +2886,7 @@ int updateMaxDemand(int id) {
 		
 	// dynamic demand I
 	pdm->ddTime = sysTick1s;
-	for (i=0; i<3; i++) {
+	for (i=0; i<DEMAND_PHASE_COUNT; i++) {
 		pdm->DD_I[i] = meter[id].cntl.dmdI[i]/mInterval;
 		meter[id].cntl.dmdI[i] = 0;
 	}
@@ -2776,7 +2896,7 @@ int updateMaxDemand(int id) {
 	mult = 60/(meter[id].cntl.dInterval/60);	// 60/주기(분)
 	dt = (float)meter[id].cntl.dInterval/mInterval;	// 주기(초)/실제수집시간(초)
 	// dynamic demand Power
-	for (i=0; i<2; i++) {
+	for (i=0; i<DEMAND_PQ_DIR_COUNT; i++) {
 		pdm->DD_P[i] = meter[id].cntl.dmdP[i]*dt*mult;		
 		pdm->DD_Q[i] = meter[id].cntl.dmdQ[i]*dt*mult;		
 		meter[id].cntl.dmdP[i] = meter[id].cntl.dmdQ[i] = 0;
@@ -2823,7 +2943,7 @@ int updateMaxDemand(int id) {
 void updateDemandI(int id)
 {
 	int i;
-	for (i=0; i<3; i++) {
+	for (i=0; i<DEMAND_PHASE_COUNT; i++) {
 		meter[id].cntl.dmdI[i] += meter[id].meter.I[i];
 	}
 }	
@@ -2832,7 +2952,7 @@ void updateDemandI(int id)
 void copyDemandBin() {
 	int i, id;
 	
-	for(id=0; id<2; id++) {
+	for(id=0; id<METER_CH_COUNT; id++) {
 		meter[id].dlog.ts = pdm->dmdLogTs;	
 		for (i=0; i<96; i++) {
 			meter[id].dlog.DP_P_Log[i] = pdm->DP_P_Log[i];
@@ -2877,12 +2997,12 @@ void resetDemand(int id, int mode) {
 	uint32_t ts = sysTick1s;
 	
 	// clear MD
-	for (i=0; i<3; i++) {
+	for (i=0; i<DEMAND_PHASE_COUNT; i++) {
 		pdm->MD_I[i].mdTime = sysTick1s;
 		pdm->MD_I[i].value = 0;
 	}
 	
-	for (i=0; i<2; i++) {
+	for (i=0; i<DEMAND_PQ_DIR_COUNT; i++) {
 		pdm->MD_P[i].mdTime = ts;
 		pdm->MD_P[i].value = 0;
 		pdm->MD_Q[i].mdTime = ts;
@@ -2891,10 +3011,10 @@ void resetDemand(int id, int mode) {
 		pdm->MD_S.value = 0;
 	}
 	
-	for (i=0; i<3; i++) {
+	for (i=0; i<DEMAND_PHASE_COUNT; i++) {
 		pdm->DD_I[i] = 0;
 	}
-	for (i=0; i<2; i++) {
+	for (i=0; i<DEMAND_PQ_DIR_COUNT; i++) {
 		pdm->DD_P[i] = 0;
 		pdm->DD_Q[i] = 0;		
 	}
@@ -2919,29 +3039,36 @@ void resetDemand(int id, int mode) {
 void storeDemand() {	
 	FILE *fp;
 	char path[64];
+	int id;
 	
-	sprintf(path, "%s", DEMAND_FILE);
-	fp = fopen(path, "wb");	
-	if (fp == NULL) 
-		return;
-	
-	fwrite(pdm, sizeof(DEMAND), 1, fp);
-	fwrite(pdmlog, sizeof(DEMAND_LOG), 1, fp);
-	fclose(fp);
+	for (id = 0; id < METER_CH_COUNT; id++) {
+		if (id == 0) sprintf(path, "%s", DEMAND_FILE);
+		else sprintf(path, "%s\\demand.d%d", SYS_DIR, id);
+		fp = fopen(path, "wb");
+		if (fp == NULL) {
+			continue;
+		}
+		fwrite(&meter[id].dm, sizeof(DEMAND), 1, fp);
+		fwrite(&meter[id].dlog, sizeof(DEMAND_LOG), 1, fp);
+		fclose(fp);
+	}
 }
 
 int storeDemandNVR() {
-	int os=2048, ret=0, id;
+	int os = 2048, ret = 0, id, i;
 	
-	for(id=0; id<2; id++) {	
-		pdm->magic = 0x1234;
-		pdm->crc = gencrc_modbus((uint8_t *)&meter[id].dm, sizeof(DEMAND)-2);	
-		
-		if (FramWrite(&meter[id].dm, os, sizeof(DEMAND)) == 0) {
-			printf("FramWrite failed(%d, %d, %d)\n", id, os, sizeof(DEMAND));
-			ret = -1;
+	for (id = 0; id < METER_CH_COUNT; id++) {
+		meter[id].dm.magic = 0x1234;
+		meter[id].dm.crc = gencrc_modbus((uint8_t *)&meter[id].dm, sizeof(DEMAND)-2);
+
+		for (i = 0; i < 2; i++) {
+			if (FramWrite(&meter[id].dm, os, sizeof(DEMAND)) == 0) {
+				printf("FramWrite failed(%d, %d, %d)\n", id, os, sizeof(DEMAND));
+				ret = -1;
+			}
+			os += 640;
 		}
-	}	
+	}
 	
 	return ret;
 }
@@ -2949,15 +3076,32 @@ int storeDemandNVR() {
 void loadDemand() {
 	FILE *fp;
 	char path[64];
+	int id;
 	
-	sprintf(path, "%s", DEMAND_FILE);
-	fp = fopen(path, "rb");
-	if (fp == NULL) 
-		return;
-	
-	fread(pdm, sizeof(DEMAND), 1, fp);
-	fread(pdmlog, sizeof(DEMAND_LOG), 1, fp);
-	fclose(fp);	
+	for (id = 0; id < METER_CH_COUNT; id++) {
+		if (id == 0) sprintf(path, "%s", DEMAND_FILE);
+		else sprintf(path, "%s\\demand.d%d", SYS_DIR, id);
+		fp = fopen(path, "rb");
+		if (fp != NULL) {
+			fread(&meter[id].dm, sizeof(DEMAND), 1, fp);
+			fread(&meter[id].dlog, sizeof(DEMAND_LOG), 1, fp);
+			fclose(fp);
+			continue;
+		}
+		memset(&meter[id].dm, 0, sizeof(DEMAND));
+		memset(&meter[id].dlog, 0, sizeof(DEMAND_LOG));
+		meter[id].dm.magic = 0x1234;
+		fp = fopen(path, "wb");
+		if (fp == NULL) {
+			continue;
+		}
+		fwrite(&meter[id].dm, sizeof(DEMAND), 1, fp);
+		fwrite(&meter[id].dlog, sizeof(DEMAND_LOG), 1, fp);
+		fclose(fp);
+		printf("[[Create Demand File(%s)]]\n", path);
+	}
+	pdm = &meter[0].dm;
+	pdmlog = &meter[0].dlog;
 }
 
 
@@ -2965,17 +3109,17 @@ int loadDemandNVR() {
 	uint16_t os = 2048, crc;
 	int i, id;
 	
-	for(id=0; id<2; id++) {
-		for (i=0; i<2; i++) {
+	for (id = 0; id < METER_CH_COUNT; id++) {
+		for (i = 0; i < 2; i++) {
 			FramRead(&meter[id].dm, os, sizeof(DEMAND));
 			crc = gencrc_modbus((uint8_t *)&meter[id].dm, sizeof(DEMAND));
-			if (id == 1 && crc == 0) {	
+			if (id == (METER_CH_COUNT - 1) && crc == 0) {
 				return 0;
 			}
-			
+
 			os += 640;
 		}
-	}	
+	}
 	
 	return -1;
 }
@@ -3112,26 +3256,64 @@ int updateEh(int id, int mode, float diff) {
 // 	return ret;
 // }
 
-int loadEnergyLogFs() {
+static void initEnergyLogBlob(void *blob)
+{
+	ENERGY_LOG *plog = blob;
+
+	memset(plog, 0, sizeof(ENERGY_LOG));
+	plog->magic = 0x1234abcd;
+	plog->ts = sysTick1s;
+}
+
+static void initEnergyNvrBlob(void *blob)
+{
+	ENERGY_NVRAM *pnvr = blob;
+
+	memset(pnvr, 0, sizeof(ENERGY_NVRAM));
+	pnvr->magic = 0x1234abcd;
+	pnvr->ts = sysTick1s;
+}
+
+/* fopen(rb) 실패 시 on_create로 blob 초기화 후 wb로 생성 */
+static int loadOrCreateFsBlob(const char *path, void *blob, size_t nbytes,
+	void (*on_create)(void *blob))
+{
 	FILE *fp;
-	uint16_t crc;
-		
-	fp = fopen(ENERGY_LOG_FILE0, "rb");
+
+	fp = fopen(path, "rb");
+	if (fp != NULL) {
+		if (fread(blob, nbytes, 1, fp) != 1)
+			memset(blob, 0, nbytes);
+		fclose(fp);
+		return 0;
+	}
+
+	if (on_create != NULL)
+		on_create(blob);
+	else
+		memset(blob, 0, nbytes);
+
+	fp = fopen(path, "wb");
 	if (fp == NULL) {
-		printf("{{Can't load Energy Log File(%s)}}\n", ENERGY_LOG_FILE0);
+		printf("{{Can't create File(%s)}}\n", path);
 		return -1;
-	}	
-	fread(&pegylog[0], sizeof(ENERGY_LOG), 1, fp);
-	fclose(fp);	
-	
-	fp = fopen(ENERGY_LOG_FILE1, "rb");
-	if (fp == NULL) {
-		printf("{{Can't load Energy Log File(%s)}}\n", ENERGY_LOG_FILE1);
+	}
+	fwrite(blob, nbytes, 1, fp);
+	fclose(fp);
+	printf("[[Create File(%s)]]\n", path);
+	return 0;
+}
+
+static int loadOrCreateEnergyLog(int sel, const char *path)
+{
+	return loadOrCreateFsBlob(path, &pegylog[sel], sizeof(ENERGY_LOG), initEnergyLogBlob);
+}
+
+int loadEnergyLogFs() {
+	if (loadOrCreateEnergyLog(0, ENERGY_LOG_FILE0) < 0)
 		return -1;
-	}	
-	fread(&pegylog[1], sizeof(ENERGY_LOG), 1, fp);
-	fclose(fp);		
-	
+	if (loadOrCreateEnergyLog(1, ENERGY_LOG_FILE1) < 0)
+		return -1;
 	return 0;
 }
 
@@ -3155,22 +3337,18 @@ int loadEnergyNVR(ENERGY_NVRAM *pEgyNvr) {
 	
 	//ENERGY_REG64 Ereg[3]
 	if (crc == 0) {
-		for (i=0; i<3; i++) {
-			for (j=0; j<3; j++) {
-				if (egyNvr.Ereg64[id][i].eh[j][0] > MAX_EREG64) {
-					printf(">>Error on Ereg[%d].eh[%d][0] = %lld<<\n", i, j, egyNvr.Ereg64[id][i].eh[j][0]);
-					ret = -1;
+		for (id=0; id<ENERGY_CH_COUNT; id++) {
+			for (i=0; i<3; i++) {
+				for (j=0; j<3; j++) {
+					if (egyNvr.Ereg64[id][i].eh[j][0] > MAX_EREG64) {
+						printf(">>Error on Ereg[%d][%d].eh[%d][0] = %lld<<\n", id, i, j, egyNvr.Ereg64[id][i].eh[j][0]);
+						ret = -1;
+					}
+					if (egyNvr.Ereg64[id][i].eh[j][1] > MAX_EREG64) {
+						printf(">>Error on Ereg[%d][%d].eh[%d][1] = %lld<<\n", id, i, j, egyNvr.Ereg64[id][i].eh[j][1]);
+						ret = -1;
+					}
 				}
-				else
-					printf(">>ENERGY_NVRAM Ereg[%d].eh[%d][0] = %lld<<\n", i, j, egyNvr.Ereg64[id][i].eh[j][0]);
-
-				if (egyNvr.Ereg64[id][i].eh[j][1] > MAX_EREG64) {
-					printf(">>Error on Ereg[%d].eh[%d][1] = %lld<<\n", i, j, egyNvr.Ereg64[id][i].eh[j][1]);
-					ret = -1;
-				}
-				else
-					printf(">>ENERGY_NVRAM Ereg[%d].eh[%d][1] = %lld<<\n", i, j, egyNvr.Ereg64[id][i].eh[j][1]);
-
 			}
 		}
 	}
@@ -3180,18 +3358,7 @@ int loadEnergyNVR(ENERGY_NVRAM *pEgyNvr) {
 
 
 int loadEnergyFs(ENERGY_NVRAM *pEgyNvr) {
-	FILE *fp = fopen(ENERGY_FILE, "rb");
-	uint16_t crc;
-		
-	if (fp == NULL) {
-		printf("{{Can't load Energy File(%s)}}\n", ENERGY_FILE);
-		return -1;
-	}
-	
-	fread(pEgyNvr, sizeof(ENERGY_NVRAM), 1, fp);
-	fclose(fp);	
-	
-	return 0;
+	return loadOrCreateFsBlob(ENERGY_FILE, pEgyNvr, sizeof(ENERGY_NVRAM), initEnergyNvrBlob);
 }
 
 
@@ -3242,7 +3409,7 @@ void storeEnergy() {
 
 
 void checkEnergy(int id) {	
-	int i, j;
+	int i;
 	struct tm lto;//, ltn;
 
 	// 마지막 기록 시간에서 달이 경과 하면 현월을 전월로 이동한다 
@@ -3250,23 +3417,19 @@ void checkEnergy(int id) {
 	//localtime_r(&sysTick1s, &ltn);
 	
 	if (lto.tm_mon != meter[0].cntl.tod.tm_mon) {
-		memcpy(&egyNvr.Ereg64[0][2], &egyNvr.Ereg64[0][1], sizeof(ENERGY_REG64));	// 현월->전월
-		memset(&egyNvr.Ereg64[0][1], 0, sizeof(ENERGY_REG64));	// 현월 reset
-		memcpy(&egyNvr.Ereg64[1][2], &egyNvr.Ereg64[1][1], sizeof(ENERGY_REG64));	// 현월->전월
-		memset(&egyNvr.Ereg64[1][1], 0, sizeof(ENERGY_REG64));	// 현월 reset
+		for (i=0; i<ENERGY_CH_COUNT; i++) {
+			memcpy(&egyNvr.Ereg64[i][2], &egyNvr.Ereg64[i][1], sizeof(ENERGY_REG64));	// 현월->전월
+			memset(&egyNvr.Ereg64[i][1], 0, sizeof(ENERGY_REG64));	// 현월 reset
+		}
 		
 	}	
 	
-	id = 0;
-	copyEreg32(id);
-	copyEreg64(&meter[id].egy.Ereg64, egyNvr.Ereg64[id]);
-	printf("[[[[%d]Energy Reg : %lld, %lld, %lld]]]\n", 
-		id, egyNvr.Ereg64[id][0].eh[0][0], egyNvr.Ereg64[id][0].eh[1][0], egyNvr.Ereg64[id][0].eh[2][0]);
-	id = 1;
-	copyEreg32(id);
-	copyEreg64(&meter[id].egy.Ereg64, egyNvr.Ereg64[id]);
-	printf("[[[[%d]Energy Reg : %lld, %lld, %lld]]]\n", 
-		id, egyNvr.Ereg64[id][0].eh[0][0], egyNvr.Ereg64[id][0].eh[1][0], egyNvr.Ereg64[id][0].eh[2][0]);
+	for (id=0; id<ENERGY_CH_COUNT; id++) {
+		copyEreg32(id);
+		copyEreg64(&meter[id].egy.Ereg64, egyNvr.Ereg64[id]);
+		printf("[[[[%d]Energy Reg : %lld, %lld, %lld]]]\n", 
+			id, egyNvr.Ereg64[id][0].eh[0][0], egyNvr.Ereg64[id][0].eh[1][0], egyNvr.Ereg64[id][0].eh[2][0]);
+	}
 	storeEnergy();
 }
 
@@ -3277,10 +3440,12 @@ int loadEnergy(int id) {
 	{		
 		printf(">>Can't load Energy from NVR ...<<\n");
 #ifdef	SUPPORT_FS_ENERGY		
-		if (loadEnergyFs(&egyNvr) < 0) 
-			printf(">>Can't load Energy from FS ...<<\n");
+		if (loadEnergyFs(&egyNvr) >= 0)
+			;
+		else
 #endif			
 		{
+			printf(">>Can't load Energy from FS ...<<\n");
 			memset(&egyNvr, 0, sizeof(egyNvr));
 			egyNvr.magic = 0x1234abcd;
 			storeEnergy();
@@ -3296,16 +3461,30 @@ int loadEnergy(int id) {
 int loadMaxMin() {
 	MAXMIN *pmm;
 	FILE *fp = fopen(MAXMIN_FILE, "rb");
-	uint16_t crc;
+	int id;
 		
-	if (fp == NULL) 
-		return -1;
+	if (fp == NULL) {
+		for (id = 0; id < METER_CH_COUNT; id++)
+			memset(&meter[id].maxmin, 0, sizeof(MAXMIN));
+		fp = fopen(MAXMIN_FILE, "wb");
+		if (fp == NULL)
+			return -1;
+		for (id = 0; id < METER_CH_COUNT; id++) {
+			pmm = &meter[id].maxmin;
+			fwrite(pmm, sizeof(MAXMIN), 1, fp);
+		}
+		fclose(fp);
+		printf("[[Create MaxMin File(%s)]]\n", MAXMIN_FILE);
+		return 0;
+	}
 
-	pmm = &meter[0].maxmin;
-	fread(pmm, sizeof(MAXMIN), 1, fp);	// 현재 max/min
-	
-	pmm = &meter[1].maxmin;
-	fread(pmm, sizeof(MAXMIN), 1, fp);	// 현재 max/min
+	for (id = 0; id < METER_CH_COUNT; id++) {
+		pmm = &meter[id].maxmin;
+		/* CH3: 기존 2채널 파일을 읽을 때 3번 채널 데이터가 없을 수 있으므로 기본값 처리 */
+		if (fread(pmm, sizeof(MAXMIN), 1, fp) != 1) {
+			memset(pmm, 0, sizeof(*pmm));
+		}
+	}
 	
 	//	fread(&meter.lastmaxmin, sizeof(MAXMIN), 1, fp);	// 과거 max,min
 	fclose(fp);	
@@ -3315,16 +3494,15 @@ int loadMaxMin() {
 int storeMaxMin() {
 	MAXMIN *pmm;
 	FILE *fp = fopen(MAXMIN_FILE, "wb");
-	uint16_t crc;
+	int id;
 		
 	if (fp == NULL) 
 		return -1;
 
-	pmm = &meter[0].maxmin;
-	fwrite(pmm, sizeof(MAXMIN), 1, fp);	// 현재 max/min
-			
-	pmm = &meter[1].maxmin;
-	fwrite(pmm, sizeof(MAXMIN), 1, fp);	// 현재 max/min
+	for (id = 0; id < METER_CH_COUNT; id++) {
+		pmm = &meter[id].maxmin;
+		fwrite(pmm, sizeof(MAXMIN), 1, fp);	// 현재 max/min
+	}
 	fclose(fp);	
 	return 0;	
 }
@@ -3508,10 +3686,10 @@ void energy_scan(int id, METER_EH_REGS *ereg, ENERGY_NVRAM *pEgyNvr) {
 	uLocalTime(&pEgyNvr->ts, &lto);
 	if (lto.tm_mon != meter[0].cntl.tod.tm_mon) {
 		printf("+++ copy this month energy to last month ...\n");
-		memcpy(&egyNvr.Ereg64[0][2], &egyNvr.Ereg64[0][1], sizeof(ENERGY_REG64));	// 현월 -> 전월
-		memset(&egyNvr.Ereg64[0][1], 0, sizeof(ENERGY_REG64));			// 현월 reset
-		memcpy(&egyNvr.Ereg64[1][2], &egyNvr.Ereg64[1][1], sizeof(ENERGY_REG64));	// 현월 -> 전월
-		memset(&egyNvr.Ereg64[1][1], 0, sizeof(ENERGY_REG64));			// 현월 reset
+		for (i=0; i<ENERGY_CH_COUNT; i++) {
+			memcpy(&egyNvr.Ereg64[i][2], &egyNvr.Ereg64[i][1], sizeof(ENERGY_REG64));	// 현월 -> 전월
+			memset(&egyNvr.Ereg64[i][1], 0, sizeof(ENERGY_REG64));			// 현월 reset
+		}
 		ewF += (1<<3);
 	}	
 	// 전력량 지운다 	
@@ -3534,8 +3712,9 @@ void energy_scan(int id, METER_EH_REGS *ereg, ENERGY_NVRAM *pEgyNvr) {
 	if(ewF != 0) {	// 달이 변경되거나 0.1kw 이상 변경되면 저장한다 		
 		//printf("+++ storeEnergy, %x...\n", ewF);
 		if(saveLockEnergy ==0) {
-			copyEreg32(0);
-			copyEreg32(1);
+			for (i=0; i<ENERGY_CH_COUNT; i++) {
+				copyEreg32(i);
+			}
 			storeEnergy();	
 		}
 	}
@@ -3562,10 +3741,21 @@ void updateEventCount(int mask, uint32_t *ec) {
 
 // MeterScan Task에서 Volt. event를 전송하기 위해 사용한다 
 // 이벤트 보유 기간: 월 -> 년으로 변경
-static ITIC_LOG  _iticlog;
+static ITIC_LOG  _iticlog[METER_CH_COUNT];
+
+static void getEventFifoFileName(int id, char *path) {
+	if (id > 0) {
+		sprintf(path, "%s\\elog%s_fifo_m%d.d", EVENT_DIR, ALOG_VER, id);
+	}
+	else {
+		strcpy(path, EVENT_FIFO_FILE);
+	}
+}
 //
 int pushEvent(int id, PQ_EVENT_INFO *pInf) {
-	ITIC_LOG *pilog=&_iticlog;
+	ITIC_LOG *pilog=&_iticlog[id];
+	EVENT_Q *pevQ = &meter[id].eventQ;
+	EVENT_FIFO *pEvtFifo = &meter[id].eventFifo;
 	FS_MSG fsmsg;
 	int i, os, year, woY;
 	
@@ -3639,12 +3829,12 @@ int pushEvent(int id, PQ_EVENT_INFO *pInf) {
 	//
 	// pilog에서 norm을 제외하고 복사한다
 	// 2025-3-18, eventQ에 append 하기전에 범위 확인한다
-	if (eventQ.count < N_EVENT_Q) {
-		memcpy(&eventQ.eq[eventQ.count], pilog, sizeof(EVENT_LOG));
-		eventQ.count++;
+	if (pevQ->count < N_EVENT_Q) {
+		memcpy(&pevQ->eq[pevQ->count], pilog, sizeof(EVENT_LOG));
+		pevQ->count++;
 	}
 	else {
-		printf("@@@ eventQ Full ...\n");
+		printf("@@@ eventQ[%d] Full ...\n", id);
 	}
 	
 
@@ -3657,29 +3847,29 @@ int pushEvent(int id, PQ_EVENT_INFO *pInf) {
 	putFsQ(&fsmsg);	
 	
 	// event FIFO File에 추가
-	sprintf(fsmsg.fname, "%s", EVENT_FIFO_FILE);
+	getEventFifoFileName(id, fsmsg.fname);
 	strcpy(fsmsg.mode, "ff");
-	fsmsg.argv = N_EVENT_FIFO;
+	fsmsg.argv = EVENT_LOG_CAP;
 	fsmsg.pbuf = (uint8_t *)pilog;	// 전역변수 만 쓸 수 있다
 	fsmsg.size = sizeof(*pilog);
 	putFsQ(&fsmsg);	
 	
 	// Event FiFo에 추가한다
 	memcpy(&pEvtFifo->elog[pEvtFifo->fr], pilog, sizeof(*pilog));	
-	if (pEvtFifo->count < N_EVENT_FIFO) {
+	if (pEvtFifo->count < EVENT_LOG_CAP) {
 		pEvtFifo->count++;
-		if (++pEvtFifo->fr >= N_EVENT_FIFO) pEvtFifo->fr = 0;
+		if (++pEvtFifo->fr >= EVENT_LOG_CAP) pEvtFifo->fr = 0;
 	}
 	else {
 		// Full 발생하면, fr, re 모두 이동한다
-		if (++pEvtFifo->re >= N_EVENT_FIFO) pEvtFifo->re = 0;
-		if (++pEvtFifo->fr >= N_EVENT_FIFO) pEvtFifo->fr = 0;
+		if (++pEvtFifo->re >= EVENT_LOG_CAP) pEvtFifo->re = 0;
+		if (++pEvtFifo->fr >= EVENT_LOG_CAP) pEvtFifo->fr = 0;
 	}
 	
 	// 현재 이벤트 페이지 갱신한다
-	fetchEvent(0);
-	fetchItic(0);
-	fetchItic2(0);
+	fetchEvent(id, 0);
+	fetchItic(id, 0);
+	fetchItic2(id, 0);
 	
 	printf("pushEvent(%d,%d.%d), itic count=%d\n", pilog->type, pilog->startTs, pilog->msec, pEvtFifo->count);
 #if 1
@@ -3713,15 +3903,17 @@ int pushEvent(int id, PQ_EVENT_INFO *pInf) {
 // 이벤트 FiFo를 지운다
 void clearEventList(int id) {
 	FS_MSG fsmsg;
+	EVENT_LIST *pelist = &meter[id].elist;
+	EVENT_FIFO *pEvtFifo = &meter[id].eventFifo;
 	
-	memset(ppqEvtCnt, 0, sizeof(*ppqEvtCnt));
+	memset(&meter[id].pqEvtCnt, 0, sizeof(meter[id].pqEvtCnt));
 	memset(pelist, 0, sizeof(*pelist));
 	memset(pEvtFifo, 0, sizeof(*pEvtFifo));
 	//sprintf(fsmsg.fname, "%s%04d%02d.d", EVENT_LIST_FILE, meter[id].cntl.tod.tm_year, meter[id].cntl.tod.tm_mon);
 	//sprintf(fsmsg.fname, "%s%04d.d", EVENT_LIST_FILE, meter[id].cntl.tod.tm_year);
 	
 	
-	strcpy(fsmsg.fname, EVENT_FIFO_FILE);
+	getEventFifoFileName(id, fsmsg.fname);
 	strcpy(fsmsg.mode, "rm");
 	fsmsg.pbuf = (uint8_t *)NULL;
 	fsmsg.size = 0;
@@ -3758,7 +3950,7 @@ void Energy_Task(void *arg)
 #else
 		os_evt_wait_and(0x1, 0xffff);
 #endif		
-		for (id=0; id<2; id++) {
+		for (id=0; id<ACTIVE_METER_CH_COUNT; id++) {
 			meter[0].cntl.wdtTbl[Tid_Energy].count++;
 		
 			//printf("tick : %d\n", sysTick32);
@@ -3919,12 +4111,16 @@ void PostScan_Task(void *arg)
 	_enableTaskMonitor(Tid_PostScan, 50);
 	
 	while(pcntl->runFlag) {
+		int alarmDue = 0;
+
 #ifdef __FREERTOS		
 		xTaskNotifyWait(0, 0xFFFFFFFF, &notificationValue, pdMS_TO_TICKS(100));
 #else
 		os_evt_wait_or(0xf, 100);
 #endif		
-		for (id=0; id<2; id++) {
+		for (id=0; id<ACTIVE_METER_CH_COUNT; id++) {
+			MAXMIN *pmmId = &meter[id].maxmin;
+
 			meter[0].cntl.wdtTbl[Tid_PostScan].count++;
 			
 			// 1초 단위로 호출 (5번의 10/12 cycle 마다 호출된다)
@@ -3962,10 +4158,8 @@ void PostScan_Task(void *arg)
 					deleteAlarmLog();				
 //					Board_LED_Off(1);				// alarm off
 				}
-				else if (alarmProc() > 0) {
-					palm->updateTs = sysTick32;
-					storeAlarmStatus();
-//					Board_LED_On(1);				// alarm on
+				else {
+					alarmDue = 1;
 				}
 				
 				Board_LED_Set(1, palm->almCount);
@@ -3981,18 +4175,22 @@ void PostScan_Task(void *arg)
 			if (meter[id].cntl.rstMaxMin == 0x1234) {
 				meter[id].cntl.rstMaxMin = 0;
 				
-				// 현재 영역을 last 영역으로 복사
-				memset(pmm, 0, sizeof(MAXMIN));
-				pmm->rstTime = sysTick1s;
+				/* pmm은 meter[0] 전용 전역이었음 — CH3에서 M1/M2 rstMaxMin 시 M0 메모리 오염·HardFault 유발 */
+				memset(pmmId, 0, sizeof(MAXMIN));
+				pmmId->rstTime = sysTick1s;
 				storeMaxMin();
 			}
 			
-			if (pmm->fr != pmm->re) {
-				pmm->ts = sysTick1s;
+			if (pmmId->fr != pmmId->re) {
+				pmmId->ts = sysTick1s;
 				// save MaxMin Data
-				pmm->re = pmm->fr;
+				pmmId->re = pmmId->fr;
 				storeMaxMin();
 			}
+		}
+		if (alarmDue && alarmProc() > 0) {
+			palm->updateTs = sysTick32;
+			storeAlarmStatus();
 		}
 #ifdef __FREERTOS		
 		if (notificationValue & 0x8) 
@@ -4014,46 +4212,10 @@ void PostScan_Task(void *arg)
 }
 
 
-#if 	0
-void loadITICevent() {		
-	char name[64];
-	FILE *fp;
-	int nr;
-	
-#if 1
-	// EVENT_FIFO_FILE을 사용한다 
-	memset(pEvtFifo, 0, sizeof(*pEvtFifo));
-#else	
-	sprintf(name, "%s%04d.d", EVENT_LIST_FILE, meter[id].cntl.tod.tm_year);
-	fp = fopen(name, "rb");
-	if (fp == NULL) {
-		printf("@ can not open %s\n", name);
-		pitic->count = 0;
-		return;
-	}
-	
-	nr = fread(pitic->elog, 1, sizeof(EVENT_FIFO), fp);
-	pEvtFifo->count = nr / sizeof(EVENT_LOG);
-#endif	
-	printf("--> loadITICevent, size=%d, count=%d\n", nr, pEvtFifo->count);
-}
-
-void clearEventFifoFile()
-{
-	char name[64];
-	FILE *fp;
-	int nr;
-	
-#if 1 
-	memset(pEvtFifo, 0, sizeof(*pEvtFifo));
-	printf("--> clearEventFifo ...\n");
-#else	
-	sprintf(name, "%s%04d.d", EVENT_LIST_FIFO, meter[id].cntl.tod.tm_year);
-	fdelete(name);
+#if 0		// 채널 분리 이전 ITIC FIFO 보조 함수 보관 블록(현재 경로에서 호출되지 않음)
+/* Legacy ITIC FIFO load/clear helpers (pre per-channel event FIFO design).
+ * Kept as reference only; runtime path now uses meter[id].eventFifo directly. */
 #endif
-	printf("--> clearIticFile, size=%d, count=%d\n", nr, pEvtFifo->count);
-}
-#endif	// 0
 
 void Meter0_Task(void *param) 
 {
@@ -4071,22 +4233,30 @@ void Meter0_Task(void *param)
 	printf("rpt:  %d, %d\n", ((uint32_t)&_pmeter->rpt - (uint32_t)_pmeter)/2, sizeof(_pmeter->rpt)/2);
 	printf("hd:   %d, %d\n", ((uint32_t)&_pmeter->hd - (uint32_t)_pmeter)/2, sizeof(_pmeter->hd)/2);
 	printf("ithd: %d, %d\n", ((uint32_t)&_pmeter->interhd - (uint32_t)_pmeter)/2, sizeof(_pmeter->interhd)/2);
-	printf("wv:   %d, %d\n", ((uint32_t)&_pmeter->wv - (uint32_t)_pmeter)/2, sizeof(_pmeter->wv)/2);
 	printf("mm:   %d, %d\n", ((uint32_t)&_pmeter->maxmin - (uint32_t)_pmeter)/2, sizeof(_pmeter->maxmin)/2);
 	printf("alarm:%d, %d\n", ((uint32_t)&_pmeter->alarm - (uint32_t)_pmeter)/2, sizeof(_pmeter->alarm)/2);
 	printf("alist:%d, %d\n", ((uint32_t)&_pmeter->alist - (uint32_t)_pmeter)/2, sizeof(_pmeter->alist)/2);
 	printf("elist:%d, %d\n", ((uint32_t)&_pmeter->elist - (uint32_t)_pmeter)/2, sizeof(_pmeter->elist)/2);
 	printf("pqec: %d, %d\n", ((uint32_t)&_pmeter->pqEvtCnt - (uint32_t)_pmeter)/2, sizeof(_pmeter->pqEvtCnt)/2);
+	printf("wv:   %d, %d\n", ((uint32_t)&_pmeter->wv - (uint32_t)_pmeter)/2, sizeof(_pmeter->wv)/2);
 	printf("log:  %d, %d\n", ((uint32_t)&_pmeter->log - (uint32_t)_pmeter)/2, sizeof(_pmeter->log)/2);
 	printf("elog: %d, %d\n", ((uint32_t)&_pmeter->elog - (uint32_t)_pmeter)/2, sizeof(_pmeter->elog)/2);
-	printf("dlog: %d, %d\n", ((uint32_t)&_pmeter->dlog - (uint32_t)_pmeter)/2, sizeof(_pmeter->dlog)/2);	//
-	printf("lmm:  %d, %d\n", ((uint32_t)&_pmeter->lastmaxmin - (uint32_t)_pmeter)/2, sizeof(_pmeter->lastmaxmin)/2);	//
-	printf("gwst :%d, %d\n", ((uint32_t)&_pmeter->gwst - (uint32_t)_pmeter)/2, sizeof(_pmeter->egy)/2);
-	
+	printf("dlog: %d, %d\n", ((uint32_t)&_pmeter->dlog - (uint32_t)_pmeter)/2, sizeof(_pmeter->dlog)/2);
+	printf("lmm:  %d, %d\n", ((uint32_t)&_pmeter->lastmaxmin - (uint32_t)_pmeter)/2, sizeof(_pmeter->lastmaxmin)/2);
+	printf("itic: %d, %d\n", ((uint32_t)&_pmeter->itic - (uint32_t)_pmeter)/2, sizeof(_pmeter->itic)/2);
+	printf("itic2:%d, %d\n", ((uint32_t)&_pmeter->itic2 - (uint32_t)_pmeter)/2, sizeof(_pmeter->itic2)/2);
 	printf("iom:  %d, %d\n", ((uint32_t)&_pmeter->iom - (uint32_t)_pmeter)/2, sizeof(_pmeter->iom)/2);
-	printf("info  %d, %d\n", ((uint32_t)&_pmeter->info - (uint32_t)_pmeter)/2, sizeof(_pmeter->info)/2);
+	printf("info: %d, %d\n", ((uint32_t)&_pmeter->info - (uint32_t)_pmeter)/2, sizeof(_pmeter->info)/2);
 	printf("set:  %d, %d\n", ((uint32_t)&_pmeter->setting - (uint32_t)_pmeter)/2, sizeof(_pmeter->setting)/2);
 	printf("cmds :%d, %d\n", ((uint32_t)&_pmeter->cmds - (uint32_t)_pmeter)/2, sizeof(_pmeter->cmds)/2);
+	printf("evtfifo:%d, %d\n", ((uint32_t)&_pmeter->eventFifo - (uint32_t)_pmeter)/2, sizeof(_pmeter->eventFifo)/2);
+	printf("almfifo:%d, %d\n", ((uint32_t)&_pmeter->alarmFifo - (uint32_t)_pmeter)/2, sizeof(_pmeter->alarmFifo)/2);
+	printf("cntl: %d, %d\n", ((uint32_t)&_pmeter->cntl - (uint32_t)_pmeter)/2, sizeof(_pmeter->cntl)/2);
+	printf("cal:  %d, %d\n", ((uint32_t)&_pmeter->cal - (uint32_t)_pmeter)/2, sizeof(_pmeter->cal)/2);
+	printf("qdLog:%d, %d\n", ((uint32_t)&_pmeter->qdLog - (uint32_t)_pmeter)/2, sizeof(_pmeter->qdLog)/2);
+	printf("evtQ: %d, %d\n", ((uint32_t)&_pmeter->eventQ - (uint32_t)_pmeter)/2, sizeof(_pmeter->eventQ)/2);
+	printf("db:   %d, %d\n", ((uint32_t)&_pmeter->db - (uint32_t)_pmeter)/2, sizeof(_pmeter->db)/2);
+	printf("almCnt:%d, %d\n", ((uint32_t)&_pmeter->almCnt - (uint32_t)_pmeter)/2, sizeof(_pmeter->almCnt)/2);
 
 	printf("comm:     %d, %d\n", ((uint32_t)&_pmeter->setting.comm - (uint32_t)&_pmeter->setting)/2, sizeof(_pmeter->setting.comm)/2);
 	printf("PT:       %d, %d\n", ((uint32_t)&_pmeter->setting.pt - (uint32_t)&_pmeter->setting)/2, sizeof(_pmeter->setting.pt)/2);
@@ -4111,6 +4281,15 @@ void Meter0_Task(void *param)
 	wbFFT8k[id].fr = wbFFT8k[id].re = 0;
 
 	initADE9000(id);
+
+	/* SPI 실패 시 5초 간격으로 재시도 */
+	while (!getAdeStatus(id)->online) {
+		printf("[M%d] ADE9000 offline - retry %d in 5s (fail=%d, chipId=0x%08x)\n",
+		       id, getAdeStatus(id)->retryCount,
+		       getAdeStatus(id)->failCount, getAdeStatus(id)->chipId);
+		osDelayTask(5000);
+		initADE9000(id);
+	}
 	
 	initTransientTrigger(id);
 
@@ -4118,8 +4297,14 @@ void Meter0_Task(void *param)
 	ExtINTR_Enable(0);	// PINT0
 	//os_itv_set(5);
 	
-	// 처음 시작 하거나 재시작할때 대책 ????
-	initPQHeader(id);
+	/* PQ/FlashFS: M0에서만 직렬 init (M1/M2 동시 FS 접근 방지) */
+	initPQHeader(0);
+#ifndef CH1
+	initPQHeader(1);
+#ifdef CH3
+	initPQHeader(2);
+#endif
+#endif
 	
 	_enableTaskMonitor(Tid_Meter, 50);
 	
@@ -4141,18 +4326,18 @@ void Meter1_Task(void *param) {
 	wbFFT8k[id].fr = wbFFT8k[id].re = 0;
 
 	initADE9000(id);
-//	
-//	memset(&wQ, 0, sizeof(wQ));
-//	wQ.count = PG32K_CNT;
-//	
-//	//wb32k.fr = wb32k.re = 0;
-//	
 
-//	//init_fftTable();
-//	
+	/* SPI 실패 시 5초 간격으로 재시도 */
+	while (!getAdeStatus(id)->online) {
+		printf("[M%d] ADE9000 offline - retry %d in 5s (fail=%d, chipId=0x%08x)\n",
+		       id, getAdeStatus(id)->retryCount,
+		       getAdeStatus(id)->failCount, getAdeStatus(id)->chipId);
+		osDelayTask(5000);
+		initADE9000(id);
+	}
+
 	ExtINTR_Init(id, 2, 0);	// PINT1, EINT2
 	ExtINTR_Enable(id);	// PINT1
-//	//os_itv_set(5);
 	_enableTaskMonitor(Tid_Meter2, 50);
 //	
 	while (1) {
@@ -4161,6 +4346,39 @@ void Meter1_Task(void *param) {
 //		//os_dly_wait(1000);
 	}
 }
+
+#ifdef CH3
+void Meter2_Task(void *param) {
+	int	id=2;
+//	
+	printf("[task Meter#2 started ...\n");
+//	
+	memset(&wQ[id], 0, sizeof(wQ[id]));
+		
+	wbFFT8k[id].fr = wbFFT8k[id].re = 0;
+
+	initADE9000(id);
+
+	/* SPI 실패 시 5초 간격으로 재시도 */
+	while (!getAdeStatus(id)->online) {
+		printf("[M%d] ADE9000 offline - retry %d in 5s (fail=%d, chipId=0x%08x)\n",
+		       id, getAdeStatus(id)->retryCount,
+		       getAdeStatus(id)->failCount, getAdeStatus(id)->chipId);
+		osDelayTask(5000);
+		initADE9000(id);
+	}
+
+	/* CH3: M2 IRQ0 -> EINT3, PINT2 채널 사용 */
+	ExtINTR_Init(id, 3, 0);	// PINT2, EINT3
+	ExtINTR_Enable(id);		// PINT2
+	_enableTaskMonitor(Tid_Meter3, 50);
+//	
+	while (1) {
+		meter[0].cntl.wdtTbl[Tid_Meter3].count++;
+		meter_scan_2(id);
+	}
+}
+#endif
 
 
 int checkPassword(uint8_t *pwd) {

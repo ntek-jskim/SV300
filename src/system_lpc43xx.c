@@ -919,8 +919,10 @@ void SystemInit (void) {
   /* Disable SysTick timer                                                    */
   SysTick->CTRL &= ~(SysTick_CTRL_TICKINT_Msk | SysTick_CTRL_ENABLE_Msk);
 
-  /* Set vector table pointer */
-  //SCB->VTOR = ((uint32_t)(&__Vectors)) & 0xFFF00000UL;
+  /* Set vector table pointer - 부트 방식(직접/부트로더/FW업데이트)에 따라
+   * VTOR가 부트 ROM 주소로 남는 경우가 있어, RTX SVC 핸들러 탐색 실패로
+   * osStartKernel 진입 직후 HARDFAULT가 발생하므로 명시적으로 설정한다. */
+  SCB->VTOR = (uint32_t)(&__Vectors);
 
   /* Configure PLL0 and PLL1, connect CPU clock to selected clock source */
   SetClock();

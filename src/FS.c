@@ -13,6 +13,10 @@
 extern int  debug_getchar();
 extern int readchar();
 extern void SystemCoreClockUpdate();
+extern void selectMeter(int id);
+extern void deSelectMeter(int id);
+extern uint32_t RTC_GetTimeUTC(void);
+#include "ade9000.h"	/* ADE_STATUS, getAdeStatus() */
 
 /* Local variables */
 static char in_line[160];
@@ -549,37 +553,59 @@ static void cmd_help (char *par) {
 
 static void cmd_datetime(char *par) {
 	struct tm ltm;
-  char *dt[6], *next;
+	char *dt[6], *next;
 	int i;
 	time_t utc;
-	
-	for (i=0; i<6; i++) {
-		dt[i] = get_entry (par, &next);
-		if (dt[i] == NULL) {
-			printf ("\nmissing argument ...\n");
+	uint32_t rtcUtc;
+
+	dt[0] = get_entry(par, &next);
+	if (par == NULL || *par == 0 || dt[0] == NULL || dt[0][0] == 0) {
+		uLocalTime(&sysTick1s, &ltm);
+		printf("Current (app): %04d-%02d-%02d %02d:%02d:%02d  unix=%lu\n",
+		       ltm.tm_year + 1900, ltm.tm_mon + 1, ltm.tm_mday,
+		       ltm.tm_hour, ltm.tm_min, ltm.tm_sec,
+		       (unsigned long)sysTick1s);
+		rtcUtc = RTC_GetTimeUTC();
+		uLocalTime(&rtcUtc, &ltm);
+		printf("Current (RTC): %04d-%02d-%02d %02d:%02d:%02d  unix=%lu\n",
+		       ltm.tm_year + 1900, ltm.tm_mon + 1, ltm.tm_mday,
+		       ltm.tm_hour, ltm.tm_min, ltm.tm_sec,
+		       (unsigned long)rtcUtc);
+		return;
+	}
+
+	par = next;
+	for (i = 1; i < 6; i++) {
+		if (par == NULL) {
+			printf("\nDATETIME: need 6 integers (year month day hour min sec), or no args to show time.\n");
+			return;
+		}
+		dt[i] = get_entry(par, &next);
+		if (dt[i] == NULL || dt[i][0] == 0) {
+			printf("\nDATETIME: need 6 integers (year month day hour min sec), or no args to show time.\n");
 			return;
 		}
 		par = next;
-  }
+	}
 
-	memset(&ltm, 0, sizeof(ltm));	
+	memset(&ltm, 0, sizeof(ltm));
 	ltm.tm_year = atoi(dt[0]) - 1900;
 	ltm.tm_mon  = atoi(dt[1]) - 1;
 	ltm.tm_mday = atoi(dt[2]);
 	ltm.tm_hour = atoi(dt[3]);
 	ltm.tm_min  = atoi(dt[4]);
-	ltm.tm_sec  = atoi(dt[5]);	
-	
+	ltm.tm_sec  = atoi(dt[5]);
+
 	if (ltm.tm_year < 0 || ltm.tm_mon < 0) {
 		printf("Invalid Year(%d) or Month(%d) ...\n", ltm.tm_year, ltm.tm_mon);
 		return;
 	}
-	
+
 	utc = mktime(&ltm);
-	
-	printf("[%d-%d-%d, %d:%d:%d] => {%d}\n", ltm.tm_year+1900, ltm.tm_mon+1, ltm.tm_mday, ltm.tm_hour, ltm.tm_min, ltm.tm_sec, utc);
-	tickSet(utc, 0, 1);
-	RTC_SetTimeUTC(utc);
+
+	printf("[%d-%d-%d, %d:%d:%d] => {%d}\n", ltm.tm_year+1900, ltm.tm_mon+1, ltm.tm_mday, ltm.tm_hour, ltm.tm_min, ltm.tm_sec, (int)utc);
+	tickSet((uint32_t)utc, 0, 1);
+	RTC_SetTimeUTC((uint32_t)utc);
 }
 // macset : 십진수로 입력한다 
 // 2025-3-10, mac주소는 ChipId로 사용하고 실제입력한 값은 일련번호로 사용한다
@@ -727,6 +753,75 @@ static void cmd_initdb(char *par) {
 }
 
 
+/* ADCH <ch> <1=CS-LOW/0=CS-HIGH>
+ * ADE9000 Chip Select 핀을 수동으로 직접 제어한다.
+ * ch: 0=M0(SSP0), 1=M1(SSP1), 2=M2(SSP1)
+ * 1=SELECT(LOW), 0=DESELECT(HIGH) */
+static void cmd_adch(char *par)
+{
+	char *p, *next;
+	int ch, state;
+
+	p = get_entry(par, &next);
+	if (p == NULL) {
+		printf("Usage: ADCH <ch> <1=SELECT/0=DESELECT>\n");
+		printf("  ch   : 0=M0(SSP0)  1=M1(SSP1)  2=M2(SSP1)\n");
+		printf("  state: 1=CS LOW(선택)  0=CS HIGH(해제)\n");
+		return;
+	}
+	ch = atoi(p);
+
+	p = get_entry(next, &next);
+	if (p == NULL) {
+		printf("Usage: ADCH <ch> <1=SELECT/0=DESELECT>\n");
+		return;
+	}
+	state = atoi(p);
+
+	if (ch < 0 || ch >= METER_CH_COUNT) {
+		printf("[ADCH] Error: ch=%d, valid range 0~%d\n", ch, METER_CH_COUNT - 1);
+		return;
+	}
+
+	if (state) {
+		selectMeter(ch);
+		printf("[ADCH] M%d CS --> LOW  (Selected)\n", ch);
+	} else {
+		deSelectMeter(ch);
+		printf("[ADCH] M%d CS --> HIGH (Deselected)\n", ch);
+	}
+}
+
+/* ADST [ch]
+ * ADE9000 채널별 SPI 통신 상태(chipId/version/fail/retry)를 출력한다.
+ * ch 생략 시 전체 채널 출력. */
+static void cmd_adst(char *par)
+{
+	char *p, *next;
+	int i, start = 0, end = METER_CH_COUNT - 1;
+	const ADE_STATUS *st;
+
+	p = get_entry(par, &next);
+	if (p != NULL) {
+		int ch = atoi(p);
+		if (ch < 0 || ch >= METER_CH_COUNT) {
+			printf("[ADST] Error: ch=%d, valid range 0~%d\n", ch, METER_CH_COUNT - 1);
+			return;
+		}
+		start = end = ch;
+	}
+
+	printf("=== ADE9000 Status ===\n");
+	for (i = start; i <= end; i++) {
+		st = getAdeStatus(i);
+		printf("[M%d] %s | chipId=0x%08x | version=0x%04x | fail=%d | retry=%d\n",
+		       i,
+		       st->online ? "ONLINE " : "OFFLINE",
+		       st->chipId, st->version,
+		       st->failCount, st->retryCount);
+	}
+}
+
 static int tdebug;
 uint8_t mdebug;
 
@@ -811,6 +906,24 @@ static void cmd_ethrst(char *par) {
 //
 
 void init_card (void) {
+#ifdef CH3
+  /* RL-FlashFS: SF0_DEF → 기본 드라이브 S: (SPIFI NOR, sf0_drv) */
+  {
+    U32 retv;
+
+    retv = finit (NULL);
+    if (retv != 0 && retv != 1) {
+      /* 미포맷 등 — SD 경로와 동일하게 한 번 포맷 시도 */
+      printf ("\nSPI Flash: finit=%u, try FORMAT\n", (unsigned)retv);
+      strcpy (&in_line[0], "KEIL\r\n");
+      cmd_format (&in_line[0]);
+      retv = finit (NULL);
+    }
+    if (retv != 0) {
+      printf ("\nSPI Flash FS finit failed (%u)\n", (unsigned)retv);
+    }
+  }
+#else
   U32 retv;
 
   while ((retv = finit (NULL)) != 0) {        /* Wait until the Card is ready */
@@ -824,6 +937,7 @@ void init_card (void) {
       cmd_format (&in_line[0]);
     }
   }
+#endif
 	
 #ifdef USE_FREERTOS	// FreeRTOS에서 finit() 호출 후 SystemCoreClock 값이 0 으로 변경된다.
 	SystemCoreClockUpdate();
@@ -864,11 +978,11 @@ static const SCMD cmd[] = {
 	"SAVEENG", cmd_saveenergy,
 	"CLROS", cmd_clrdcos,
 	"DCOS",  cmd_dcos,
-	"DATETIME", cmd_datetime,
+	"TIME", cmd_datetime,
 	"INITQUAL", cmd_initQual,
 	"MACSET", cmd_macset,
 	"MODEL", cmd_hwModel,
-	"HWVERSION", cmd_hwVersion,
+	"HWVER", cmd_hwVersion,
 //	"GWENABLE", cmd_gwEnable,
 	"DEVINFO", cmd_devInfo,
 	"INITDB", cmd_initdb,
@@ -881,6 +995,8 @@ static const SCMD cmd[] = {
 	"FDON", tdebug_on,
 	"FDOFF", tdebug_off,
 	"DEBUG", cmd_debug,
+	"ADCH", cmd_adch,
+	"ADST", cmd_adst,
 
 //	"FLOWSET", cmd_flowset,
   // "VTHDSET", cmd_v_thdoffset, 

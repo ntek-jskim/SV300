@@ -65,6 +65,14 @@ void Board_SystemInit(void);
  */
 void Board_SetupMuxing(void);
 
+#ifdef CH3
+/**
+ * @brief	SPIFI 외부 SPI Flash 핀 초기화 (LPC4357 CH3 회로: P3_3..P3_8, FUNC3)
+ * @note	빌드 시 -DCH3 로 활성화. 기존 보드와 호환을 위해 CH3 미정의 시 컴파일/실행되지 않음.
+ */
+void Board_SPIFI_FlashPinInit(void);
+#endif
+
 /**
  * @brief	Setup system clocking 
  * @return	None

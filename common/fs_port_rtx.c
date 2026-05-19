@@ -53,8 +53,12 @@ __weak_func error_t fsInit(void)
    error_t error;
    int status;
 
-   //Initialize file system
+#ifndef CH3
    status = finit("M0:");
+#else
+   /* CH3: SF0_DEF=1 → 기본 드라이브 S: (SPIFI NOR) */
+   status = finit(NULL);
+#endif
 
    //On success, fsOK is returned
    if(status == 0)

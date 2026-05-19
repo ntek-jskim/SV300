@@ -9,6 +9,10 @@
  *      Copyright (c) 2004-2013 KEIL - An ARM Company. All rights reserved.
  *---------------------------------------------------------------------------*/
 
+/* CH3 빌드 시 아래 SF0/MC0 매크로가 RL-FlashFS에 적용됩니다.
+ * Keil 설치 폴더의 File_Config.h 에 동일 이름 매크로가 있으면 본 파일과 값이 충돌하지 않게
+ * 맞추거나, 헤더에는 타입/함수 선언만 두는 구성을 권장합니다. */
+
 #include <File_Config.h>
 
 //-------- <<< Use Configuration Wizard in Context Menu >>> -----------------
@@ -76,7 +80,12 @@
 // <e>SPI Flash Drive
 // ==================
 // <i>Enable SPI Flash Drive [S:]
+#ifdef CH3
+/* CH3: SPIFI 외부 NOR 2MB → RL-FlashFS [S:] 기본 드라이브 */
+#define SF0_EN      1
+#else
 #define SF0_EN      0
+#endif
 
 //   <o>Device Size <0x10000-0xFFFFF000:0x8000>
 //   <i>Define the size of SPI Flash device in bytes
@@ -95,7 +104,11 @@
 
 //   <q>Default Drive [S:]
 //   <i>Used when Drive letter not specified
+#ifdef CH3
+#define SF0_DEF     1
+#else
 #define SF0_DEF     0
+#endif
 
 // </e>
 // <e>RAM Drive
@@ -132,7 +145,11 @@
 // <e>Memory Card Drive 0
 // ======================
 // <i>Enable Memory Card Drive  [M0:]
+#ifdef CH3
+#define MC0_EN      0
+#else
 #define MC0_EN      1
+#endif
 
 //   <o>Bus Mode <0=>SD-Native <1=>SPI
 //   <i>Define Memory Card bus interface mode.
@@ -167,7 +184,11 @@
 
 //   <q>Default Drive [M0:]
 //   <i>Used when Drive letter not specified
+#ifdef CH3
+#define MC0_DEF     0
+#else
 #define MC0_DEF     1
+#endif
 
 // </e>
 // <e>Memory Card Drive 1

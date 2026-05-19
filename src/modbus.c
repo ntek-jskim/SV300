@@ -43,6 +43,11 @@ void copySummary(void);
 //int writeMem(uint8_t *prx, uint8_t *ptx, uint16_t start, uint16_t count);
 //int	readMem(uint8_t *ptx, uint16_t start, uint16_t count);
 
+#if METER_CH_COUNT > 2
+int	readMem4_m3(uint8_t *ptx, uint16_t start, uint16_t count);
+int	readMem3_m3(uint8_t *ptx, uint16_t start, uint16_t count);
+#endif
+
 #define	APP_NAME	"gems7000_app.bin"
 #define	APP_OLD		"gems7000_old.bin"
 #define	APP_NEW		"gems7000_new.bin"
@@ -50,18 +55,28 @@ void copySummary(void);
 
 void init_smb(void)
 {
-	int id;
-	
-	id=0;
-	// gems7000 : 0 ~ 4400
-	// gesm3500 #0: 10000 ~ 20400 
-	// gems3500 #1: 20400 ~ 30800
-	
-	// 2017-7-5: gems3500 #2 접근불가 문제 발생, MGEM_DATA -> gems3500 으로 변경	
-	smbSize[id][3] = 65000;
-	smbSize[id][4] = 65000;
-	smbBase[id][3] = pmeter;
-	smbBase[id][4] = pmeter;
+	int id, fc;
+
+	/* clear table first */
+	memset(smbBase, 0, sizeof(smbBase));
+	memset(smbSize, 0, sizeof(smbSize));
+
+	/*
+	 * Channel map
+	 *  - id 0 : meter[0] (0~9999)
+	 *  - id 1 : meter[1] (10000~19999)
+	 *  - id 2 : meter[2] (20000~29999, CH3)
+	 *
+	 * Current frame checker still uses addr=0 for legacy path,
+	 * but keep per-channel table populated for readability and
+	 * future addr-based dispatch.
+	 */
+	for (id = 0; id < METER_CH_COUNT; id++) {
+		for (fc = 3; fc <= 4; fc++) {
+			smbSize[id][fc] = 65000;
+			smbBase[id][fc] = (void *)&meter[id].meter;
+		}
+	}
 	
 //	// gems3500 Full Map
 //	id=1;
@@ -153,8 +168,12 @@ void init_smb(void)
 void copySummary(void)
 {
 	int 	i,j,k,fr=0;
+	int chCount = (int)(sizeof(psmap->ch) / sizeof(psmap->ch[0]));
+	if (chCount > METER_CH_COUNT) {
+		chCount = METER_CH_COUNT;
+	}
 
-	for(i=0; i<2; i++) {
+	for(i=0; i<chCount; i++) {
 		psmap->ch[i].eh = meter[i].egy.Ereg32[0].eh[0][0];			// import kwh
 		psmap->ch[i].P = meter[i].meter.P[3];
 
@@ -221,16 +240,44 @@ int modbusSlvProcFrame(uint8_t *prx, uint16_t rxsize, uint8_t *ptx, int longFram
 				size = readMem(&ptx[inx], start, count);		
 			}
 		}
-		else {
+#if METER_CH_COUNT > 2
+		else if (start < 20000) {
 			if (longFrame) 
 				size = readMem4(&ptx[inx], start-10000, count);
 			else {
-				if (start == (MBAD_G7_SETTING+10000)) {
+				if (start == (MBAD_G7_SETTING+ADD_ADE9000)) {
 					printf("read setting #2, s=%d, c=%d\n", start, count);
 				}
 				size = readMem3(&ptx[inx], start-10000, count);		
 			}
 		}
+		else if (start < 30000) {
+			if (longFrame) 
+				size = readMem4_m3(&ptx[inx], start-ADD_ADE9000_M3, count);
+			else {
+				if (start == (MBAD_G7_SETTING+ADD_ADE9000_M3)) {
+					printf("read setting #3, s=%d, c=%d\n", start, count);
+				}
+				size = readMem3_m3(&ptx[inx], start-ADD_ADE9000_M3, count);		
+			}
+		}
+		else {
+			return makeExceptFrame(prx[0], fc, 2, ptx);
+		}
+#else
+		else {
+			if (start >= 20000)
+				return makeExceptFrame(prx[0], fc, 2, ptx);
+			if (longFrame) 
+				size = readMem4(&ptx[inx], start-10000, count);
+			else {
+				if (start == (MBAD_G7_SETTING+ADD_ADE9000)) {
+					printf("read setting #2, s=%d, c=%d\n", start, count);
+				}
+				size = readMem3(&ptx[inx], start-10000, count);		
+			}
+		}
+#endif
 		break; 
 	
 	// 제어 Command로 사용
@@ -241,9 +288,18 @@ int modbusSlvProcFrame(uint8_t *prx, uint16_t rxsize, uint8_t *ptx, int longFram
 			if (start < 10000) {
 				id = 0;
 			}
-			else {
+			else if (start < 20000) {
 				id = 1;
-				start -= 10000;
+				start -= ADD_ADE9000;
+			}
+#if METER_CH_COUNT > 2
+			else if (start < 30000) {
+				id = 2;
+				start -= ADD_ADE9000_M3;
+			}
+#endif
+			else {
+				return makeExceptFrame(prx[0], fc, 2, ptx);
 			}
 			size = writeSingleMem(id, start, count);			
 			ptx[inx++] = start >> 8;
@@ -262,6 +318,22 @@ int modbusSlvProcFrame(uint8_t *prx, uint16_t rxsize, uint8_t *ptx, int longFram
 			ptx[inx++] = count >> 8;
 			ptx[inx++] = count;
 		}
+		else if (start >= (MBAD_G7_SETTING + ADD_ADE9000) && (start+count) <= (MBAD_G7_CMD + ADD_ADE9000)) {
+			size = writeMultiMem(start, count, &prx[7]);				
+			ptx[inx++] = start >> 8;
+			ptx[inx++] = start;
+			ptx[inx++] = count >> 8;
+			ptx[inx++] = count;
+		}
+#if METER_CH_COUNT > 2
+		else if (start >= (MBAD_G7_SETTING + ADD_ADE9000_M3) && (start+count) <= (MBAD_G7_CMD + ADD_ADE9000_M3)) {
+			size = writeMultiMem(start, count, &prx[7]);				
+			ptx[inx++] = start >> 8;
+			ptx[inx++] = start;
+			ptx[inx++] = count >> 8;
+			ptx[inx++] = count;
+		}
+#endif
 		break;
 		
 	default:   
@@ -352,6 +424,40 @@ void dprtbuffer(int dbgF, char *title, uint8_t *pbuf, int count)
 	printf("\n\r");
 }
 
+static uint16_t *getMeterRegBaseById(int id) {
+	if (id < 0 || id >= METER_CH_COUNT) {
+		return NULL;
+	}
+	return (uint16_t *)&meter[id].meter;
+}
+
+static int decodeMeterAddress(uint16_t address, int *id, uint16_t *offset) {
+	if (address < ADD_ADE9000) {
+		*id = 0;
+		*offset = address;
+		return 0;
+	}
+#if METER_CH_COUNT > 2
+	if (address < ADD_ADE9000_M3) {
+		*id = 1;
+		*offset = address - ADD_ADE9000;
+		return 0;
+	}
+	if (address < 30000) {
+		*id = 2;
+		*offset = address - ADD_ADE9000_M3;
+		return 0;
+	}
+#else
+	if (address < 20000) {
+		*id = 1;
+		*offset = address - ADD_ADE9000;
+		return 0;
+	}
+#endif
+	return -1;
+}
+
 
 int readBioMem(uint8_t *ptx, uint16_t start, uint16_t count, uint8_t *psmb)
 {
@@ -372,7 +478,7 @@ int readBioMem(uint8_t *ptx, uint16_t start, uint16_t count, uint8_t *psmb)
 int	readMem2(uint8_t *ptx, uint16_t start, uint16_t count)
 {
 	uint16_t    i, inx = 0, c;
-	uint16_t    *psmb = (uint16_t *)pmeter;
+	uint16_t    *psmb = getMeterRegBaseById(0);
 	
 //  capture	
 //	if (start == SMB_WAVE) {
@@ -394,7 +500,7 @@ int	readMem2(uint8_t *ptx, uint16_t start, uint16_t count)
 int	readMem(uint8_t *ptx, uint16_t start, uint16_t count)
 {
 	uint16_t    i, inx = 0;	
-	uint16_t    *psmb = (uint16_t *)pmeter;
+	uint16_t    *psmb = getMeterRegBaseById(0);
 
 //	if (start == SMB_WAVE) {
 //		buildWV16();
@@ -416,7 +522,7 @@ int	readMem(uint8_t *ptx, uint16_t start, uint16_t count)
 int	readMem4(uint8_t *ptx, uint16_t start, uint16_t count)
 {
 	uint16_t    i, inx = 0, c;
-	uint16_t    *psmb = (uint16_t *)&meter[1].meter;
+	uint16_t    *psmb = getMeterRegBaseById(1);
 	
 //  capture	
 //	if (start == SMB_WAVE) {
@@ -438,9 +544,7 @@ int	readMem4(uint8_t *ptx, uint16_t start, uint16_t count)
 int	readMem3(uint8_t *ptx, uint16_t start, uint16_t count)
 {
 	uint16_t    i, inx = 0;	
-	uint16_t    *psmb;
-
-	psmb = (uint16_t *)&meter[1].meter;
+	uint16_t    *psmb = getMeterRegBaseById(1);
 
 	ptx[inx++] = count << 1;  // bc = count * 2
 	for (i=0; i<count; i++)  {
@@ -450,6 +554,38 @@ int	readMem3(uint8_t *ptx, uint16_t start, uint16_t count)
     	
 	return inx;
 }
+
+#if METER_CH_COUNT > 2
+int	readMem4_m3(uint8_t *ptx, uint16_t start, uint16_t count)
+{
+	uint16_t    i, inx = 0, c;
+	uint16_t    *psmb = getMeterRegBaseById(2);
+
+	c = count << 1;
+	ptx[inx++] = c << 8;
+	ptx[inx++] = c;
+	for (i=0; i<count; i++)  {
+		ptx[inx++] = psmb[start+i] >> 8;
+		ptx[inx++] = psmb[start+i];
+	}
+
+	return inx;
+}
+
+int	readMem3_m3(uint8_t *ptx, uint16_t start, uint16_t count)
+{
+	uint16_t    i, inx = 0;
+	uint16_t    *psmb = getMeterRegBaseById(2);
+
+	ptx[inx++] = count << 1;
+	for (i=0; i<count; i++)  {
+		ptx[inx++] = psmb[start+i] >> 8;
+		ptx[inx++] = psmb[start+i];
+	}
+
+	return inx;
+}
+#endif
 
 
 //void putCommandS(int addr, int count)
@@ -694,16 +830,16 @@ int	writeSingleMem(int id, uint16_t start, uint16_t cmd)
 	{	
 		switch (start) {
 			case 7370:
-				fetchEvent(cmd);
+				fetchEvent(id, cmd);
 				break;
 			case 7371:
 				fetchAlarm(cmd);
 				break;
 			case 7372:
-				fetchItic(cmd);
+				fetchItic(id, cmd);
 				break;
 			case 7373:
-				fetchItic2(cmd);
+				fetchItic2(id, cmd);
 				break;
 			default:
 				putCmdQ(id, start, cmd);
@@ -715,34 +851,41 @@ int	writeSingleMem(int id, uint16_t start, uint16_t cmd)
 
 int	writeMultiMem(uint16_t start, uint16_t count, uint8_t *pcmd)
 {
-	
 	// setting 영역에 바로 쓰면 어느부분이 변경되었는지 알수 없기때문에
 	// 영역별로 따로 처리한다.
-	if(start > ADD_ADE9000)	{
-		if (start >= (MBAD_G7_SETTING+ADD_ADE9000) && start < (MBAD_G7_CMD+ADD_ADE9000)) {
-			printf("recv Settings, s=%d, c=%d ...\n", start, count);
-			putSettings(start-(MBAD_G7_SETTING+ADD_ADE9000), count, pcmd, (uint16_t *)pdbk2);
-		}
-	}
-	else {
-		if (start >= MBAD_SET_TS && count == 2) {
-#if 1	// 데이터 형식을 다른 데이터와 동일하게 한다	
-			uint32_t utc = pcmd[0]<<24 | pcmd[1]<<16 | pcmd[2]<<8 | pcmd[3];
-			printf("recv UTC Time, s=%d, c=%d, UTC=%d ...\n", start, count, utc);
-#endif		
-			putUTCtime(start-MBAD_SET_TS, count, pcmd);
-		}		
-		else if (start >= MBAD_G7_SETTING && start < MBAD_G7_CMD) {
-			printf("recv Settings, s=%d, c=%d ...\n", start, count);
-			putSettings(start-MBAD_G7_SETTING, count, pcmd, (uint16_t *)pdbk);
-		}
+#if METER_CH_COUNT > 2
+	if (start >= (MBAD_G7_SETTING + ADD_ADE9000_M3) && start < (MBAD_G7_CMD + ADD_ADE9000_M3)) {
+		printf("recv Settings(M3), s=%d, c=%d ...\n", start, count);
+		putSettings(start - (MBAD_G7_SETTING + ADD_ADE9000_M3), count, pcmd, (uint16_t *)&meter[2].setting);
 		return 0;
 	}
+#endif
+	if (start >= (MBAD_G7_SETTING + ADD_ADE9000) && start < (MBAD_G7_CMD + ADD_ADE9000)) {
+		printf("recv Settings(M2), s=%d, c=%d ...\n", start, count);
+		putSettings(start - (MBAD_G7_SETTING + ADD_ADE9000), count, pcmd, (uint16_t *)pdbk2);
+		return 0;
+	}
+	if (start >= MBAD_SET_TS && count == 2 && start < ADD_ADE9000) {
+#if 1
+		uint32_t utc = pcmd[0]<<24 | pcmd[1]<<16 | pcmd[2]<<8 | pcmd[3];
+		printf("recv UTC Time, s=%d, c=%d, UTC=%d ...\n", start, count, utc);
+#endif
+		putUTCtime(start-MBAD_SET_TS, count, pcmd);
+		return 0;
+	}
+	if (start >= MBAD_G7_SETTING && start < MBAD_G7_CMD) {
+		printf("recv Settings(M1), s=%d, c=%d ...\n", start, count);
+		putSettings(start-MBAD_G7_SETTING, count, pcmd, (uint16_t *)pdbk);
+		return 0;
+	}
+	return 0;
 }
 
 int   readMemCb(uint16_t address, uint16_t *value) 
 {
 	int id;
+	uint16_t offset;
+	uint16_t *psmb;
 	// Wave 데이터를 load 한다 
 	if (address == 2300) {
 		copyModbusWaveData();
@@ -751,18 +894,13 @@ int   readMemCb(uint16_t address, uint16_t *value)
 //	pInfo->MbusHeartBit++;
 	//printf("MbusHeartBit = %d\n", pInfo->MbusHeartBit);
 
-	if (address >= 0 && address < 10000) {
-		uint16_t    *psmb = (uint16_t *)pmeter;
-		id = 0;
-		*value = psmb[address];
+	if (decodeMeterAddress(address, &id, &offset) == 0) {
+		psmb = getMeterRegBaseById(id);
+		if (psmb == NULL) {
+			return -1;
+		}
+		*value = psmb[offset];
 		return 0;
-	}
-	else if(address >= 10000 && address < 20000) {
-		uint16_t    *psmb = (uint16_t *)&meter[1].meter;
-		id = 1;
-		*value = psmb[address-10000];
-		return 0;
-	
 	}
 	// else if(address >= 10000 && address < 30000) {
 	//  	uint16_t    *psmb = (uint16_t *)&meter.iPSM[0];
@@ -794,12 +932,18 @@ int writeMemCb(uint16_t address, uint16_t value) {
    	uint16_t *uptr = (uint16_t *)&_utc;
    	uint16_t *psmb = (uint16_t *)pdbk;
    
-	// meter 2
-	if(address > ADD_ADE9000) {
+#if METER_CH_COUNT > 2
+	if (address >= ADD_ADE9000_M3 && address < 30000) {
+		psmb = (uint16_t *)&meter[2].setting;
+		psmb[address - ADD_ADE9000_M3] = value;
+	}
+	else
+#endif
+	if (address >= ADD_ADE9000 && address < ADD_ADE9000_M3) {
 		psmb = (uint16_t *)pdbk2;
 		psmb[address-ADD_ADE9000] = value;
 	}
-	else {
+	else if (address < ADD_ADE9000) {
 		if (address == MBAD_SET_TS) {
 			uptr[0] = value;
 		 }
@@ -819,23 +963,22 @@ int writeMemCb(uint16_t address, uint16_t value) {
 			  
 		  switch (address) {
 			  case 7370:
-				  fetchEvent(value);
+				  fetchEvent(0, value);
 				  break;
 			  case 7371:
 				  fetchAlarm(value);
 				  break;
 			  case 7372:
-				  fetchItic(value);
+				  fetchItic(0, value);
 				  break;
 			  case 7373:
-				  fetchItic2(value);
+				  fetchItic2(0, value);
 				  break;
 			  default:
 				  putCmdQ(0, address, value);
 				  break;
 		  	}
 	  	}
-  
 	}
 	// else if(address >= MBAD_G7_END1 && address < MBAD_G7_END2) {
 	// 	ackIOEvent(address, value);

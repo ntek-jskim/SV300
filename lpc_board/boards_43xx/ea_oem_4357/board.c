@@ -443,14 +443,17 @@ void Board_SetLCDBacklight(uint8_t Intensity)
 /* Initializes SDMMC interface */
 void Board_SDMMC_Init(void)
 {
+#ifndef CH3
+	/* PC_0,4..8,10 — SDIO (회로 SD_MMC 장착 시) */
 	Chip_SCU_PinMuxSet(0xC, 4, (SCU_PINIO_FAST | SCU_MODE_FUNC7));	/* PC.4 connected to SDIO_D0 */
 	Chip_SCU_PinMuxSet(0xC, 5, (SCU_PINIO_FAST | SCU_MODE_FUNC7));	/* PC.5 connected to SDIO_D1 */
 	Chip_SCU_PinMuxSet(0xC, 6, (SCU_PINIO_FAST | SCU_MODE_FUNC7));	/* PC.6 connected to SDIO_D2 */
 	Chip_SCU_PinMuxSet(0xC, 7, (SCU_PINIO_FAST | SCU_MODE_FUNC7));	/* PC.7 connected to SDIO_D3 */
 
-	Chip_SCU_PinMuxSet(0xC, 8, (SCU_MODE_INACT | SCU_MODE_INBUFF_EN | SCU_MODE_FUNC7));	/* PC.4 connected to SDIO_CD */
+	Chip_SCU_PinMuxSet(0xC, 8, (SCU_MODE_INACT | SCU_MODE_INBUFF_EN | SCU_MODE_FUNC7));	/* PC.8 connected to SDIO_CD */
 	Chip_SCU_PinMuxSet(0xC, 10, (SCU_PINIO_FAST | SCU_MODE_FUNC7));	/* PC.10 connected to SDIO_CMD */
 	Chip_SCU_PinMuxSet(0xC, 0, (SCU_MODE_INACT | SCU_MODE_HIGHSPEEDSLEW_EN | SCU_MODE_FUNC7));/* PC.0 connected to SDIO_CLK */
+#endif
 }
 
 /* Initializes SSP interface */

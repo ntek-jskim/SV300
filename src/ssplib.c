@@ -14,9 +14,32 @@ __IO uint8_t isDmaRxfCompleted[2];
 
 static uint8_t dmaChTx[2], dmaChRx[2];
 static LPC_SSP_T* _sspBase[] = {LPC_SSP0, LPC_SSP1};
+/* mid=2(CH3)까지 각 미터가 독립 TX/RX 버퍼를 갖도록 per-meter 배열 사용 */
+#ifdef CH3
+static uint8_t _tb[3][520], _rb[3][520];
+#else
 static uint8_t _tb[2][520], _rb[2][520];
+#endif
 
 OsTaskId	t_meter[2];
+
+/* CH3: Meter1_Task·Meter2_Task가 SSP1을 공유하므로 직렬화 mutex */
+#ifdef CH3
+static OsMutex ssp1_mutex;
+#endif
+
+/* FreeRTOS: DMA 완료를 task notification(0x10) 대신 전용 이진 세마포어로 전달.
+ * meterIrqSvc 의 0x1 알림이 xTaskNotifyWait 를 조기에 깨워 DMA 채널이
+ * 미완료 상태로 남는 버그를 방지하기 위함이다. */
+#ifdef __FREERTOS
+static SemaphoreHandle_t ssp_dma_sem[2];
+#endif
+
+/* meter id(0,1,2,...) -> SSP bus index(0 or 1) */
+static uint8_t meterToSspBus(uint8_t mid)
+{
+	return (mid == 0) ? 0 : 1;
+}
 
 
 #ifdef _SSP_INTR
@@ -105,37 +128,41 @@ Status spiIO_Int(LPC_SSP_T *pSSP, uint16_t *tb, int tc, uint16_t *rb, int rc)
 void DMA_IRQHandler(void)
 {
 	int chn;
-#ifdef __FREERTOS   
+#ifdef __FREERTOS
 	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 #endif
-   
+
 	chn = 0;
 	if (Chip_GPDMA_Interrupt(LPC_GPDMA, dmaChTx[chn]) == SUCCESS) {
 		isDmaTxfCompleted[chn] = 1;
 	}
-
-	if (Chip_GPDMA_Interrupt(LPC_GPDMA, dmaChRx[chn]) == SUCCESS) {		
-    	isDmaRxfCompleted[chn] = 1;
-#ifdef __FREERTOS		
-      	if(t_meter[chn] != 0) xTaskNotifyFromISR(t_meter[chn], 0x10, eSetBits, &xHigherPriorityTaskWoken);
+	if (Chip_GPDMA_Interrupt(LPC_GPDMA, dmaChRx[chn]) == SUCCESS) {
+		isDmaRxfCompleted[chn] = 1;
+#ifdef __FREERTOS
+		/* 전용 세마포어로 DMA 완료를 통보: task notification(0x1 등)과 분리 */
+		xSemaphoreGiveFromISR(ssp_dma_sem[chn], &xHigherPriorityTaskWoken);
 #else
-		if(t_meter[chn] != 0) isr_evt_set(0x10, t_meter[chn]);
-#endif		      
+		if (t_meter[chn] != 0) isr_evt_set(0x10, t_meter[chn]);
+#endif
 	}
-		
+
 	chn = 1;
 	if (Chip_GPDMA_Interrupt(LPC_GPDMA, dmaChTx[chn]) == SUCCESS) {
 		isDmaTxfCompleted[chn] = 1;
 	}
-
-	if (Chip_GPDMA_Interrupt(LPC_GPDMA, dmaChRx[chn]) == SUCCESS) {		
+	if (Chip_GPDMA_Interrupt(LPC_GPDMA, dmaChRx[chn]) == SUCCESS) {
 		isDmaRxfCompleted[chn] = 1;
-#ifdef __FREERTOS	
-      	if (t_meter[chn] != 0) xTaskNotifyFromISR(t_meter[chn], 0x10, eSetBits, &xHigherPriorityTaskWoken);
+#ifdef __FREERTOS
+		xSemaphoreGiveFromISR(ssp_dma_sem[chn], &xHigherPriorityTaskWoken);
 #else
 		if (t_meter[chn] != 0) isr_evt_set(0x10, t_meter[chn]);
-#endif		
-	}	
+#endif
+	}
+
+#ifdef __FREERTOS
+	/* 완료된 태스크가 있으면 즉시 컨텍스트 스위치 */
+	portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+#endif
 }
 
 void Board_DMA_Init() {
@@ -143,11 +170,9 @@ void Board_DMA_Init() {
 	Chip_GPDMA_Init(LPC_GPDMA);
 	/* Setting GPDMA interrupt */
 	NVIC_DisableIRQ(DMA_IRQn);
-	//NVIC_SetPriority(DMA_IRQn, ((0x01 << 3) | 0x01));
-#if 1   
-	// FreeRTOS 사용시 priority는 6보다 크거나 같아야 한다
-	NVIC_SetPriority(PIN_INT3_IRQn, 6);
-#endif   
+	/* FreeRTOS: FromISR API 사용 가능 범위(configMAX_SYSCALL_INTERRUPT_PRIORITY)를
+	 * 준수하도록 DMA IRQ 우선순위를 PININT 와 동일한 레벨(6)로 설정한다. */
+	NVIC_SetPriority(DMA_IRQn, 6);
 	NVIC_EnableIRQ(DMA_IRQn);		   
 	
 	dmaChTx[0] = Chip_GPDMA_GetFreeChannel(LPC_GPDMA, GPDMA_CONN_SSP0_Tx);
@@ -157,6 +182,14 @@ void Board_DMA_Init() {
 	dmaChRx[1] = Chip_GPDMA_GetFreeChannel(LPC_GPDMA, GPDMA_CONN_SSP1_Rx);	
 	
 	//memset(_tb, 0xff, 0xff);
+
+#ifdef CH3
+	osCreateMutex(&ssp1_mutex);
+#endif
+#ifdef __FREERTOS
+	ssp_dma_sem[0] = xSemaphoreCreateBinary();
+	ssp_dma_sem[1] = xSemaphoreCreateBinary();
+#endif
 }
 
 
@@ -178,23 +211,20 @@ int spiIO_DMA(LPC_SSP_T *pSSP, uint8_t *tb, int tc, uint8_t *rb, int rc)
 	
 	
 	isDmaTxfCompleted[chn] = isDmaRxfCompleted[chn] = 0;
-	
-	if (t_meter[chn] == 0) {
-#ifdef __FREERTOS		
-		t_meter[chn] = xTaskGetCurrentTaskHandle();
-#else
-		t_meter[chn] = os_tsk_self();
-#endif		
-	}	
+
+#ifndef __FREERTOS
+	/* RTX 경로: DMA 완료 ISR 통보 대상을 현재 태스크로 갱신 */
+	t_meter[chn] = os_tsk_self();
+#endif
 
 	while (Chip_SSP_GetStatus(pSSP, SSP_STAT_RNE) == SET) {
 		Chip_SSP_ReceiveFrame(pSSP);
 		temp++;
-	}	
+	}
 	if (temp) {
 		printf(">>> spiIO_DMA, FIFO NOT EMPTY: %d, %d \n", chn, temp);
-	}	
-		
+	}
+
 	/* data Tx_Buf --> SSP */
 	Chip_GPDMA_Transfer(LPC_GPDMA, dmaChTx[chn],
 						(uint32_t)tb,
@@ -207,23 +237,30 @@ int spiIO_DMA(LPC_SSP_T *pSSP, uint8_t *tb, int tc, uint8_t *rb, int rc)
 						(uint32_t)rb,
 						GPDMA_TRANSFERTYPE_P2M_CONTROLLER_DMA,
 						n);
-	
+
 	// Enable DMA
 	Chip_SSP_DMA_Enable(pSSP);
 
 #ifdef __FREERTOS
-	//if (os_evt_wait_and(0x10, 100) == OS_R_TMO) 
-   if (xTaskNotifyWait(0, 0xFFFFFFFF, &notificationValue, pdMS_TO_TICKS(100)) == 0)
-#else
-	if (os_evt_wait_and(0x10, 100) == OS_R_TMO) 
-#endif	
-	{
+	/* 전용 세마포어로 대기: meterIrqSvc 의 0x1 알림이 섞여 조기 반환되던 버그 방지.
+	 * 타임아웃 시 stuck DMA 채널을 강제 종료하여 다음 호출이 정상 시작되도록 한다. */
+	if (xSemaphoreTake(ssp_dma_sem[chn], pdMS_TO_TICKS(100)) == pdFALSE) {
 		printf("DMA_TIMEOUT, %d ...\n", chn);
+		Chip_GPDMA_Stop(LPC_GPDMA, dmaChTx[chn]);
+		Chip_GPDMA_Stop(LPC_GPDMA, dmaChRx[chn]);
+		while (Chip_SSP_GetStatus(pSSP, SSP_STAT_RNE) == SET) Chip_SSP_ReceiveFrame(pSSP);
 	}
-	//while (!isDmaTxfCompleted || !isDmaRxfCompleted) {}
-	
+#else
+	if (os_evt_wait_and(0x10, 100) == OS_R_TMO) {
+		printf("DMA_TIMEOUT, %d ...\n", chn);
+		Chip_GPDMA_Stop(LPC_GPDMA, dmaChTx[chn]);
+		Chip_GPDMA_Stop(LPC_GPDMA, dmaChRx[chn]);
+		while (Chip_SSP_GetStatus(pSSP, SSP_STAT_RNE) == SET) Chip_SSP_ReceiveFrame(pSSP);
+	}
+#endif
+
 	// Disable DMA
-	Chip_SSP_DMA_Disable(pSSP);	
+	Chip_SSP_DMA_Disable(pSSP);
 }
 
 
@@ -427,13 +464,32 @@ int spiIO_32n(LPC_SSP_T *pSSP, uint16_t *tb, int tc, uint32_t *rb, int rc) {
 int dma_read32n(uint8_t mid, uint16_t cmd, uint32_t *buf, int n) 
 {	
 	uint16_t c = (cmd << 4) | (1<<3); 
+	uint8_t bus = meterToSspBus(mid);
+	/* per-meter 독립 버퍼 사용: mid=1,2 가 같은 bus를 쓰더라도 버퍼 충돌 방지 */
 	uint8_t *ptb = _tb[mid], *prb = _rb[mid];
 	int i, ix;
-	
+
+#ifdef CH3
+	/* CH3: SSP1(bus=1) 공유 — mutex 취득 후 해당 미터 CS를 Assert(LOW).
+	 * 폴링 SPI(read_reg16/32 등)도 동일 mutex를 쓰므로 MISO 버스 충돌이 방지된다.
+	 * mutex 범위: CS LOW → DMA 완료 → CS HIGH, 한 페이지 단위로 취득/반환한다. */
+	if (bus == 1) {
+		osAcquireMutex(&ssp1_mutex);
+		selectMeter(mid);
+	}
+#endif
+
 	ptb[2] = c >> 8;
 	ptb[3] = c;	
-	spiIO_DMA(_sspBase[mid], &ptb[2], 2, &prb[2], n*sizeof(uint32_t));
-	
+	spiIO_DMA(_sspBase[bus], &ptb[2], 2, &prb[2], n*sizeof(uint32_t));
+
+#ifdef CH3
+	if (bus == 1) {
+		deSelectMeter(mid);
+		osReleaseMutex(&ssp1_mutex);
+	}
+#endif
+
 	// sampling data 타입이 다르기 떄문에 endian 변환 루틴은 App. 에서 처리한다.
 	for (ix=4, i=0; i<n; i++, ix+=4) {
 		buf[i] = __REV(*(uint32_t *)&prb[ix]);
@@ -475,13 +531,20 @@ int dma_read32n(uint8_t mid, uint16_t cmd, uint32_t *buf, int n)
 
 int read_reg16(uint8_t mid, uint16_t cmd, uint16_t *pdata) {
 	uint8_t tb[8], rb[8];
+	uint8_t bus = meterToSspBus(mid);
 	uint16_t crc, c = (cmd << 4) | (1<<3);
 	
 	*(uint16_t *)tb = __REV16(c);
-	
+
+#ifdef CH3
+	if (bus == 1) osAcquireMutex(&ssp1_mutex);
+#endif
 	selectMeter(mid);
-	spiIO8_Polling(_sspBase[mid], tb, 2, rb, 4);
+	spiIO8_Polling(_sspBase[bus], tb, 2, rb, 4);
 	deSelectMeter(mid);
+#ifdef CH3
+	if (bus == 1) osReleaseMutex(&ssp1_mutex);
+#endif
 	
 	*pdata = __REV16(*(uint16_t *)rb);
 	crc = __REV16(*(uint16_t *)&rb[2]);
@@ -491,13 +554,20 @@ int read_reg16(uint8_t mid, uint16_t cmd, uint16_t *pdata) {
 int read_reg32(uint8_t mid, uint16_t cmd, uint32_t *pdata)
 {
 	uint8_t tb[10], rb[10];
+	uint8_t bus = meterToSspBus(mid);
 	uint16_t crc, c = (cmd << 4) | (1<<3);
 
 	*(uint16_t *)tb = __REV16(c);
-	
+
+#ifdef CH3
+	if (bus == 1) osAcquireMutex(&ssp1_mutex);
+#endif
 	selectMeter(mid);
-	spiIO8_Polling(_sspBase[mid], tb, 2, rb, 6);	
-	deSelectMeter(mid);	
+	spiIO8_Polling(_sspBase[bus], tb, 2, rb, 6);	
+	deSelectMeter(mid);
+#ifdef CH3
+	if (bus == 1) osReleaseMutex(&ssp1_mutex);
+#endif
 
 	*pdata = __REV(*(uint32_t *)rb);
 	crc = __REV16(*(uint16_t *)&rb[4]);	
@@ -530,6 +600,7 @@ int read_reg32(uint8_t mid, uint16_t cmd, uint32_t *pdata)
 int write_reg16(uint8_t mid, uint16_t cmd, uint16_t *pdata)
 {
 	uint8_t tb[8], rb[8];
+	uint8_t bus = meterToSspBus(mid);
 	uint16_t c = (cmd << 4);
 
 	tb[0] = c>>8;
@@ -537,9 +608,15 @@ int write_reg16(uint8_t mid, uint16_t cmd, uint16_t *pdata)
 	tb[2] = *pdata>>8;
 	tb[3] = *pdata;
 
+#ifdef CH3
+	if (bus == 1) osAcquireMutex(&ssp1_mutex);
+#endif
 	selectMeter(mid);
-	spiIO8_Polling(_sspBase[mid], tb, 4, rb, 0);	
+	spiIO8_Polling(_sspBase[bus], tb, 4, rb, 0);	
 	deSelectMeter(mid);
+#ifdef CH3
+	if (bus == 1) osReleaseMutex(&ssp1_mutex);
+#endif
 	
 	return 1;
 }
@@ -548,15 +625,22 @@ int write_reg16(uint8_t mid, uint16_t cmd, uint16_t *pdata)
 int write_reg32(uint8_t mid, uint16_t cmd, uint32_t *pdata)
 {
 	uint8_t tb[8], rb[8];	
+	uint8_t bus = meterToSspBus(mid);
 	uint16_t c = (cmd << 4);
 	
 	tb[2] = c>>8;
 	tb[3] = c;
 	*(uint32_t *)&tb[4] = __REV(*pdata);
 
+#ifdef CH3
+	if (bus == 1) osAcquireMutex(&ssp1_mutex);
+#endif
 	selectMeter(mid);
-	spiIO8_Polling(_sspBase[mid], &tb[2], 6, rb, 0);
+	spiIO8_Polling(_sspBase[bus], &tb[2], 6, rb, 0);
 	deSelectMeter(mid);
+#ifdef CH3
+	if (bus == 1) osReleaseMutex(&ssp1_mutex);
+#endif
 	
 	return 1;
 }

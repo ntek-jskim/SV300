@@ -9,8 +9,6 @@
 #include "time.h"
 #include "string.h"
 
-extern EVENT_Q eventQ;
-
 // 2nd ~ 25th, 10000 -> 100%
 float harmLimit[] = {	
 	2,   5,   1,   6,   0.5, 5,   0.5, 1.5, 0.5,	// 2 ~ 10
@@ -21,6 +19,74 @@ float harmLimit[] = {
 // 10초에 하나 증가
 extern uint32_t sysTick1s, sysTick10s, sysTick10m;
 extern int readQualWeekData(char *path, QualWeek *pqw);
+
+static int parseDateKey8(const char *name) {
+	int i, n = 0, key = 0;
+	for (i = 0; name[i] != 0; i++) {
+		if (name[i] >= '0' && name[i] <= '9') {
+			key = key * 10 + (name[i] - '0');
+			if (++n >= 8) {
+				return key;
+			}
+		}
+	}
+	return 99999999;
+}
+
+static int findOldestQualLog(char *oldestName, uint32_t *oldestSize, uint32_t *totalSize) {
+#ifdef USE_CMSIS_RTOS2
+	fsFileInfo info;
+#else
+	FINFO info;
+#endif
+	char mask[] = CONCAT(LOG_PQ_DIR, "\\ql*.d");
+	int found = 0, oldestKey = 99999999;
+
+	*totalSize = 0;
+	oldestName[0] = 0;
+	*oldestSize = 0;
+
+	info.fileID = 0;
+	while (ffind(mask, &info) == 0) {
+		const char *name = (const char *)info.name;
+		int key = parseDateKey8(name);
+
+		*totalSize += info.size;
+		if (!found || key < oldestKey) {
+			oldestKey = key;
+			strcpy(oldestName, name);
+			*oldestSize = info.size;
+			found = 1;
+		}
+	}
+
+	return found;
+}
+
+static void trimQualLogBudget(void) {
+	char oldestName[64], path[96];
+	uint32_t oldestSize = 0, totalSize = 0;
+	int res;
+
+	while (findOldestQualLog(oldestName, &oldestSize, &totalSize)) {
+		if (totalSize <= FLASH_LOG_BUDGET_PQ) {
+			break;
+		}
+
+		sprintf(path, "%s\\%s", LOG_PQ_DIR, oldestName);
+#ifdef USE_CMSIS_RTOS2
+		res = fdelete(path, NULL);
+#else
+		res = fdelete(path);
+#endif
+		printf("trimQualLogBudget: delete %s (size=%u, total=%u, res=%d)\n",
+			path, oldestSize, totalSize, res);
+
+		if (res != 0) {
+			break;
+		}
+	}
+}
 
 void uLocalTime(const uint32_t *utc, struct tm *ptm) {
 	if (*utc == 0) {
@@ -106,30 +172,36 @@ void getQualLastStartDate(char *str) {
 
 
 // 현재 시간 기준으로 금주의 시작일을 구한다 또는 Test용으로 오늘 날짜를 구한다 
-void getQualLogFN(char *path) {
+void getQualLogFN(char *path, int id) {
 	char dstr[16];
 	
 	getQualStartDate(dstr);
-	//sprintf(path, "%s\\QL0_%s.d", LOG_PQ_DIR, dstr);			
-	sprintf(path, "%s%s.d", QL_FILE, dstr);			
+	if (METER_CH_COUNT > 1 && id > 0)
+		sprintf(path, "%s%s_m%d.d", QL_FILE, dstr, id);
+	else
+		sprintf(path, "%s%s.d", QL_FILE, dstr);
 }
 
 // 현재 시간 기준으로 금주의 시작일을 구한다 또는 Test용으로 오늘 날짜를 구한다 
-void getQualWeekFN(char *path) {
+void getQualWeekFN(char *path, int id) {
 	char dstr[16];
 		
 	getQualStartDate(dstr);
-	//sprintf(path, "%s\\QW0_%s.d", LOG_PQ_DIR, dstr);			
-	sprintf(path, "%s%s.d", QW_FILE, dstr);			
+	if (METER_CH_COUNT > 1 && id > 0)
+		sprintf(path, "%s%s_m%d.d", QW_FILE, dstr, id);
+	else
+		sprintf(path, "%s%s.d", QW_FILE, dstr);
 }
 
 // 현재 시간 기준으로 전주의 시작일을 구한다 
-void getQualLastWeekFN(char *path) {
+void getQualLastWeekFN(char *path, int id) {
 	char dstr[16];
 	
 	getQualLastStartDate(dstr);
-	//sprintf(path, "%s\\QW0_%s.d", LOG_PQ_DIR, dstr);			
-	sprintf(path, "%s%s.d", QW_FILE, dstr);			
+	if (METER_CH_COUNT > 1 && id > 0)
+		sprintf(path, "%s%s_m%d.d", QW_FILE, dstr, id);
+	else
+		sprintf(path, "%s%s.d", QW_FILE, dstr);
 }
 
 
@@ -183,6 +255,7 @@ int writeQual10mData(char *path, QualData10m *pq10m) {
 	struct tm lt;
 	
 	appendQualLog(path, &pq10m->avg, sizeof(pq10m->avg));
+	trimQualLogBudget();
 	uLocalTime(&sysTick1s, &lt);
 	printf("{{Qual10m(%s) TS[%d-%d-%d %d:%d:%d], C[%d] U[%f,%f,%f]}\n", 
 		path, lt.tm_year, lt.tm_mon, lt.tm_mday, 
@@ -254,14 +327,15 @@ int createQualWeekData(char *path, QualWeek *pqw) {
 	return 0;
 }
 
-int updateQualWeekData(char *path, QualWeek *pqw) {
+int updateQualWeekData(int id, char *path, QualWeek *pqw) {
 	FILE *fp;
+	EVENT_Q *pevQ = &meter[id].eventQ;
 	
 	// event count 갱신
-	if (eventQ.count > 0) {
-		pqw->evtCount += eventQ.count;
+	if (pevQ->count > 0) {
+		pqw->evtCount += pevQ->count;
 	}
-	printf("updateQualWeekData (%s), event count=%d ...\n", path, eventQ.count);
+	printf("updateQualWeekData[m%d] (%s), event count=%d ...\n", id, path, pevQ->count);
 	fp = fopen(path, "r+");
 	if (fp == NULL) {
 		printf("updateQualWeekData, Can't open file(r+:%s), create file(w)\n", path);		
@@ -276,11 +350,11 @@ int updateQualWeekData(char *path, QualWeek *pqw) {
 
 	
 	// 이벤트 로그를 QualWeek 뒷 부분에 추가 한다 
-	if (eventQ.count > 0) {		
+	if (pevQ->count > 0) {		
 		fp = fopen(path, "a");
-		fwrite(eventQ.eq, sizeof(EVENT_LOG), eventQ.count, fp);
+		fwrite(pevQ->eq, sizeof(EVENT_LOG), pevQ->count, fp);
 		fclose(fp);		
-		eventQ.count = 0;
+		pevQ->count = 0;
 	}
 
 	
@@ -323,7 +397,7 @@ int readQualWeekData(char *path, QualWeek *pqw) {
 
 
 
-uint32_t getQualWeekEndTs() {
+uint32_t getQualWeekEndTs(CNTL_DATA *pcntl) {
 	struct tm ltm;
 	uint32_t utc;
 	
@@ -468,10 +542,10 @@ void updateQualWeek(QualData10m *pq10m, QualWeek *pqw) {
 }
 
 // meter 영역으로 복사한다 
-void updateQualReport(QualWeek *pqw, int pos) {
+void updateQualReport(int meterIdx, QualWeek *pqw, int pos) {
 	int i, j, error=0, mask=0;
 	float pcent, limit[2];
-	EN50160 *prpt = &pRPT[pos];
+	EN50160 *prpt = &meter[meterIdx].rpt[pos];
 	
 	prpt->sTime = pqw->startTs;
 	prpt->eTime = pqw->endTs;
@@ -508,10 +582,11 @@ void updateQualReport(QualWeek *pqw, int pos) {
 
 
 // log data를 modbus에 쓴다 
-void writeLogData(uint32_t ts) {
+void writeLogData(int id, uint32_t ts) {
 	int i;
-	QualData10m  *pq10m = &pqLog->q10m;	
-	HarmonicsData *phm = &pcntl->hmd;
+	QualData10m  *pq10m = &meter[id].qdLog.q10m;	
+	HarmonicsData *phm = &meter[id].cntl.hmd;
+	LOG_DATA *pld = &meter[id].log;
 	
 	// rms
 	pld->ts = ts;	
@@ -563,15 +638,20 @@ void writeLogData(uint32_t ts) {
 
 
 void timeStampChanged(void) {
-	pqLog->tsChanged = 1;
+	int id;
+	for (id = 0; id < METER_CH_COUNT; id++)
+		meter[id].qdLog.tsChanged = 1;
 }
 
-// 1초 단위로 호출
+// 1초 단위로 호출 (미터 태스크/스캔당 id 전달)
 // 10초 데이터 수집하여 10분 데이터 만든다 
-int updateQualData() 
+int updateQualData(int id) 
 {
 	int i, j, bix, woY, doY;
 	float	freq;
+	QualLogData *pqLog = &meter[id].qdLog;
+	METERING *pmeter = &meter[id].meter;
+	CNTL_DATA *pcntl = &meter[id].cntl;
 	QualData10m  *pq10m = &pqLog->q10m;
 	QualSumData  *pqsum = &pqLog->qsum;
 	struct tm ltm;
@@ -702,7 +782,7 @@ int updateQualData()
 			}
 		}
 		
-		writeLogData(sysTick1s);
+		writeLogData(id, sysTick1s);
 					
 		// report 주기 변동 여부 확인 
 		if (pqLog->qw.startTs <= sysTick1s && sysTick1s < pqLog->qw.endTs) {
@@ -711,9 +791,9 @@ int updateQualData()
 			
 			// 주별 통계 데이터 갱신
 			updateQualWeek(pq10m, &pqLog->qw);		
-			updateQualWeekData(pqLog->qwfn, &pqLog->qw);	// 이벤트 데이터를 뒷 부분에 쓴다 
+			updateQualWeekData(id, pqLog->qwfn, &pqLog->qw);	// 이벤트 데이터를 뒷 부분에 쓴다 
 			// 생성된 데이터를 금주로 복사한다 
-			updateQualReport(&pqLog->qw, 0);		
+			updateQualReport(id, &pqLog->qw, 0);		
 		}
 		else {
 			// 새로운 로그 시작전에 마지막 데이터를 갱신한다
@@ -723,23 +803,23 @@ int updateQualData()
 			// 주별 통계 데이터 갱신
 			updateQualWeek(pq10m, &pqLog->qw);		
 			// 생성된 데이터를 전주로 복사한다 
-			updateQualReport(&pqLog->qw, 1);						
-			updateQualWeekData(pqLog->qwfn, &pqLog->qw);
+			updateQualReport(id, &pqLog->qw, 1);						
+			updateQualWeekData(id, pqLog->qwfn, &pqLog->qw);
 						
 			// 새로운 주기 데이터 준비
-			getQualLogFN(pqLog->qlfn);
-			getQualWeekFN(pqLog->qwfn);
-			getQualLastWeekFN(pqLog->qwfnLast);
+			getQualLogFN(pqLog->qlfn, id);
+			getQualWeekFN(pqLog->qwfn, id);
+			getQualLastWeekFN(pqLog->qwfnLast, id);
 			
 			memset(&pqLog->qw, 0, sizeof(pqLog->qw));
 			pqLog->qw.startTs = sysTick1s;
-			pqLog->qw.endTs = getQualWeekEndTs();
+			pqLog->qw.endTs = getQualWeekEndTs(pcntl);
 //			pqLog->qw.year = pcntl->tod.tm_year;
 //			pqLog->qw.woY = getYear_n_WoY(pcntl->tod.tm_yday, pcntl->tod.tm_wday);
 			printf("[[Create QualWeekData: %s]]\n", pqLog->qwfn);			
 			createQualWeekData(pqLog->qwfn, &pqLog->qw);		
 			// 초기화된 데이터를 금주로 복사한다 
-			updateQualReport(&pqLog->qw, 0);						
+			updateQualReport(id, &pqLog->qw, 0);						
 		}
 				
 		memset(&pq10m->avg, 0, sizeof(pq10m->avg));	
@@ -759,17 +839,19 @@ int updateQualData()
 }
 
 
-void initPQHeader() {
+void initPQHeader(int id) {
 	FILE *fp;
 	struct tm lt;
 	int woY, ret=-1, flag=0;
+	QualLogData *pqLog = &meter[id].qdLog;
+	CNTL_DATA *pcntl = &meter[id].cntl;
 	//char path[64];
 	
 	// 로그 파일 이름 얻는다 
-	getQualLogFN(pqLog->qlfn);
-	getQualWeekFN(pqLog->qwfn);
-	getQualLastWeekFN(pqLog->qwfnLast);
-	printf("{{{Log File : %s, %s, %s}}}\n", pqLog->qlfn, pqLog->qwfn, pqLog->qwfnLast);
+	getQualLogFN(pqLog->qlfn, id);
+	getQualWeekFN(pqLog->qwfn, id);
+	getQualLastWeekFN(pqLog->qwfnLast, id);
+	printf("{{{Log File[m%d] : %s, %s, %s}}}\n", id, pqLog->qlfn, pqLog->qwfn, pqLog->qwfnLast);
 		
 	// log 파일 지우고 새로 시작하기 
 	fp = fopen("initqual.d", "rb");
@@ -802,13 +884,13 @@ void initPQHeader() {
 	
 	// 전주 QualWeekReport를 읽는다 
 	if (readQualWeekData(pqLog->qwfnLast, &pqLog->qw) == 0) {		
-		updateQualReport(&pqLog->qw, 1);
+		updateQualReport(id, &pqLog->qw, 1);
 	}
 	
 	// 금주 QualWeekReport를 읽는다 
 	if (readQualWeekData(pqLog->qwfn, &pqLog->qw) == 0) {
 		printf("[[Load readQualWeekData File : %s]]\n", pqLog->qwfn);		
-		updateQualReport(&pqLog->qw, 0);
+		updateQualReport(id, &pqLog->qw, 0);
 
 		uLocalTime(&pqLog->qw.startTs, &lt);
 		printf("|| Start: %d-%d-%d\n", lt.tm_year, lt.tm_mon, lt.tm_mday);
@@ -821,7 +903,7 @@ void initPQHeader() {
 	else {		
 		memset(&pqLog->qw, 0, sizeof(pqLog->qw)); 
 		pqLog->qw.startTs = sysTick1s;
-		pqLog->qw.endTs = getQualWeekEndTs();
+		pqLog->qw.endTs = getQualWeekEndTs(pcntl);
 //		pqLog->qw.year = pcntl->tod.tm_year;
 //		pqLog->qw.woY = getYear_n_WoY(pcntl->tod.tm_yday, pcntl->tod.tm_wday);		
 		createQualWeekData(pqLog->qwfn, &pqLog->qw);
@@ -837,4 +919,7 @@ void initPQHeader() {
 	pqLog->q10m.ts10s = sysTick10s;
 	pqLog->q10m.ts10m = sysTick10m;	
 	pqLog->q10m.avg.startTs = sysTick1s;		
+
+	// 부팅 시 1회 용량 정리
+	trimQualLogBudget();
 }

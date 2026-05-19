@@ -429,7 +429,9 @@ void clearMinMax(int cmd) {
 void clearEnergy(int cmd) {
 	printf("[Clear Energy]\n");
 	meter[0].cntl.rstEgy = cmd;
+#ifndef CH1
 	meter[1].cntl.rstEgy = cmd;
+#endif
 }
 
 void clearAlarm(int cmd) {

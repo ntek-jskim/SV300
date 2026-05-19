@@ -365,7 +365,27 @@ int loadAlarmLog(void) {
 #if 1
 	ALARM_U	alog;
 	int fr, re;
-	
+
+	/* 이번 배포 1회: 손상 가능한 알람 FIFO 삭제(센티넬 있으면 스킵) */
+	fp = fopen(ALARM_FIFO_PURGE_SENTINEL, "rb");
+	if (fp == NULL) {
+#ifdef USE_CMSIS_RTOS2
+		(void)fdelete(ALARM_FIFO_FILE, NULL);
+#else
+		(void)fdelete(ALARM_FIFO_FILE);
+#endif
+		memset(pAlmFifo, 0, sizeof(*pAlmFifo));
+		fp = fopen(ALARM_FIFO_PURGE_SENTINEL, "wb");
+		if (fp != NULL) {
+			const char mark = '1';
+			fwrite(&mark, 1, 1, fp);
+			fclose(fp);
+		}
+		printf("---> one-shot purge: removed %s (sentinel %s)\n", ALARM_FIFO_FILE, ALARM_FIFO_PURGE_SENTINEL);
+	} else {
+		fclose(fp);
+	}
+
 	// 시간순으로 읽는다
 	fp = fopen(ALARM_FIFO_FILE, "rb");
 	if (fp != NULL) {
@@ -842,7 +862,7 @@ int alarmProc() {
 		
 	for (i=0; i<32; i++) {		
 		if (paset->set[i].chan == 0) continue;
-//		if (paset->set[i].chan >= MAX_ALARM_CH) continue;
+		if (paset->set[i].chan >= MAX_ALARM_CH) continue;
 		
 		cond = paset->set[i].cond & 1;
 		chan = paset->set[i].chan;

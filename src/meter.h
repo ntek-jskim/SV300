@@ -46,16 +46,57 @@
 
 #define	MAXMIN_FILE	CONCAT(SYS_DIR, "\\maxmin.d")
 #define	ALARM_ST_FILE CONCAT(SYS_DIR, "\\astat.d")
+#define	ALARM_ST_FILE1 CONCAT(SYS_DIR, "\\astat.d1")
+#define	ALARM_ST_FILE2 CONCAT(SYS_DIR, "\\astat.d2")
 #define ALARM_LIST_FILE CONCAT4(ALARM_DIR, "\\alog", ALOG_VER, "_")
 #define EVENT_LIST_FILE CONCAT4(EVENT_DIR, "\\elog", ELOG_VER, "_")
 #define TREND_FILE CONCAT(LOG_TREND_DIR, "\\trd")
 
 #define	EVENT_FIFO_FILE	CONCAT4(EVENT_DIR, "\\elog", ALOG_VER, "_fifo.d")
 #define	ALARM_FIFO_FILE	CONCAT4(ALARM_DIR, "\\alog", ALOG_VER, "_fifo.d")
+/* 손상 FIFO 1회 정리: 이 파일이 없을 때만 ALARM_FIFO_FILE 삭제 후 생성(재실행 방지). 다시 purge하려면 센티넬 삭제 */
+#define	ALARM_FIFO_PURGE_SENTINEL	CONCAT(ALARM_DIR, "\\alog0_fifo_purged_once.d")
 
-#define	LOG_FIFO_SIZE	1024
+// Alarm/Event 보존 건수 제한
+#define	ALARM_LOG_CAP	1024
+#define	EVENT_LOG_CAP	1024
+
+#define	LOG_FIFO_SIZE	ALARM_LOG_CAP
 
 #define	F_INIT	"init.ini"
+
+// SPI Flash(2MB) 운용을 위한 로그 예산(바이트)
+#define	FLASH_LOG_BUDGET_PQ		(800UL * 1024UL)
+#define	FLASH_LOG_BUDGET_TREND	(320UL * 1024UL)
+
+// trdTime[] 인덱스 4 => 10분
+#define	TREND_DEFAULT_INTERVAL_INDEX	4
+
+#if defined(CH3) || defined(CH1)
+#define METER_CH_COUNT 3
+#define ENERGY_CH_COUNT 3
+#else
+#define METER_CH_COUNT 2
+#define ENERGY_CH_COUNT 2
+#endif
+
+/* 활성 미터 채널(스캔·Wave·Meter 태스크): 빌드 매크로만 사용, getHwCh() 무관
+ *  CH1  → 1채널(M0)
+ *  CH3  → 3채널(M0~M2)
+ *  둘 다 없음 → 2채널(M0,M1) */
+#ifdef CH1
+#define ACTIVE_METER_CH_COUNT 1
+#else
+#define ACTIVE_METER_CH_COUNT METER_CH_COUNT
+#endif
+
+#define ENERGY_SIGN_COUNT 2
+
+/* Demand 배열 차원 의미 매크로 */
+#define DEMAND_PHASE_COUNT   3   /* I, DD_I, etc. */
+#define DEMAND_PQ_DIR_COUNT  2   /* P/Q 방향 (예: imp/exp 또는 lag/lead) */
+
+#define ENERGY_SIGN_COUNT 2
 
 #define	IOM_DO_BASE0	6148	// ~ 3451
 #define	IOM_DO_BASE1	6208	// ~ 3493
@@ -82,6 +123,8 @@
 #define	MBAD_G7_END 7000
 
 #define	ADD_ADE9000 10000
+/* Modbus 20000번대: 3번 미터(METER index 2) 데이터/설정 베이스 오프셋 */
+#define	ADD_ADE9000_M3 20000
 
 
 #define ZCT_NONE		0
@@ -411,6 +454,7 @@ enum WIRING_MODE {
 
 typedef struct {
 	uint32_t utc;	  // Year-Month-MDay, hour:minute:second	
+	uint16_t vType, meterStatus;
 	float Freq;
 	float	Temp;
 	//
@@ -421,12 +465,11 @@ typedef struct {
 	float Uangle[3];
 	float UUndev[3];
 	float UOvdev[3];	
-	float	Ur1[2];
 	//
 	float	I[4], Itot, In, Isum, Ig; // In: Neutal Current(measured), Isum: Neutral Current(Calculated)
-	float 	Izs[2], Ips[2], Ins[2], Imax[3];
+	float 	Izs[2], Ips[2], Ins[2];
 	float Iangle[3];
-	float	Ibal[2], Ir2;
+	float	Ibal[2];
 	//
 	float	P[4], fP[4];	
 	float	Q[4], fQ[4];
@@ -438,13 +481,7 @@ typedef struct {
 	float 	THD_U[3], THD_Upp[3];
 	float	CF_U[3], CF_Upp[3];
 	float 	THD_I[3], TDD_I[3], KF_I[3], CF_I[3];
-	float fU[4], fI[4], _r2[3];	// float _r2[27];
-	// io 영역 중 일부를 복사
-	float temp[8];		// temp or aim
-	uint16_t dim[16];
-	uint16_t dom[12];
-	uint16_t aom[4];
-	uint16_t battVolt, _r3;
+	float fU[4], fI[4];	// float _r2[27];
 } METERING;
 
 typedef struct {
@@ -480,7 +517,7 @@ typedef struct {
 //	uint64_t kwh[2];	// import, export
 //	uint64_t kvarh[2];	// import, export
 //	uint64_t kvah;
-	uint64_t eh[3][2];
+	uint64_t eh[3][ENERGY_SIGN_COUNT];
 } ENERGY_REG64;
 
 // REG32: 99,999,999.9 kwh(0.1kwh 단위)
@@ -488,27 +525,26 @@ typedef struct {
 //	uint32_t kwh[2];	// import, export
 //	uint32_t kvarh[2];	// import, export
 //	uint32_t kvah;
-	uint32_t eh[3][2];
+	uint32_t eh[3][ENERGY_SIGN_COUNT];
 } ENERGY_REG32;
 
 typedef struct {
 //	float kwh[2];	// import, export
 //	float kvarh[2];	// import, export
 //	float kvah;
-	float eh[3][2];
+	float eh[3][ENERGY_SIGN_COUNT];
 } ENERGY_FREG;
 													
 // modbus  영역 -> 32bit에서 64bit로 변경
 typedef struct {																																														
 	ENERGY_REG32	Ereg32[3];	// Total, Last Month, This Month
 	ENERGY_REG64  Ereg64;
-	uint32_t      _r[20];
 } ENERGY;
 
 typedef struct {																				
 	uint32_t magic;
 	uint32_t ts;	
-	ENERGY_REG64 Ereg64[2][3];	// Total, Last Month, This Month		
+	ENERGY_REG64 Ereg64[ENERGY_CH_COUNT][3];	// [채널][Total, Last Month, This Month]
 	uint16_t _r[3], crc;
 } ENERGY_NVRAM;
 
@@ -573,10 +609,10 @@ typedef struct {
 } HARMONICS_RAW;
 
 typedef struct {
-	uint16_t U[3][80];
-	uint16_t Upp[3][80];
-	uint16_t I[3][80];
-	uint16_t r[80];
+	uint16_t U[3][64];
+	uint16_t Upp[3][64];
+	uint16_t I[3][64];
+	uint16_t r[24];
 } INTERHARMONICS;
 
 // modbus
@@ -586,7 +622,7 @@ typedef struct {
 	int16_t I[3][160];	
 	float	vscale;
 	float iscale;
-	int16_t r[56];
+	int16_t r[6];
 } WAVEFORM_L16;
 
 typedef struct {
@@ -625,7 +661,7 @@ typedef struct {
 } ALARM_STATUS;
 
 #define	N_ALARM_LIST	32
-#define	N_ALARM_FIFO	1024
+#define	N_ALARM_FIFO	ALARM_LOG_CAP
 
 typedef struct {
 	uint32_t ts;
@@ -674,7 +710,7 @@ typedef struct {
 #define	N_EVENT_LIST	32
 #define	N_ITIC_LIST		32
 // EVENT Log : 14 wrod
-#define	N_EVENT_FIFO	1024
+#define	N_EVENT_FIFO	EVENT_LOG_CAP
 
 typedef struct {
 	uint32_t startTs;
@@ -698,7 +734,7 @@ typedef struct {
 typedef struct {
 	uint16_t 	fr, re, count, seq;
 	ITIC_LOG 	elog[N_ITIC_LIST];
-	uint16_t 	_r1[148];
+	uint16_t 	_r1[8];
 } ITIC_EVT_LIST;
 
 typedef ALARM_HEAD EVENT_HEAD;
@@ -742,7 +778,7 @@ typedef struct {
 	MAXMIN_DATA THD_U[3], THD_Upp[3], THD_I[3];
 	uint32_t ts;	// update
 	uint16_t r0, crc;
-	uint16_t r1[24];
+	uint16_t r1[6];
 } MAXMIN;
 
 typedef struct {
@@ -789,14 +825,18 @@ typedef struct {
 	uint16_t sntpInterval;
 } COMM_CFG;
 
-
 typedef struct {
 	uint16_t	wiring;	// 0:3p4w(3LN,3CT), 1:3p3W(2CT):2LL,2CT, 2:3P3W(3CT):2LL,3CT, 3:1P2W, 4: 1P3W 5 : Simulation
-	uint16_t	freq;	// 0:60, 1:50
 	uint32_t	vnorm;
 	uint32_t	PT1;
 	uint16_t	PT2;
-	uint16_t	r1[3];	
+	uint16_t	r1[2];	
+} PT_CH;
+
+typedef struct {
+	uint16_t	freq;	// 0:60, 1:50
+	PT_CH		fd[9];
+	uint16_t	r1;	
 } PT_DEF;
 
 typedef struct {
@@ -903,28 +943,42 @@ typedef struct {
 #define	PQE_SWELL	2
 #define	PQE_INTR	3
 
+/* comm/pt/ct/etc/iom — db[0] CH1 시스템 영역 (CH1 빌드는 slot 0만 사용, 1/2는 파일 호환 패딩) */
 typedef struct {
 	COMM_CFG	comm;
-	PT_DEF	pt;	
-	CT_DEF	ct;
-	ETC_DEF etc;
-	
+	PT_DEF		pt;
+	CT_DEF		ct;
+	ETC_DEF		etc;
+	IO_CFG		iom;
+} SETTINGS_SYS;
+
+#define SETTINGS_SYS_SLOT	0
+#if defined(CH1)
+#define SETTINGS_HAS_SYS(id)	((id) == SETTINGS_SYS_SLOT)
+#else
+#define SETTINGS_HAS_SYS(id)	1
+#endif
+
+typedef struct {
 	PQEVENT pqevt[4];		// 0: OC, 1: sag, 2:swell, 3: Interruption
-	
 	TRANSIENT_DEF	transient[2];
 	uint16_t _r1[12];
-	
 	RECORDER_DEF rcrd[2];
 	uint16_t _r2[12];
-	
 	TREND_DEF	trend[4];
 	uint16_t _r3[4];
-	
 	PQREPORT_DEF pqRpt;	
-	
 	ALARM_DEF	alarm;
-	
-	IO_CFG	iom[2];
+	union {
+		struct {
+			COMM_CFG	comm;
+			PT_DEF		pt;
+			CT_DEF		ct;
+			ETC_DEF		etc;
+			IO_CFG		iom;
+		};
+		uint8_t		_sys_rsv[sizeof(SETTINGS_SYS)];
+	};
 
 //	FLOW_SETTING	f_setting[MAX_FLOW];
 	//uint16_t _r4[9], crc;
@@ -1378,26 +1432,20 @@ typedef struct {
 
 
 typedef struct {
-	int32_t		vgain[2][3];		// phase-to-neutral gain 튜닝, x1
-	int32_t		vppgain[2][3];	// phase-to-phase gain 튜닝, x1
-	int32_t 	igain[2][3];		
-	int32_t		vgainx2[2][3];	// phase-to-neutral gain 튜닝, x2
-	int32_t		Ingain[2];
+	int32_t		vgain[METER_CH_COUNT][3];		// phase-to-neutral gain 튜닝, x1
+	int32_t		vppgain[METER_CH_COUNT][3];	// phase-to-phase gain 튜닝, x1
+	int32_t 	igain[METER_CH_COUNT][3];		
+	int32_t		vgainx2[METER_CH_COUNT][3];	// phase-to-neutral gain 튜닝, x2
+	int32_t		Ingain[METER_CH_COUNT];
 
-	int32_t		wgain[2][3];
-	int32_t		vppgainx2[2][3];// phase-to-phase gain 튜닝, x2
-	int32_t		phcal[2][3];
-	
-	int32_t		fwgain[2][3];
-	int32_t		fwattos[2][3];	
-	int32_t		fvargain[2][3];
-	int32_t		fvaros[1][3];
-	int32_t		fvaros2[1];
+	int32_t		wgain[METER_CH_COUNT][3];
+	int32_t		vppgainx2[METER_CH_COUNT][3];	// phase-to-phase gain 튜닝, x2
+	int32_t		phcal[METER_CH_COUNT][3];
 	float		v_thd_offset;
 	float		i_thd_offset;
-	float		In_offset[2];			// offset 
-	float		In_Slope[2];			// 기울기
-	int32_t		vdcos[2][3], idcos[2][3];	// waveform에서 DC offset 제거위해 사용한다 
+	float		In_offset[METER_CH_COUNT];			// offset 
+	float		In_Slope[METER_CH_COUNT];			// 기울기
+	int32_t		vdcos[METER_CH_COUNT][3], idcos[METER_CH_COUNT][3];	// waveform에서 DC offset 제거위해 사용한다 
 	
 	uint32_t 	hwModel;	// 0: 5A, 1:100mA, 2:10mA, 3:Rogowski
 	uint32_t 	hwVer;	// hw version
@@ -1449,34 +1497,19 @@ typedef struct {
 } DEMAND_LOG;	
 
 
-typedef struct {
-	uint16_t status[2];
-	uint16_t _r[98];
-} GATEWAY_STATUS;
-
-
 // 2018-9-3 이후 버전
 typedef struct {	
-	uint16_t type, dbFlag, subType, r2;
-	uint16_t diStatus[8];	
-	uint32_t piData[8];		// 32bit 데이터
-	uint16_t doStatus[8];	// 6개만 사용, 2개는 예비
-	uint16_t r0[8];				// do Count  증설
+//	uint16_t type, dbFlag, subType, r2;
+	uint16_t diStatus[4];	
+	uint32_t piData[4];		// 32bit 데이터
+//	uint16_t doStatus[8];	// 6개만 사용, 2개는 예비
+//	uint16_t r0[8];				// do Count  증설
 	float    aiData[4];
-	uint16_t aoData[2];
-	uint16_t r1[6];				// do Count  증설
-} IOM_DATA;	
+//	uint16_t aoData[2];
+//	uint16_t r1[6];				// do Count  증설
+} IOM_DATA;
 
-// g7000 mem
-typedef struct {
-	uint16_t modType[4];		// 장착된 module Type(1:Eth, 2:DIO, 3: DIO2)
-	uint16_t modStauts[4];	// 장착된 module 통신상태
-	uint16_t dbStatus[4];		// db download 상태
-	uint16_t modSubType[4];	// 2018-4-17 추가
-	uint16_t r0[4];
-	IOM_DATA io[2];
-} EXT_IO_DATA;
-
+/* g7000: 예전 EXT_IO_DATA 래퍼는 제거됨. 채널별 I/O 스냅샷은 METER_DEF.iom (IOM_DATA)만 사용. */
 
 // IO_MODULE Memory Map
 typedef struct {
@@ -1864,26 +1897,29 @@ typedef struct {
 } RING_BUF2;
 
 typedef struct {
-	METERING	meter;
+	METERING	meter;		// 0
 	ENERGY	egy;
 	DEMAND	dm;	
 	VQDATA  vq;
 	EN50160	rpt[2];
 	HARMONICS hd;
 	INTERHARMONICS interhd;
-	WAVEFORM_L16 wv;
-	MAXMIN	maxmin;	
-	ALARM_STATUS alarm;
+	MAXMIN	maxmin;	// 3600	
+	ALARM_STATUS alarm;	// 3800
 	ALARM_LIST alist;	// 4200
 	EVENT_LIST elist;	// 4500
 	PQ_EVENT_COUNT pqEvtCnt;	// 4890
+	WAVEFORM_L16 wv;
 	LOG_DATA	 log;			// 4900
 	ENERGY_LOG	elog[2];// 5200
 	DEMAND_LOG	dlog;		// 5600 - last da demand log
 	//SAMPLE_BUF sample;	// 5800	- reserved area
 	MAXMIN	lastmaxmin;	// 5800
-	GATEWAY_STATUS gwst;// 6000
-	EXT_IO_DATA iom;		// 6100
+
+	ITIC_EVT_LIST	itic;	// 7400
+	ITIC_EVT_LIST	itic2;// 8000
+//	uint16_t			resv[1400];
+    IOM_DATA iom;		// 6100
 	METER_INFO info;		// 6240
 	SETTINGS	setting;	// 6300
 //	uint16_t 	_r[10];
@@ -1891,17 +1927,14 @@ typedef struct {
 	COMMANDS	cmds;			// 6950
 //	FLOW_DATA	flowMeter;
 //
-#if 1	// 2025-3-12, ITIC -> reseved
-	ITIC_EVT_LIST	itic;	// 7400
-	ITIC_EVT_LIST	itic2;// 8000
-//	uint16_t			resv[1400];
-#endif
+
 	EVENT_FIFO 	eventFifo;
 	ALARM_FIFO	alarmFifo;	
 
 	CNTL_DATA cntl;
 	METER_CAL	cal;
 	QualLogData	qdLog;
+	EVENT_Q		eventQ;	// 10분 PQ 품질 리포트용 채널별 이벤트 큐
 	//ENERGY_NVRAM egyNvr;
 	SETTINGS	db;	// loadSettings을 통해 읽는다 
 	float		almCnt;
@@ -1991,6 +2024,9 @@ typedef struct {
 #define Tid_Energy		6
 #define	Tid_Meter		7
 #define	Tid_Meter2		8
+#ifdef CH3
+#define	Tid_Meter3		16
+#endif
 #define Tid_Fs 			9
 #define Tid_Trend		10
 #define Tid_Iom			11
@@ -2021,6 +2057,9 @@ extern SETTINGS		db[];
 extern SETTINGS		setting[];
 extern METERING 	*pmeter;
 extern SETTINGS		*pdb, *pdbk, *pdb2, *pdbk2;
+#if METER_CH_COUNT > 2
+extern SETTINGS		*pdb3, *pdbk3;
+#endif
 extern METER_INFO *pInfo;
 //extern CMD_AREA 	*pcmd;
 //extern UTIL_AREA	*putil;
@@ -2030,7 +2069,6 @@ extern HARMONICS  *pHD;
 extern DEMAND			*pdm;
 extern DEMAND_LOG	*pdmlog;
 
-extern EVENT_FIFO	*pEvtFifo;
 extern ALARM_FIFO *pAlmFifo;
 
 extern VQDATA     *pVQ;
@@ -2039,18 +2077,13 @@ extern WAVEFORM_L16	*pWFL16;
 extern ALARM_STATUS *palm;
 extern ALARM_LIST	*palist;
 extern EVENT_LIST	*pelist;
-extern ITIC_EVT_LIST *piticlist;
-extern ITIC_EVT_LIST *piticlist2;
-extern PQ_EVENT_COUNT *ppqEvtCnt;
 //extern ALARM_LOG  *palog;
 //extern ALARM_LOG  *pevt;
 //extern ALARM_SET  *paset;
 //extern FRAM_ENERGY1 *pfEnergy1;
 //extern FRAM_ENERGY2 *pfEnergy2;
 //extern FRAM_DEMAND	*pfDemand;
-extern EXT_IO_DATA *piom;
-//extern EXT_IO_SOE  *psoe;
-extern GATEWAY_STATUS	*pgwst;
+extern IOM_DATA *piom;
 extern COMM_CFG *pComm;
 extern IO_CFG	*piocfg;
 //extern EXT_MOD_CFG *piocfg, *piobk;
@@ -2061,8 +2094,8 @@ extern EN50160 *pRPT;
 extern LOG_DATA	*pld;
 
 
-extern WAVE_8K_BUF wbFFT8k[2];
-extern WAVE_PGBUF	wQ[2];
+extern WAVE_8K_BUF wbFFT8k[METER_CH_COUNT];
+extern WAVE_PGBUF	wQ[METER_CH_COUNT];
 //extern WAVE8k_PGBUF	 w8kQ;
 extern WAVE_32K_BUF wbCap32k[];
 //extern WAVE32k_PGBUF w32kQ;
@@ -2073,8 +2106,6 @@ extern FAST_RMS_BUF rmsWin;
 
 extern DAQ_BUF	daq;
 
-//extern ITIC_EVENT_BUF *pitic;
-
 extern void copySummary(void);
 
 extern int loadSettings(SETTINGS	*pdb);
@@ -2084,7 +2115,7 @@ extern void initWv1024Buf();
 extern int loadHwSettings(METER_CAL *pcal);
 extern void storeHwSettings(METER_CAL *pcal);
 extern int pushEvent(int id, PQ_EVENT_INFO *pInf);
-extern void clearEventList();
+extern void clearEventList(int id);
 extern void updateEventCount(int mask, uint32_t *ec);
 
 //extern void tickSet(uint32_t time, int mode);
@@ -2097,12 +2128,23 @@ extern void clearIticFile();
 extern uint32_t sysTick32, sysTick1s, sysTick10s, sysTick10m, sysTick15m, sysTickDemand, WM_tick32;
 extern uint64_t sysTick64;
 
-extern void fetchEvent(int);
+extern void fetchEvent(int id, int cmd);
 extern void fetchAlarm(int);
-extern void fetchItic(int);
-extern void fetchItic2(int);
+extern void fetchItic(int id, int cmd);
+extern void fetchItic2(int id, int cmd);
 // 2025-3-25
 extern void setMeterIpAddr(uint32_t);
 extern void getMeterIpAddr(uint8_t *);
+
+/* PQ / EN50160 품질 로그 — 채널별 meter[id].qdLog */
+extern void initPQHeader(int id);
+extern int updateQualData(int id);
+extern void writeLogData(int id, uint32_t ts);
+extern void timeStampChanged(void);
+extern uint32_t getQualWeekEndTs(CNTL_DATA *pcntl);
+extern void updateQualReport(int meterIdx, QualWeek *pqw, int pos);
+extern void getQualLogFN(char *path, int id);
+extern void getQualWeekFN(char *path, int id);
+extern void getQualLastWeekFN(char *path, int id);
 
 #endif

@@ -838,7 +838,7 @@ void scanTemp() {
 			printf("ADC0_%d R Read Error\n", ch + 1);
 	}
 	
-	printf("temp: %d %d %d %d\n", temp[0], temp[1], temp[2], temp[3]);
+//	printf("temp: %d %d %d %d\n", temp[0], temp[1], temp[2], temp[3]);
 }
 
 #ifdef __RTX

@@ -1128,8 +1128,8 @@ void readTemp(uint8_t id) {
 	
 	// read temp_result
 	read_reg16(id, 0x4b7, &wtemp);
-	pmeter->Temp = (wtemp & 0xfff) * gain + os;
-	//printf("readTemp : (%f)\n", pmeter->Temp);
+	meter[id].meter.Temp = (wtemp & 0xfff) * gain + os;
+	//printf("readTemp : (%f)\n", meter[id].meter.Temp);
 	
 	// restart
 	wtemp = (1<<3) | (1<<2) | (2);	// start, enable, temp_time
@@ -2608,13 +2608,25 @@ void checkPqEvent(int id) {
 // long  interruption : 5%(11V), > 60s
 uint64_t ts_irq[2], ts_delta[2];
 
+/* meter_scan_2(M1/M2): CH3 시 M1↔M2 RR + PQM 비트 17/19/21 슬라이스.
+ * W1C는 stat0_snap 전체로 클리어 — 미처리 비트를 W1C에서 빼면 ZX/IRQ 연쇄 타임아웃. */
+#define AD9X_PQM_STAT0_SLICED  ((1u << 17) | (1u << 19) | (1u << 21))
+static uint8_t m12_pq_slice[METER_CH_COUNT];
+#ifdef CH3
+static uint8_t m12_pq_rr_owner = 1;
+#endif
+
 void meter_scan_2(uint8_t id)
 {
 	uint32_t chipId, flag, zxtMask;
 	uint16_t version, runCmd=0, wtemp, fr;
-	uint32_t rms, stat0, stat1, vlevel, dtemp, i, cnt=0, mask;
+	uint32_t rms, stat0, stat0_snap, stat1, vlevel, dtemp, i, cnt=0, mask;
 	void *msg;
 	uint64_t tick64, zxTo;
+
+	if (id >= METER_CH_COUNT)
+		return;
+
 #ifdef __FREERTOS		
 	uint32_t ulNotificationValue;
 	if (xTaskNotifyWait(0, 0xFFFFFFFF, &ulNotificationValue, pdMS_TO_TICKS(20)) == 0)
@@ -2635,25 +2647,42 @@ void meter_scan_2(uint8_t id)
  
 	tick64 = sysTick64;
 	read_reg32(id, AD9X_STATUS0, &stat0);	
-	read_reg32(id, AD9X_STATUS1, &stat1);	
+	read_reg32(id, AD9X_STATUS1, &stat1);
+	stat0_snap = stat0;
+
 	// Energy READY, period = 1s
 	if (stat0 & (1<<0)) {
 		readEnergy(id);
-	}			
-	// capture Wave Form
-	if (stat0 & (1<<17)) {
-		//(id ==0) ? readWFB32k_Data(id) : readWFB8k_Data(id);
-		readWFB32k_Data(id);		
 	}
-	// RMS 1 cycle 
-	if (stat0 & (1<<19)) {
-		readPeriod(id);
-		readPhaseFastRMS(id);
-		checkPqEvent(id);
+	/* PQM: CH3 M1↔M2 RR + 17/19/21 슬라이스(핸들러만 게이트) */
+#ifdef CH3
+	if (id != m12_pq_rr_owner) {
+		/* 상대 미터 슬롯: PQM SPI 생략 */
+	} else
+#endif
+	{
+		unsigned sl = (unsigned)m12_pq_slice[id] % 3u;
+
+		if ((stat0 & (1u << 17)) && sl == 0u) {
+			readWFB32k_Data(id);
+		}
+		if ((stat0 & (1u << 19)) && sl == 1u) {
+			readPeriod(id);
+			readPhaseFastRMS(id);
+			checkPqEvent(id);
+		}
+		if ((stat0 & (1u << 21)) && sl == 2u) {
+			readPhaseTHD(id);
+		}
+
+		m12_pq_slice[id] = (uint8_t)(((unsigned)m12_pq_slice[id] + 1u) % 3u);
+
+#ifdef CH3
+		m12_pq_rr_owner = (uint8_t)((id == 1) ? 2 : 1);
+#endif
 	}
 	
 	// RMS 10/12 cycle
-	// 전압은 12 cycle(200ms) 간격으로 수집, (zero cross와 관계 없다)
 	if (stat0 & (1<<20)) {
 		readRmsAngle(id);
 	}
@@ -2661,17 +2690,12 @@ void meter_scan_2(uint8_t id)
 	if (stat0 & (1<<18)) {
 		readPhasePower(id);
 	}	
-	// THD READY
-	if (stat0 & (1<<21)) {
-		readPhaseTHD(id);
-		//printf("IRQ: THD & PF ...\n");
-	}				
 	
 	if (stat0 & (1<<25)) {
 		readTemp(id);
 	}
-	// clear status0
-	write_reg32(id, AD9X_STATUS0, &stat0);		
+	// clear status0 (읽은 시점 래치 전부 — PQM 핸들러 생략 시에도 ZX/IRQ 유지)
+	write_reg32(id, AD9X_STATUS0, &stat0_snap);		
 	
 	//
 	//--------------------------------------------------------------------------------
