@@ -80,7 +80,7 @@
 // <e>SPI Flash Drive
 // ==================
 // <i>Enable SPI Flash Drive [S:]
-#ifdef CH3
+#ifdef NOSDMEM
 /* CH3: SPIFI 외부 NOR 2MB → RL-FlashFS [S:] 기본 드라이브 */
 #define SF0_EN      1
 #else
@@ -104,7 +104,7 @@
 
 //   <q>Default Drive [S:]
 //   <i>Used when Drive letter not specified
-#ifdef CH3
+#ifdef NOSDMEM
 #define SF0_DEF     1
 #else
 #define SF0_DEF     0
@@ -145,7 +145,7 @@
 // <e>Memory Card Drive 0
 // ======================
 // <i>Enable Memory Card Drive  [M0:]
-#ifdef CH3
+#ifdef NOSDMEM
 #define MC0_EN      0
 #else
 #define MC0_EN      1
@@ -184,7 +184,7 @@
 
 //   <q>Default Drive [M0:]
 //   <i>Used when Drive letter not specified
-#ifdef CH3
+#ifdef NOSDMEM
 #define MC0_DEF     0
 #else
 #define MC0_DEF     1

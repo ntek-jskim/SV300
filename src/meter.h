@@ -827,17 +827,22 @@ typedef struct {
 
 typedef struct {
 	uint16_t	wiring;	// 0:3p4w(3LN,3CT), 1:3p3W(2CT):2LL,2CT, 2:3P3W(3CT):2LL,3CT, 3:1P2W, 4: 1P3W 5 : Simulation
-	uint32_t	vnorm;
+	uint16_t	_r0;	/* fd[0] padding */
+	uint32_t	vnorm;	/* fd[0].vnorm 와 동일 */
 	uint32_t	PT1;
 	uint16_t	PT2;
-	uint16_t	r1[2];	
-} PT_CH;
+	uint16_t	r1;
+} PT_CH;	/* 16 bytes: wiring, _r0, vnorm, PT1, PT2, r1 */
 
 typedef struct {
 	uint16_t	freq;	// 0:60, 1:50
-	PT_CH		fd[9];
-	uint16_t	r1;	
-} PT_DEF;
+	uint16_t	feeder_cnt;
+	PT_CH		fd[9];	/* 피더별 PT (Modbus 9워드/피더 레이아웃) */
+} PT_DEF;	/* 4 + 9*16 = 148 bytes (컴파일러 패딩에 따라 달라질 수 있음) */
+
+#ifndef PT_PRIMARY_IDX
+#define PT_PRIMARY_IDX	0	/* 기존 단일 PT 로직: fd[0] 대표 */
+#endif
 
 typedef struct {
 	uint16_t	inorm;

@@ -228,21 +228,22 @@ void build_cal_db1(void)
 {
 	int id=0;
 	// Volt.
-	meter[id].setting.pt.wiring = 0;	// 3P4W, 3P3W(2), 3P3W(3)
+	meter[id].setting.pt.feeder_cnt = 3;
+	meter[id].setting.pt.fd[0].wiring = 0;	// 3P4W, 3P3W(2), 3P3W(3)
 	meter[id].setting.pt.freq = 60;	// 60Hz
-	meter[id].setting.pt.vnorm = 220;	
-	meter[id].setting.pt.PT1 = 220;
-	meter[id].setting.pt.PT2 = 220;
+	meter[id].setting.pt.fd[0].vnorm = 220;	
+	meter[id].setting.pt.fd[0].PT1 = 220;
+	meter[id].setting.pt.fd[0].PT2 = 220;
 	meter[id].setting.ct.inorm = 100;
 	meter[id].setting.ct.CT1 = 100;
 	meter[id].setting.ct.CT2 = 1;		// 5A CT
 	meter[id].setting.ct.zctScale = 1000;	// 2nd scale
 	meter[id].setting.ct.zctType = 1;
-	// db[id].pt.wiring = 0;	// 3P4W, 3P3W(2), 3P3W(3)
+	// db[id].pt.fd[0].wiring = 0;	// 3P4W, 3P3W(2), 3P3W(3)
 	// db[id].pt.freq = 60;	// 60Hz
-	// db[id].pt.vnorm = 220;	
-	// db[id].pt.PT1 = 220;
-	// db[id].pt.PT2 = 220;
+	// db[id].pt.fd[0].vnorm = 220;	
+	// db[id].pt.fd[0].PT1 = 220;
+	// db[id].pt.fd[0].PT2 = 220;
 	// db[id].ct.inorm = 100;
 	// db[id].ct.CT1 = 100;
 	// db[id].ct.CT2 = 1;		// 5A CT
@@ -250,11 +251,12 @@ void build_cal_db1(void)
 	// db[id].ct.zctType = 1;
 	
 	id = 1;
-	meter[id].setting.pt.wiring = 0;	// 3P4W, 3P3W(2), 3P3W(3)
+	meter[id].setting.pt.feeder_cnt = 1;
+	meter[id].setting.pt.fd[0].wiring = 0;	// 3P4W, 3P3W(2), 3P3W(3)
 	meter[id].setting.pt.freq = 60;	// 60Hz
-	meter[id].setting.pt.vnorm = 220;	
-	meter[id].setting.pt.PT1 = 220;
-	meter[id].setting.pt.PT2 = 220;
+	meter[id].setting.pt.fd[0].vnorm = 220;	
+	meter[id].setting.pt.fd[0].PT1 = 220;
+	meter[id].setting.pt.fd[0].PT2 = 220;
 	meter[id].setting.ct.inorm = 100;
 	meter[id].setting.ct.CT1 = 100;
 	meter[id].setting.ct.CT2 = 1;		// 5A CT
@@ -267,11 +269,12 @@ void build_cal_db2(void)
 {
 	int id=0;
 	// Volt.
-	meter[id].setting.pt.wiring = 1;	// 3P4W, 3P3W(2), 3P3W(3)
+	meter[id].setting.pt.feeder_cnt = 1;
+	meter[id].setting.pt.fd[0].wiring = 1;	// 3P4W, 3P3W(2), 3P3W(3)
 	meter[id].setting.pt.freq = 60;	// 60Hz
-	meter[id].setting.pt.vnorm = 220;	
-	meter[id].setting.pt.PT1 = 220;
-	meter[id].setting.pt.PT2 = 220;
+	meter[id].setting.pt.fd[0].vnorm = 220;	
+	meter[id].setting.pt.fd[0].PT1 = 220;
+	meter[id].setting.pt.fd[0].PT2 = 220;
 	meter[id].setting.ct.inorm = 100;
 	meter[id].setting.ct.CT1 = 100;
 	meter[id].setting.ct.CT2 = 1;		// 5A CT
@@ -279,11 +282,12 @@ void build_cal_db2(void)
 	meter[id].setting.ct.zctType = 1;
 	
 	id = 1;
-	meter[id].setting.pt.wiring = 1;	// 3P4W, 3P3W(2), 3P3W(3)
+	meter[id].setting.pt.feeder_cnt = 1;
+	meter[id].setting.pt.fd[0].wiring = 1;	// 3P4W, 3P3W(2), 3P3W(3)
 	meter[id].setting.pt.freq = 60;	// 60Hz
-	meter[id].setting.pt.vnorm = 220;	
-	meter[id].setting.pt.PT1 = 220;
-	meter[id].setting.pt.PT2 = 220;
+	meter[id].setting.pt.fd[0].vnorm = 220;	
+	meter[id].setting.pt.fd[0].PT1 = 220;
+	meter[id].setting.pt.fd[0].PT2 = 220;
 	meter[id].setting.ct.inorm = 100;
 	meter[id].setting.ct.CT1 = 100;
 	meter[id].setting.ct.CT2 = 1;		// 5A CT
@@ -296,21 +300,22 @@ void build_cal_db3(void)
 {
 	int id=0;
 	// Volt.
-	meter[id].setting.pt.wiring = 0;	// 3P4W, 3P3W(2), 3P3W(3)
+	meter[id].setting.pt.feeder_cnt = 1;
+	meter[id].setting.pt.fd[0].wiring = 0;	// 3P4W, 3P3W(2), 3P3W(3)
 	meter[id].setting.pt.freq = 60;	// 60Hz
-	meter[id].setting.pt.vnorm = 220;	
-	meter[id].setting.pt.PT1 = 220;
-	meter[id].setting.pt.PT2 = 220;
+	meter[id].setting.pt.fd[0].vnorm = 220;	
+	meter[id].setting.pt.fd[0].PT1 = 220;
+	meter[id].setting.pt.fd[0].PT2 = 220;
 	meter[id].setting.ct.inorm = 250;
 	meter[id].setting.ct.CT1 = 250;
 	meter[id].setting.ct.CT2 = 1;		// 5A CT
 	meter[id].setting.ct.zctScale = 1250;	// 2nd scale
 	meter[id].setting.ct.zctType = 1;
-	// db[id].pt.wiring = 0;	// 3P4W, 3P3W(2), 3P3W(3)
+	// db[id].pt.fd[0].wiring = 0;	// 3P4W, 3P3W(2), 3P3W(3)
 	// db[id].pt.freq = 60;	// 60Hz
-	// db[id].pt.vnorm = 220;	
-	// db[id].pt.PT1 = 220;
-	// db[id].pt.PT2 = 220;
+	// db[id].pt.fd[0].vnorm = 220;	
+	// db[id].pt.fd[0].PT1 = 220;
+	// db[id].pt.fd[0].PT2 = 220;
 	// db[id].ct.inorm = 100;
 	// db[id].ct.CT1 = 100;
 	// db[id].ct.CT2 = 1;		// 5A CT
@@ -318,11 +323,12 @@ void build_cal_db3(void)
 	// db[id].ct.zctType = 1;
 	
 	id = 1;
-	meter[id].setting.pt.wiring = 0;	// 3P4W, 3P3W(2), 3P3W(3)
+	meter[id].setting.pt.feeder_cnt = 1;
+	meter[id].setting.pt.fd[0].wiring = 0;	// 3P4W, 3P3W(2), 3P3W(3)
 	meter[id].setting.pt.freq = 60;	// 60Hz
-	meter[id].setting.pt.vnorm = 220;	
-	meter[id].setting.pt.PT1 = 220;
-	meter[id].setting.pt.PT2 = 220;
+	meter[id].setting.pt.fd[0].vnorm = 220;	
+	meter[id].setting.pt.fd[0].PT1 = 220;
+	meter[id].setting.pt.fd[0].PT2 = 220;
 	meter[id].setting.ct.inorm = 250;
 	meter[id].setting.ct.CT1 = 250;
 	meter[id].setting.ct.CT2 = 1;		// 5A CT
@@ -335,11 +341,12 @@ void build_set_db(void)
 {
 	int id=0;
 	// Volt.
-	meter[id].setting.pt.wiring = 1;	// 3P3W
+	meter[id].setting.pt.feeder_cnt = 1;
+	meter[id].setting.pt.fd[0].wiring = 1;	// 3P3W
 	meter[id].setting.pt.freq = 60;	// 60Hz
-	meter[id].setting.pt.vnorm = 220;	
-	meter[id].setting.pt.PT1 = 220;
-	meter[id].setting.pt.PT2 = 220;
+	meter[id].setting.pt.fd[0].vnorm = 220;	
+	meter[id].setting.pt.fd[0].PT1 = 220;
+	meter[id].setting.pt.fd[0].PT2 = 220;
 	meter[id].setting.ct.inorm = 100;
 	meter[id].setting.ct.CT1 = 100;
 	meter[id].setting.ct.CT2 = 1;		// 5A CT
@@ -347,11 +354,12 @@ void build_set_db(void)
 	meter[id].setting.ct.zctType = 1;
 	
 	id = 1;
-	meter[id].setting.pt.wiring = 2;	// 1P2W
+	meter[id].setting.pt.feeder_cnt = 1;
+	meter[id].setting.pt.fd[0].wiring = 2;	// 1P2W
 	meter[id].setting.pt.freq = 60;	// 60Hz
-	meter[id].setting.pt.vnorm = 220;	
-	meter[id].setting.pt.PT1 = 220;
-	meter[id].setting.pt.PT2 = 220;
+	meter[id].setting.pt.fd[0].vnorm = 220;	
+	meter[id].setting.pt.fd[0].PT1 = 220;
+	meter[id].setting.pt.fd[0].PT2 = 220;
 	meter[id].setting.ct.inorm = 100;
 	meter[id].setting.ct.CT1 = 100;
 	meter[id].setting.ct.CT2 = 1;		// 5A CT
@@ -365,11 +373,12 @@ void build_set_db(void)
 
 #if METER_CH_COUNT > 2
 	id = 2;
-	meter[id].setting.pt.wiring = 2;	/* 1P2W, M1과 동일 */
+	meter[id].setting.pt.feeder_cnt = 1;
+	meter[id].setting.pt.fd[0].wiring = 2;	/* 1P2W, M1과 동일 */
 	meter[id].setting.pt.freq = 60;
-	meter[id].setting.pt.vnorm = 220;
-	meter[id].setting.pt.PT1 = 220;
-	meter[id].setting.pt.PT2 = 220;
+	meter[id].setting.pt.fd[0].vnorm = 220;
+	meter[id].setting.pt.fd[0].PT1 = 220;
+	meter[id].setting.pt.fd[0].PT2 = 220;
 	meter[id].setting.ct.inorm = 100;
 	meter[id].setting.ct.CT1 = 100;
 	meter[id].setting.ct.CT2 = 1;
@@ -437,11 +446,12 @@ int initSettings(int id)
 	db[id].etc.timezone = 540;	//60 * 9
 	
 	// Volt.
-	db[id].pt.wiring = 0;	// 3P4W
+	db[id].pt.fd[0].wiring = 0;	// 3P4W
 	db[id].pt.freq = 60;	// 60Hz
-	db[id].pt.vnorm = 220;	
-	db[id].pt.PT1 = 220;
-	db[id].pt.PT2 = 220;
+	db[id].pt.feeder_cnt = 1;
+	db[id].pt.fd[0].vnorm = 220;	
+	db[id].pt.fd[0].PT1 = 220;
+	db[id].pt.fd[0].PT2 = 220;
 	
 	// Current
 	if(id == 0) {
@@ -520,7 +530,7 @@ int buildSettings(int id)
 	float ptratio;
 	CNTL_DATA	*_pcntl = &meter[id].cntl;
 
-	meter[id].meter.vType = (uint16_t)db[id].pt.wiring;
+	meter[id].meter.vType = (uint16_t)db[id].pt.fd[0].wiring;
 	
 	if (db[id].comm.devId > 250) {
 		printf("*** Invalid devId = %d\n", db[id].comm.devId);
@@ -533,8 +543,8 @@ int buildSettings(int id)
 	}
 	
 	//if (db[id].wiring > WM_3LL3CT) {
-	if (db[id].pt.wiring > WM_3LL2CT) {
-		printf("*** Invalid wiring mode = %d\n", db[id].pt.wiring);
+	if (db[id].pt.fd[0].wiring > WM_3LL2CT) {
+		printf("*** Invalid wiring mode = %d\n", db[id].pt.fd[0].wiring);
 		ret = -1;
 	}
 	
@@ -556,7 +566,7 @@ int buildSettings(int id)
 	meter[id].cntl.wh_scale = 2;	// 전압이 1/2이므로 wh를 2배한다 
 	meter[id].cntl.pthreshold = getThresHold(db[id].ct.CT2);
 	// 2021-7-7, pt ration 구하는 과정에서 정수비가 아닌경우 오류 발생함.// 	
-	ptratio = (float)db[id].pt.PT1/db[id].pt.PT2;	
+	ptratio = (float)db[id].pt.fd[0].PT1/db[id].pt.fd[0].PT2;	
 	meter[id].cntl.vscale    = (V_FULL/RMS_MAX) *ptratio/2;
 	meter[id].cntl.wv_vscale = (V_FULL/WAVE_MAX)*ptratio/2; //(V_FULL/WAVE_MAX)/2;	
 	meter[id].cntl.wscale    = (V_FULL)*(ptratio)/2;
@@ -723,10 +733,10 @@ int buildSettings(int id)
 	meter[id].cntl.freqLo[1] = db[id].pt.freq - db[id].pt.freq*0.06;
 	meter[id].cntl.freqHi[1] = db[id].pt.freq + db[id].pt.freq*0.04;
 	
-	meter[id].cntl.uLo[0] = db[id].pt.vnorm - db[id].pt.vnorm*0.1;
-	meter[id].cntl.uHi[0] = db[id].pt.vnorm + db[id].pt.vnorm*0.1;
-	meter[id].cntl.uLo[1] = db[id].pt.vnorm - db[id].pt.vnorm*0.15;
-	meter[id].cntl.uHi[1] = db[id].pt.vnorm + db[id].pt.vnorm*0.1;	
+	meter[id].cntl.uLo[0] = db[id].pt.fd[0].vnorm - db[id].pt.fd[0].vnorm*0.1;
+	meter[id].cntl.uHi[0] = db[id].pt.fd[0].vnorm + db[id].pt.fd[0].vnorm*0.1;
+	meter[id].cntl.uLo[1] = db[id].pt.fd[0].vnorm - db[id].pt.fd[0].vnorm*0.15;
+	meter[id].cntl.uHi[1] = db[id].pt.fd[0].vnorm + db[id].pt.fd[0].vnorm*0.1;	
 	
 			
 // initSag 호출하는 부분으로 이동	
@@ -1337,11 +1347,11 @@ void initTransientTrigger(int id) {
 	TS_CNTL *ptvc = &tvCntl;
 	TS_CNTL *ptcc = &tcCntl;	
 	int normraw;	// overflow 조심해야 ....
-	float rev_ptratio = (float)db[id].pt.PT2/db[id].pt.PT1;
-	float ptratio = (float)db[id].pt.PT1/db[id].pt.PT2;
+	float rev_ptratio = (float)db[id].pt.fd[0].PT2/db[id].pt.fd[0].PT1;
+	float ptratio = (float)db[id].pt.fd[0].PT1/db[id].pt.fd[0].PT2;
 		
 	// rms 단위로 peaklevel 계산하고, peak levelpeak 전압은 계측된값에 sqrt(2)를 곱한다 
-	normraw = (WAVE_MAX/V_FULL)*(1<<meter[id].cntl.pga_vgain)*(db[id].pt.vnorm*rev_ptratio);	
+	normraw = (WAVE_MAX/V_FULL)*(1<<meter[id].cntl.pga_vgain)*(db[id].pt.fd[0].vnorm*rev_ptratio);	
 	ptvc->peakLevel = (db[id].transient[0].level < 120) ? 0 : normraw*(db[id].transient[0].level/100.);	
 	ptvc->rocLevel  = (db[id].transient[0].fastChange == 0) ? WAVE_MAX : normraw*(db[id].transient[0].fastChange/100.*31.25);
 	ptvc->rscale    = V_FULL/WAVE_MAX*SQRT_2*ptratio;
@@ -2009,7 +2019,7 @@ void copyModbusWaveData(int id) {
 	}
 	// Modbus Wave영역으로 데이터 복사
 	// 16bit로 Down Scale 위해 scale factor 곱한다	
-	if (db[id].pt.wiring == WM_3LL3CT || db[id].pt.wiring == WM_3LL2CT) {		
+	if (db[id].pt.fd[0].wiring == WM_3LL3CT || db[id].pt.fd[0].wiring == WM_3LL2CT) {		
 		for (i=0, dx=ix; i<160; i++, dx+=2) meter[id].wv.U[0][i] =  wv->w[0][dx]*vscl[0];
 		for (i=0, dx=ix; i<160; i++, dx+=2) meter[id].wv.U[1][i] = -wv->w[2][dx]*vscl[2];
 		for (i=0, dx=ix; i<160; i++, dx+=2) meter[id].wv.U[2][i] =  wv->w[1][dx]*vscl[1];
@@ -2029,7 +2039,7 @@ void copyModbusWaveData(int id) {
 	}		
 	
 	// 3P4W 이면 선간 전압파형 계산한다 
-	if (db[id].pt.wiring == WM_3LN3CT) {
+	if (db[id].pt.fd[0].wiring == WM_3LN3CT) {
 		// cal. Upp
 		for (j=0; j<3; j++) {
 			k = (j+1)%3;
@@ -2087,10 +2097,10 @@ int copyGUIWaveData(int id,int sel) {
 	}	
 	
 	// 
-	// vscale = (V_FULL/RMS_MAX)*(db[id].pt.PT1/db[id].pt.PT2)/4;
+	// vscale = (V_FULL/RMS_MAX)*(db[id].pt.fd[0].PT1/db[id].pt.fd[0].PT2)/4;
 	// GUI Wave영역으로 데이터 복사
 	if (sel == 0 || sel == 1) {
-		if (db[id].pt.wiring == WM_3LL3CT || db[id].pt.wiring == WM_3LL2CT) {
+		if (db[id].pt.fd[0].wiring == WM_3LL3CT || db[id].pt.fd[0].wiring == WM_3LL2CT) {
 			pwvgui->Umax[0] = pwvgui->Umax[1] = pwvgui->Umax[2] = 0;
 		
 			j = 0;
@@ -2130,7 +2140,7 @@ int copyGUIWaveData(int id,int sel) {
 		}
 		
 		if (sel == 1) {
-			if (db[id].pt.wiring == WM_3LL3CT || db[id].pt.wiring == WM_3LL2CT) {
+			if (db[id].pt.fd[0].wiring == WM_3LL3CT || db[id].pt.fd[0].wiring == WM_3LL2CT) {
 				// cal. Upp	
 				for (j=0; j<3; j++) {				
 					pwvgui->UppMax[j] = 0;
@@ -3582,7 +3592,7 @@ void energy_scan(int id, METER_EH_REGS *ereg, ENERGY_NVRAM *pEgyNvr) {
 		meter[id].cntl.vah[i]  = vah;
 		
 		//wiring모드에 따라 불 필요한 항목 지운다		
-		switch(db[id].pt.wiring){
+		switch(db[id].pt.fd[0].wiring){
 		//1CT:2,3을지운다
 		case WM_1LN1CT:
 			if (i != 0) wh = varh = vah = 0;
@@ -3611,7 +3621,7 @@ void energy_scan(int id, METER_EH_REGS *ereg, ENERGY_NVRAM *pEgyNvr) {
 	//noload,16-10-12
 	meter[id].cntl.dtP = scaleEnergy(id, es[0]);
 	meter[id].cntl.dtQ = scaleEnergy(id, es[1]);		
-	if (db[id].pt.wiring == WM_3LL3CT || db[id].pt.wiring == WM_3LL2CT)  
+	if (db[id].pt.fd[0].wiring == WM_3LL3CT || db[id].pt.fd[0].wiring == WM_3LL2CT)  
 		meter[id].cntl.dtS = scaleEnergy(id,es[2])*SQRT_3/2;
 	else
 		meter[id].cntl.dtS = scaleEnergy(id,es[2]);
@@ -3799,7 +3809,7 @@ int pushEvent(int id, PQ_EVENT_INFO *pInf) {
 			for (i=0; i<3; i++) {
 				pilog->level[i] = scaleVrms(id, pInf->Val[i]);
 			}	
-			pilog->norm = db[id].pt.PT1;
+			pilog->norm = db[id].pt.fd[0].PT1;
 			break;
 			
 		case E_OC:
@@ -3813,7 +3823,7 @@ int pushEvent(int id, PQ_EVENT_INFO *pInf) {
 			for (i=0; i<3; i++) {
 				pilog->level[i] = scaleVWave(pInf->Val[i]);	// 값
 			}	
-			pilog->norm = db[id].pt.PT1;
+			pilog->norm = db[id].pt.fd[0].PT1;
 			break;
 		case E_TrC:
 			for (i=0; i<3; i++) {
@@ -4007,7 +4017,7 @@ void RMSLog_Task(void *arg)
 // 전압이 sag 시작 조건(모든 전압이 sag limit 보다 커야한다)
 int checkSagVolt(int id) {
 	int i, ret=1;
-	float	level = db[id].pt.vnorm*db[id].pqevt[PQE_SAG].level/100.;
+	float	level = db[id].pt.fd[0].vnorm*db[id].pqevt[PQE_SAG].level/100.;
 	
 	for (i=0; i<3; i++) {
 		if (meter[id].cntl.U[i] < level) {	// level 보다 작으면 false
@@ -4024,7 +4034,7 @@ int checkSagCond(int id) {
 
 int checkSwellVolt(int id) {
 	int i, ret=1;
-	float	level = db[id].pt.vnorm*db[id].pqevt[PQE_SWELL].level/100.;
+	float	level = db[id].pt.fd[0].vnorm*db[id].pqevt[PQE_SWELL].level/100.;
 	
 	for (i=0; i<3; i++) {
 		if (meter[id].cntl.U[i] > level) {	// level 보다 크면 false

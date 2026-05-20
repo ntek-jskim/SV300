@@ -1,8 +1,9 @@
 /*----------------------------------------------------------------------------
- * CH3: LPC4357 SPIFI 외부 NOR + NXP ROM SPIFI API → RL-FlashFS sf0_drv [S:]
+ * CH3 + SPIFI: LPC4357 외부 NOR + NXP ROM SPIFI API → RL-FlashFS sf0_drv [S:]
  * 보드: SPI 핀·클럭은 Board_SystemInit / Board_SPIFI_FlashPinInit 에서 설정됨.
+ * NOSDMEM 정의 시 이 드라이브는 컴파일에서 제외된다.
  *---------------------------------------------------------------------------*/
-#ifdef CH3
+#ifdef NOSDMEM
 
 #include <RTL.h>
 #include <string.h>
@@ -141,4 +142,4 @@ EFS_DRV sf0_drv = {
 	NULL /* EraseChip: 전칩 소거 미사용(SF0 일부 영역만 FAT 일 때) */
 };
 
-#endif /* CH3 */
+#endif /* NOSDMEM */

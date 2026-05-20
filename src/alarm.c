@@ -11,7 +11,6 @@
 #include "meter.h"
 #include "alarm.h"
 
-extern METER_DEF meter[2];
 extern int getYear_n_WoY(int doY, int doW);
 extern void assertAlarmOutput(int point, int state);
 	
@@ -40,13 +39,13 @@ void initAlarmTable() {
 	setAlarmChannel(ix++, "Temp.", 100, &pmeter->Temp);
 	setAlarmChannel(ix++, "Freq.", pdb->pt.freq, &pmeter->Freq);
 	// [3..6]
-	temp = pdb->pt.vnorm;
+	temp = pdb->pt.fd[0].vnorm;
 	setAlarmChannel(ix++, "U1",  temp, &pmeter->U[0]);
 	setAlarmChannel(ix++, "U2",  temp, &pmeter->U[1]);
 	setAlarmChannel(ix++, "U3",  temp, &pmeter->U[2]);
 	setAlarmChannel(ix++, "U~",  temp, &pmeter->U[3]);
 	// [7..10]
-	temp = (pdb->pt.wiring == WM_3LN3CT) ? pdb->pt.vnorm*sqrt(3) : pdb->pt.vnorm; 
+	temp = (pdb->pt.fd[0].wiring == WM_3LN3CT) ? pdb->pt.fd[0].vnorm*sqrt(3) : pdb->pt.fd[0].vnorm; 
 	setAlarmChannel(ix++, "U12", temp, &pmeter->Upp[0]);
 	setAlarmChannel(ix++, "U23", temp, &pmeter->Upp[1]);
 	setAlarmChannel(ix++, "U31", temp, &pmeter->Upp[2]);
@@ -64,25 +63,25 @@ void initAlarmTable() {
 	setAlarmChannel(ix++, "Itotal", temp*3, &pmeter->I[4]);
 	setAlarmChannel(ix++, "In", temp, &pmeter->In);
 	// [19..22]
-	temp = pdb->pt.vnorm*pdb->ct.inorm;
+	temp = pdb->pt.fd[0].vnorm*pdb->ct.inorm;
 	setAlarmChannel(ix++, "P1", temp, &pmeter->P[0]);
 	setAlarmChannel(ix++, "P2", temp, &pmeter->P[1]);
 	setAlarmChannel(ix++, "P3", temp, &pmeter->P[2]);
 	setAlarmChannel(ix++, "Ptotal", temp*3, &pmeter->P[3]);
 	// [23..26]
-	temp = pdb->pt.vnorm*pdb->ct.inorm;
+	temp = pdb->pt.fd[0].vnorm*pdb->ct.inorm;
 	setAlarmChannel(ix++, "Q1", temp, &pmeter->Q[0]);
 	setAlarmChannel(ix++, "Q2", temp, &pmeter->Q[1]);
 	setAlarmChannel(ix++, "Q3", temp, &pmeter->Q[2]);
 	setAlarmChannel(ix++, "Q4", temp*3, &pmeter->Q[3]);
 	// [27..30]
-	temp = pdb->pt.vnorm*pdb->ct.inorm;
+	temp = pdb->pt.fd[0].vnorm*pdb->ct.inorm;
 	setAlarmChannel(ix++, "D1", temp*3, &pmeter->D[0]);
 	setAlarmChannel(ix++, "D2", temp*3, &pmeter->D[1]);
 	setAlarmChannel(ix++, "D3", temp*3, &pmeter->D[2]);
 	setAlarmChannel(ix++, "Dtotal", temp, &pmeter->D[3]);
 	// [31..34]
-	temp = pdb->pt.vnorm*pdb->ct.inorm;
+	temp = pdb->pt.fd[0].vnorm*pdb->ct.inorm;
 	setAlarmChannel(ix++, "S1", temp, &pmeter->S[0]);
 	setAlarmChannel(ix++, "S2", temp, &pmeter->S[1]);
 	setAlarmChannel(ix++, "S3", temp, &pmeter->S[2]);
@@ -109,7 +108,7 @@ void initAlarmTable() {
 	setAlarmChannel(ix++, "THD I2", temp, &pmeter->THD_I[1]);
 	setAlarmChannel(ix++, "THD I3", temp, &pmeter->THD_I[2]);
 	// [49..52]
-	temp = pdb->pt.vnorm*pdb->ct.inorm;
+	temp = pdb->pt.fd[0].vnorm*pdb->ct.inorm;
 	setAlarmChannel(ix++, "DD P+", temp, &pdm->DD_P[0]);
 	setAlarmChannel(ix++, "DD P-", temp, &pdm->DD_P[1]);
 	setAlarmChannel(ix++, "DD Q-L", temp, &pdm->DD_Q[0]);
@@ -121,7 +120,7 @@ void initAlarmTable() {
 	setAlarmChannel(ix++, "DD I2", temp, &pdm->DD_I[1]);
 	setAlarmChannel(ix++, "DD I3", temp, &pdm->DD_I[2]);
 	// [56..60]
-	temp = pdb->pt.vnorm*pdb->ct.inorm;
+	temp = pdb->pt.fd[0].vnorm*pdb->ct.inorm;
 	setAlarmChannel(ix++, "MD P+", temp, &pdm->MD_P[0].value);
 	setAlarmChannel(ix++, "MD P-", temp, &pdm->MD_P[1].value);
 	setAlarmChannel(ix++, "MD Q-L", temp, &pdm->MD_Q[0].value);
@@ -528,6 +527,7 @@ int loadEventLog(void) {
 	
 #if 1	// 2025-3-13, cskang, FIFO로 변경
 	EVENT_U	elog;
+	EVENT_FIFO *pEvtFifo = &meter[0].eventFifo;
 	int fr, re;
 	
 	// 시간순으로 읽는다 (최신 알람이 끝에 저장된다)
@@ -543,9 +543,9 @@ int loadEventLog(void) {
 	}
 	
 	// 읽은 내용을 이벤트, ITIC 리스트 갱신한다
-	fetchEvent(3);	// top
-	fetchItic(3);	
-	fetchItic2(3);	
+	fetchEvent(0, 3);	// top, M0
+	fetchItic(0, 3);
+	fetchItic2(0, 3);	
 	
 #else	
 
@@ -751,10 +751,10 @@ void fetchAlarm(int cmd) {
 }
 
 // 시간순으로 나열된 리스트를 역순으로 저장한다
-void fetchEvent(int cmd) {
+void fetchEvent(int id, int cmd) {
 	int i, n, ix;
-	EVENT_FIFO *pFifo = pEvtFifo;
-	EVENT_LIST *plist = pelist;
+	EVENT_FIFO *pFifo = &meter[id].eventFifo;
+	EVENT_LIST *plist = &meter[id].elist;
 	
 	plist->count = pFifo->count;
 	
@@ -842,11 +842,15 @@ void _fetchItic(int mode, int cmd) {
 	// }
 }
 
-void fetchItic(int cmd) {
+void fetchItic(int id, int cmd) {
+	(void)id;
+	(void)cmd;
 //	_fetchItic(0, cmd);
 }
 
-void fetchItic2(int cmd) {
+void fetchItic2(int id, int cmd) {
+	(void)id;
+	(void)cmd;
 //	_fetchItic(1, cmd);
 }
 #endif

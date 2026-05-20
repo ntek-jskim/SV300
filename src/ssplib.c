@@ -24,7 +24,7 @@ static uint8_t _tb[2][520], _rb[2][520];
 OsTaskId	t_meter[2];
 
 /* CH3: Meter1_Task·Meter2_Task가 SSP1을 공유하므로 직렬화 mutex */
-#ifdef CH3
+#ifdef HWV1
 static OsMutex ssp1_mutex;
 #endif
 
@@ -183,7 +183,7 @@ void Board_DMA_Init() {
 	
 	//memset(_tb, 0xff, 0xff);
 
-#ifdef CH3
+#ifdef HWV1
 	osCreateMutex(&ssp1_mutex);
 #endif
 #ifdef __FREERTOS
@@ -469,7 +469,7 @@ int dma_read32n(uint8_t mid, uint16_t cmd, uint32_t *buf, int n)
 	uint8_t *ptb = _tb[mid], *prb = _rb[mid];
 	int i, ix;
 
-#ifdef CH3
+#ifdef HWV1
 	/* CH3: SSP1(bus=1) 공유 — mutex 취득 후 해당 미터 CS를 Assert(LOW).
 	 * 폴링 SPI(read_reg16/32 등)도 동일 mutex를 쓰므로 MISO 버스 충돌이 방지된다.
 	 * mutex 범위: CS LOW → DMA 완료 → CS HIGH, 한 페이지 단위로 취득/반환한다. */
@@ -483,7 +483,7 @@ int dma_read32n(uint8_t mid, uint16_t cmd, uint32_t *buf, int n)
 	ptb[3] = c;	
 	spiIO_DMA(_sspBase[bus], &ptb[2], 2, &prb[2], n*sizeof(uint32_t));
 
-#ifdef CH3
+#ifdef HWV1
 	if (bus == 1) {
 		deSelectMeter(mid);
 		osReleaseMutex(&ssp1_mutex);
@@ -536,13 +536,13 @@ int read_reg16(uint8_t mid, uint16_t cmd, uint16_t *pdata) {
 	
 	*(uint16_t *)tb = __REV16(c);
 
-#ifdef CH3
+#ifdef HWV1
 	if (bus == 1) osAcquireMutex(&ssp1_mutex);
 #endif
 	selectMeter(mid);
 	spiIO8_Polling(_sspBase[bus], tb, 2, rb, 4);
 	deSelectMeter(mid);
-#ifdef CH3
+#ifdef HWV1
 	if (bus == 1) osReleaseMutex(&ssp1_mutex);
 #endif
 	
@@ -559,13 +559,13 @@ int read_reg32(uint8_t mid, uint16_t cmd, uint32_t *pdata)
 
 	*(uint16_t *)tb = __REV16(c);
 
-#ifdef CH3
+#ifdef HWV1
 	if (bus == 1) osAcquireMutex(&ssp1_mutex);
 #endif
 	selectMeter(mid);
 	spiIO8_Polling(_sspBase[bus], tb, 2, rb, 6);	
 	deSelectMeter(mid);
-#ifdef CH3
+#ifdef HWV1
 	if (bus == 1) osReleaseMutex(&ssp1_mutex);
 #endif
 
@@ -608,13 +608,13 @@ int write_reg16(uint8_t mid, uint16_t cmd, uint16_t *pdata)
 	tb[2] = *pdata>>8;
 	tb[3] = *pdata;
 
-#ifdef CH3
+#ifdef HWV1
 	if (bus == 1) osAcquireMutex(&ssp1_mutex);
 #endif
 	selectMeter(mid);
 	spiIO8_Polling(_sspBase[bus], tb, 4, rb, 0);	
 	deSelectMeter(mid);
-#ifdef CH3
+#ifdef HWV1
 	if (bus == 1) osReleaseMutex(&ssp1_mutex);
 #endif
 	
@@ -632,13 +632,13 @@ int write_reg32(uint8_t mid, uint16_t cmd, uint32_t *pdata)
 	tb[3] = c;
 	*(uint32_t *)&tb[4] = __REV(*pdata);
 
-#ifdef CH3
+#ifdef HWV1
 	if (bus == 1) osAcquireMutex(&ssp1_mutex);
 #endif
 	selectMeter(mid);
 	spiIO8_Polling(_sspBase[bus], &tb[2], 6, rb, 0);
 	deSelectMeter(mid);
-#ifdef CH3
+#ifdef HWV1
 	if (bus == 1) osReleaseMutex(&ssp1_mutex);
 #endif
 	

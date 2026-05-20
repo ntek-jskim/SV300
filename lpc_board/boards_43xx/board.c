@@ -466,7 +466,7 @@ const PINMUX_GRP_T SSP0_PIN_AUTO[] = {
 };
 #endif
 
-#ifdef CH3
+#ifdef HWV1
 /* CH3 보드용 SSP1 수동 SSEL 구성
  *  - CLK, MISO, MOSI 는 동일하고
  *  - CS는 GPIO7_16(M0_CS), GPIO3_8(M1_CS), GPIO5_15(M2_CS)를 사용한다.
@@ -1350,7 +1350,7 @@ void Board_LCD_Init()
 /* Initializes SDMMC interface */
 void Board_SDMMC_Init(void)
 {
-#ifndef CH3
+#ifndef NOSDMEM
 	/* PC_0,4..8,10 — SDIO (회로 SD_MMC 장착 시) */
 	Chip_SCU_PinMuxSet(0xC, 4, (SCU_PINIO_FAST | SCU_MODE_FUNC7));	/* PC.4 connected to SDIO_D0 */
 	Chip_SCU_PinMuxSet(0xC, 5, (SCU_PINIO_FAST | SCU_MODE_FUNC7));	/* PC.5 connected to SDIO_D1 */
@@ -1365,7 +1365,7 @@ void Board_SDMMC_Init(void)
 
 
 void SSP_SSEL_Mode(int id, int _auto) {
-#ifdef CH3
+#ifdef HWV1
 	if (id > 0) {
 		/* CH3: M1/M2 CS는 dma_read32n 내부에서 mutex 보호 하에
 		 * selectMeter/deSelectMeter 로 직접 제어하므로 여기서는 처리하지 않는다. */

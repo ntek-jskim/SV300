@@ -33,10 +33,18 @@ extern OsTaskId tid_wave[];
 extern OsTaskId tid_meter[];
 extern OsTaskId tid_rmslog, tid_post, tid_energy;
 
-extern void  updateQualData();
 extern int maxMinRmsFreq(int id);
 extern int maxMinPower(int id);
 extern int maxMinTHD(int id);
+
+static ADE_STATUS ade_status[METER_CH_COUNT];
+
+const ADE_STATUS *getAdeStatus(int id)
+{
+	if (id < 0 || id >= METER_CH_COUNT)
+		return &ade_status[0];
+	return &ade_status[id];
+}
 
 #define	RAD_SCALE	(M_PI/180)
 
@@ -186,14 +194,14 @@ void writeGainU(int id) {
 	int	addr=AD9X_UGAIN, j, *pvg;
 
 #ifdef	PT_HV	
-	if (pdb->pt.PT2 < 150) {
-		pvg = (pdb->pt.wiring == WM_3LL3CT || pdb->pt.wiring == WM_3LL2CT) ? pcal->vppgainx2 : pcal->vgainx2;
+	if (pdb->pt.fd[0].PT2 < 150) {
+		pvg = (pdb->pt.fd[0].wiring == WM_3LL3CT || pdb->pt.fd[0].wiring == WM_3LL2CT) ? pcal->vppgainx2 : pcal->vgainx2;
 	}
 	else {
-		pvg = (pdb->pt.wiring == WM_3LL3CT || pdb->pt.wiring == WM_3LL2CT) ? pcal->vppgain : pcal->vgain;
+		pvg = (pdb->pt.fd[0].wiring == WM_3LL3CT || pdb->pt.fd[0].wiring == WM_3LL2CT) ? pcal->vppgain : pcal->vgain;
 	}
 #else
-	pvg = (db[id].pt.wiring == WM_3LL3CT || db[id].pt.wiring == WM_3LL2CT) ? pcal->vppgain[id] : pcal->vgain[id];
+	pvg = (db[id].pt.fd[0].wiring == WM_3LL3CT || db[id].pt.fd[0].wiring == WM_3LL2CT) ? pcal->vppgain[id] : pcal->vgain[id];
 #endif	
 		
 	for (j=0;j<3;j++, addr+=AD9X_GAINSZ) {
@@ -263,7 +271,7 @@ void setGainU(int id, float ref)
 	int i, *pvg;
 
 #ifdef	PT_HV
-	pvg = (pdb->pt.PT2 < 150) ? pcal->vgainx2 : pcal->vgain;
+	pvg = (pdb->pt.fd[0].PT2 < 150) ? pcal->vgainx2 : pcal->vgain;
 #else
 	pvg = pcal->vgain[id];
 #endif	
@@ -286,7 +294,7 @@ void setGainUpp(int id, float ref)
 	int i, *pvg;
 	
 #ifdef	PT_HV	
-	pvg = (pdb->pt.PT2 < 150) ? pcal->vppgainx2 : pcal->vppgain;
+	pvg = (pdb->pt.fd[0].PT2 < 150) ? pcal->vppgainx2 : pcal->vppgain;
 #else
 	pvg = pcal->vppgain[id];
 #endif	
@@ -310,7 +318,7 @@ void clrGainU(int id)
 	int i, *pvg;
 
 #ifdef	PT_HV	
-	pvg = (pdb->pt.PT2 < 150) ? pcal->vgainx2 : pcal->vgain;
+	pvg = (pdb->pt.fd[0].PT2 < 150) ? pcal->vgainx2 : pcal->vgain;
 #else
 	pvg = pcal->vgain[id];
 #endif	
@@ -327,7 +335,7 @@ void clrGainUpp(int id)
 	int i, *pvg;
 
 #ifdef	PT_HV	
-	pvg = (pdb->pt.PT2 < 150) ? pcal->vppgainx2 : pcal->vppgain;
+	pvg = (pdb->pt.fd[0].PT2 < 150) ? pcal->vppgainx2 : pcal->vppgain;
 #else
 	pvg = pcal->vppgain[id];
 #endif	
@@ -524,13 +532,13 @@ void calcAbsAngle(int id)
 	float angle;
 	int i;
 	
-	if(db[id].pt.wiring==WM_3LL3CT||db[id].pt.wiring==WM_3LL2CT){
+	if(db[id].pt.fd[0].wiring==WM_3LL3CT||db[id].pt.fd[0].wiring==WM_3LL2CT){
 		//normal: VaVb,(240), VbVc(60), VaVc(300)
 		meter[id].meter.Uangle[0] = 0;	// V1-V1
 		meter[id].meter.Uangle[1] = _toAngle(meter[id].cntl.Uangle[2] + 180);	// V1-V2
 		meter[id].meter.Uangle[2] = meter[id].cntl.Uangle[0];	// V1-V3
 
-		if (db[id].pt.wiring==WM_3LL2CT) {
+		if (db[id].pt.fd[0].wiring==WM_3LL2CT) {
 			meter[id].cntl.Iangle[1] = calcUIAngle(id, 1);
 		}
 		
@@ -542,7 +550,7 @@ void calcAbsAngle(int id)
 		meter[id].meter.Pangle[1] = (meter[id].meter.I[1] == 0) ? 0 : _toAngle(meter[id].meter.Uangle[1] - meter[id].meter.Iangle[1]);
 		meter[id].meter.Pangle[2] = (meter[id].meter.I[2] == 0) ? 0 : _toAngle(meter[id].meter.Uangle[2] - meter[id].meter.Iangle[2]);
 	}
-	else if(pdb->pt.wiring==WM_3LN3CT){
+	else if(pdb->pt.fd[0].wiring==WM_3LN3CT){
 		meter[id].meter.Uangle[0] = 0;	// V1-V1
 		meter[id].meter.Uangle[1] = meter[id].cntl.Uangle[0];//V1-V2
 		meter[id].meter.Uangle[2] = meter[id].cntl.Uangle[2];//V1-V3
@@ -555,7 +563,7 @@ void calcAbsAngle(int id)
 		meter[id].meter.Pangle[1] = (meter[id].meter.I[1] == 0) ? 0 : 360 - meter[id].cntl.UIangle[1];
 		meter[id].meter.Pangle[2] = (meter[id].meter.I[2] == 0) ? 0 : 360 - meter[id].cntl.UIangle[2];
 	}
-	else if(pdb->pt.wiring==WM_1LL2CT){
+	else if(pdb->pt.fd[0].wiring==WM_1LL2CT){
 		meter[id].meter.Uangle[0] = meter[id].meter.Uangle[1] = 0;	// V1-V1
 		meter[id].meter.Uangle[2] = meter[id].cntl.Uangle[2];				// V1-V3
 		
@@ -567,7 +575,7 @@ void calcAbsAngle(int id)
 		meter[id].meter.Pangle[1] = 0;
 		meter[id].meter.Pangle[2] = (meter[id].meter.I[2] == 0) ? 0 : 360 - meter[id].cntl.UIangle[2];		
 	}
-	else if(pdb->pt.wiring==WM_1LN1CT){
+	else if(pdb->pt.fd[0].wiring==WM_1LN1CT){
 		meter[id].meter.Uangle[0] = meter[id].meter.Uangle[1] = meter[id].meter.Uangle[2] = 0;
 		
 		meter[id].meter.Iangle[0] = _toAngle(meter[id].meter.Uangle[0] + meter[id].cntl.UIangle[0]);	// V1-I1
@@ -1326,7 +1334,7 @@ void calcPower(int id) {
 	}
 	
 	for (i=0; i<3; i++) {
-		switch(db[id].pt.wiring){
+		switch(db[id].pt.fd[0].wiring){
 		//1LN : 2,3 전력을 지운다
 		case WM_1LN1CT:
 			if(i!=0){
@@ -1357,7 +1365,7 @@ void calcPower(int id) {
 	
 	
 	for (i=0; i<3; i++) {
-		if (db[id].pt.wiring == WM_3LL3CT || db[id].pt.wiring == WM_3LL2CT) {
+		if (db[id].pt.fd[0].wiring == WM_3LL3CT || db[id].pt.fd[0].wiring == WM_3LL2CT) {
 			if (db[id].etc.VA_type == 0) {
 				meter[id].cntl.S[i] = meter[id].cntl.S[i]*sqrt(3)/2.;
 				meter[id].cntl.fS[i] = meter[id].cntl.fS[i]*sqrt(3)/2.;
@@ -1758,7 +1766,7 @@ void calcRmsAngle(int id) {
 		//
 		meter[id].meter.In = meter[id].cntl.In * (db[id].ct.zctScale / 1000.);	//Neutral Phase Current
 		meter[id].meter.Isum = meter[id].cntl.Is;	//Neutral Phase Current	= 
-		if(db[id].pt.wiring == WM_1LN1CT){
+		if(db[id].pt.fd[0].wiring == WM_1LN1CT){
 			meter[id].meter.I[0] = meter[id].cntl.I[0];
 			meter[id].meter.I[1] = 0;
 			meter[id].meter.I[2] = 0;
@@ -1770,7 +1778,7 @@ void calcRmsAngle(int id) {
 			meter[id].meter.fI[2] = 0;
 			meter[id].meter.fI[3] = meter[id].meter.fI[0];	//average
 		}
-		else if(db[id].pt.wiring == WM_1LL2CT){
+		else if(db[id].pt.fd[0].wiring == WM_1LL2CT){
 			meter[id].meter.I[0] = meter[id].cntl.I[0];
 			meter[id].meter.I[1] = 0;
 			meter[id].meter.I[2] = meter[id].cntl.I[2];		
@@ -1785,14 +1793,14 @@ void calcRmsAngle(int id) {
 		else {
 			//3P3W(2CT)는 B상 전류를 벡터계산으로 생성한다
 			meter[id].meter.I[0] = meter[id].cntl.I[0];			
-			meter[id].meter.I[1] = (db[id].pt.wiring == WM_3LL2CT) ? calcPhaseCurrent(id, 1) : meter[id].cntl.I[1];		
+			meter[id].meter.I[1] = (db[id].pt.fd[0].wiring == WM_3LL2CT) ? calcPhaseCurrent(id, 1) : meter[id].cntl.I[1];		
 			meter[id].meter.I[2] = meter[id].cntl.I[2];		
 			meter[id].meter.I[3] = average(meter[id].meter.I, 3);
 			meter[id].meter.Isum = meter[id].cntl.Is;	
 #ifdef	VFRMS
 			//3P3W(2CT)는 B상 전류를 벡터계산으로 생성한다
 			meter[id].meter.fI[0] = meter[id].cntl.fI[0];			
-			meter[id].meter.fI[1] = (db[id].pt.wiring == WM_3LL2CT) ? calcPhaseCurrent(id, 1) : meter[id].cntl.fI[1];		
+			meter[id].meter.fI[1] = (db[id].pt.fd[0].wiring == WM_3LL2CT) ? calcPhaseCurrent(id, 1) : meter[id].cntl.fI[1];		
 			meter[id].meter.fI[2] = meter[id].cntl.fI[2];		
 			meter[id].meter.fI[3] = average(meter[id].meter.fI, 3);
 #endif
@@ -1803,10 +1811,10 @@ void calcRmsAngle(int id) {
 		meter[id].meter.Itot = summation(meter[id].meter.I, 3);
 		
 		
-		if (db[id].pt.wiring == WM_1LN1CT) {
+		if (db[id].pt.fd[0].wiring == WM_1LN1CT) {
 			meter[id].meter.Ibal[0] = meter[id].meter.Ibal[1] = 0;
 		}
-		else if (db[id].pt.wiring == WM_1LL2CT) {
+		else if (db[id].pt.fd[0].wiring == WM_1LL2CT) {
 			meter[id].meter.Ibal[0] = meter[id].meter.Ibal[1] = fabs(meter[id].meter.I[3]-meter[id].cntl.I[0]) / meter[id].meter.I[3] * 100; 
 		}	
 		else {
@@ -1816,7 +1824,7 @@ void calcRmsAngle(int id) {
 		
 			
 		//pmeter->U=meter[id].cntl.V
-		if(db[id].pt.wiring == WM_3LL3CT || db[id].pt.wiring == WM_3LL2CT){
+		if(db[id].pt.fd[0].wiring == WM_3LL3CT || db[id].pt.fd[0].wiring == WM_3LL2CT){
 			//3P3W에서 phase order가 다르다
 			meter[id].meter.U[0] = meter[id].cntl.U[0];	// V1 <- V12
 			meter[id].meter.U[1] = meter[id].cntl.U[2];	// V2 <- V31
@@ -1827,13 +1835,13 @@ void calcRmsAngle(int id) {
 			meter[id].meter.fU[2] = meter[id].cntl.fU[1];	// V3 <- V32
 			meter[id].meter.fU[3] = average(meter[id].meter.fU, 3);			
 		}
-		else if(db[id].pt.wiring==WM_1LN1CT){
+		else if(db[id].pt.fd[0].wiring==WM_1LN1CT){
 			meter[id].meter.U[0] = meter[id].meter.U[3] = meter[id].cntl.U[0];
 			meter[id].meter.U[1] = meter[id].meter.U[2] = 0;
 			meter[id].meter.fU[0] =meter[id].meter.fU[3] = meter[id].cntl.fU[0];
 			meter[id].meter.fU[1] = meter[id].meter.fU[2] = 0;
 		}
-		else if(db[id].pt.wiring==WM_1LL2CT){
+		else if(db[id].pt.fd[0].wiring==WM_1LL2CT){
 			meter[id].meter.U[0] = meter[id].cntl.U[0];
 			meter[id].meter.U[1] = 0;
 			meter[id].meter.U[2] = meter[id].cntl.U[2];			
@@ -1855,10 +1863,10 @@ void calcRmsAngle(int id) {
 		}		
 		
 		// 전압 불평형률
-		if (db[id].pt.wiring == WM_1LN1CT) {
+		if (db[id].pt.fd[0].wiring == WM_1LN1CT) {
 			meter[id].meter.Ubal[0] = meter[id].meter.Ubal[1] = 0;
 		}
-		else if (db[id].pt.wiring == WM_1LL2CT) {
+		else if (db[id].pt.fd[0].wiring == WM_1LL2CT) {
 			meter[id].meter.Ubal[0] = meter[id].meter.Ubal[1] = fabs(meter[id].meter.U[3]-meter[id].meter.U[0]) / meter[id].meter.U[3] * 100;
 		}
 		else {
@@ -1867,10 +1875,10 @@ void calcRmsAngle(int id) {
 			calcUnbalance(meter[id].meter.Uzs, meter[id].meter.Ubal);	
 		}
 		
-		//calcDeviation(pmeter->U, pdb->pt.vnorm);
+		//calcDeviation(pmeter->U, pdb->pt.fd[0].vnorm);
 		
 		//3상4선이면 전압과 위상 이용하여 상간 전압 계산		
-		if (db[id].pt.wiring == WM_3LN3CT){		
+		if (db[id].pt.fd[0].wiring == WM_3LN3CT){		
 			//LineVoltage계산
 			meter[id].meter.Upp[0] = calcLineVolt(id, 0);
 			meter[id].meter.Upp[1] = calcLineVolt(id, 1);
@@ -1878,7 +1886,7 @@ void calcRmsAngle(int id) {
 			meter[id].meter.Upp[3] = average(meter[id].meter.Upp, 3);		
 			meter[id].meter.Ig = meter[id].meter.Isum;	
 		}
-		else if (db[id].pt.wiring == WM_3LL3CT || db[id].pt.wiring == WM_3LL2CT) {
+		else if (db[id].pt.fd[0].wiring == WM_3LL3CT || db[id].pt.fd[0].wiring == WM_3LL2CT) {
 			meter[id].meter.Upp[0] = meter[id].meter.U[0];	// U12
 			meter[id].meter.Upp[1] = meter[id].meter.U[1];	// U23
 			meter[id].meter.Upp[2] = meter[id].meter.U[2];	// U31		
@@ -1890,7 +1898,7 @@ void calcRmsAngle(int id) {
 			meter[id].meter.Ig = fv;	
 #endif
 		}
-		else if (db[id].pt.wiring == WM_1LL2CT) {
+		else if (db[id].pt.fd[0].wiring == WM_1LL2CT) {
 			meter[id].meter.Upp[0] = meter[id].meter.U[0];	//V1-V2
 			meter[id].meter.Upp[1] = meter[id].meter.U[2];	//V2-V3
 			meter[id].meter.Upp[2] = meter[id].meter.U[0] + meter[id].meter.U[2];	// V3-V1
@@ -1898,21 +1906,21 @@ void calcRmsAngle(int id) {
 			meter[id].meter.Ig = meter[id].meter.In;
 		}
 		//3상3선일경우선간전압=상전압
-		else if (db[id].pt.wiring == WM_1LN1CT) {
+		else if (db[id].pt.fd[0].wiring == WM_1LN1CT) {
 			meter[id].meter.Upp[0] = meter[id].meter.Upp[3] = meter[id].meter.U[0];			
 			meter[id].meter.Upp[1] = meter[id].meter.Upp[2] = 0;
 			meter[id].meter.Ig = meter[id].meter.In;				
 		}
 
 		// Under/Over Deviation
-		calcDeviation(id, meter[id].meter.U, db[id].pt.vnorm);		
+		calcDeviation(id, meter[id].meter.U, db[id].pt.fd[0].vnorm);		
 
 #if 0	// 2025-3-20, updateDemandI() 중복 호출로 인한 demandI 계산 오류
 		updateDemandI();
 #endif		
 		meter[id].cntl.mmChangeF += maxMinRmsFreq(id);		
 		
-		updateQualData();
+		updateQualData(id);
 	}
 	else {
 		meter[id].cntl.rmsInit = 1;		// 첫번째 읽히는 값은 버린다.		
@@ -2074,7 +2082,7 @@ void readWFB32k_Data(int id)
 void setPqEventLevel(int id) {
 	float scale, ratio;
 
-	scale = RMS_MAX/V_FULL*(1<<meter[id].cntl.pga_vgain)*db[id].pt.vnorm;
+	scale = RMS_MAX/V_FULL*(1<<meter[id].cntl.pga_vgain)*db[id].pt.fd[0].vnorm;
 	// 전압
 	meter[id].cntl.sagLevel      = scale * db[id].pqevt[PQE_SAG].level/100.;
 	meter[id].cntl.sagRetLevel   = scale * (db[id].pqevt[PQE_SAG].level+5)/100.;
@@ -2155,6 +2163,15 @@ void initADE9000(uint8_t id)
 	CNTL_DATA	*pcntl = &meter[id].cntl;
 	SETTINGS	*pdb = &db[id];
 
+	if (id >= METER_CH_COUNT)
+		return;
+
+	/* 재시도 카운터: 첫 호출은 0 유지, 이후 initADE9000 재시도마다 증가 */
+	if (ade_status[id].failCount > 0 || ade_status[id].retryCount > 0)
+		ade_status[id].retryCount++;
+
+	ade_status[id].online = 0;
+
 	// SWRST
 	wtemp = 1;
 	write_reg16(id, AD9X_CONFIG1, &wtemp);
@@ -2163,17 +2180,30 @@ void initADE9000(uint8_t id)
 	
 	read_reg32(id, AD9X_STATUS0, &stat);		
 	write_reg32(id, AD9X_STATUS0, &stat);		
-	printf("status0  = %x\n", stat);	
+	printf("[M%d] status0=0x%08x\n", id, stat);	
 
 	read_reg32(id, AD9X_STATUS1, &stat);		
 	write_reg32(id, AD9X_STATUS1, &stat);		
-	printf("status1  = %x\n", stat);	
+	printf("[M%d] status1=0x%08x\n", id, stat);	
 	
-	read_reg32(id, AD9X_PART_ID, &chipId);		
-	printf("chipId  = %x\n", chipId&(1<<20));
-	
-	read_reg16(id, AD9X_VERSION, &version);		
-	printf("version = %x\n", version);
+	read_reg32(id, AD9X_PART_ID, &chipId);
+	read_reg16(id, AD9X_VERSION, &version);
+
+	ade_status[id].chipId  = chipId;
+	ade_status[id].version = version;
+
+	printf("[M%d] chipId=0x%08x, version=0x%04x %s (fail#%d)\n",
+	       id, chipId, version,
+	       (chipId == 0xFFFFFFFF || chipId == 0) ? "[SPI FAIL]" : "[ok]",
+	       ade_status[id].failCount);
+
+	if (chipId == 0xFFFFFFFF || chipId == 0) {
+		ade_status[id].failCount++;
+		printf("[M%d] ADE9000 not responding - continue anyway for HW check\n", id);
+	}
+
+	/* 5/16 동작: SPI 실패여도 DSP·Wave 초기화 진행 */
+	ade_status[id].online = 1;
 
 	//--------------------------------------------------------------------------------------
 	// PGA_GAIN, VGAIN=1
@@ -2189,7 +2219,7 @@ void initADE9000(uint8_t id)
 	write_reg16(id, AD9X_ACCMODE, &wtemp);
 		
 	// change Isum mode -> Ig로 사용한다 
-	if (pdb->ct.CT2 == CT_5A && (pdb->pt.wiring == WM_3LN3CT || pdb->pt.wiring == WM_1LN1CT || pdb->pt.wiring == WM_1LL2CT)) {
+	if (pdb->ct.CT2 == CT_5A && (pdb->pt.fd[0].wiring == WM_3LN3CT || pdb->pt.fd[0].wiring == WM_1LN1CT || pdb->pt.fd[0].wiring == WM_1LL2CT)) {
 		dtemp = 1;
 		read_reg16(id, AD9X_CONFIG0, &wtemp);
 	}
@@ -2269,8 +2299,8 @@ void initADE9000(uint8_t id)
 	printf("MASK1 = %x\n", dtemp);
 	
 	// sag, swell 설정
-	//setSagLevel(pdb->pt.vnorm, pdb->pqevt[1].level, pdb->pqevt[1].nCyc);
-	//setSwellLevel(pdb->pt.vnorm, pdb->pqevt[2].level, pdb->pqevt[2].nCyc);
+	//setSagLevel(pdb->pt.fd[0].vnorm, pdb->pqevt[1].level, pdb->pqevt[1].nCyc);
+	//setSwellLevel(pdb->pt.fd[0].vnorm, pdb->pqevt[2].level, pdb->pqevt[2].nCyc);
 			
 	// Current and voltage channel waveform samples,
 	// processed by the DSP (xI_PCF, xV_PCF) at 8 kSPS
@@ -2356,6 +2386,8 @@ void checkPqEvent(int id) {
 	PQ_EVENT_INFO *pSag   = &meter[id].cntl.pqe.inf[PQE_SAG];
 	PQ_EVENT_INFO *pSwell = &meter[id].cntl.pqe.inf[PQE_SWELL];
 	PQ_EVENT_INFO *pOC    = &meter[id].cntl.pqe.inf[PQE_OC];
+	PQ_EVENT_COUNT *ppqEvtCnt = &meter[id].pqEvtCnt;
+	QualLogData *pqLog = &meter[id].qdLog;
 		
 	if (meter[id].cntl.online == 0) {
 		// 12 half cycle = 100ms
@@ -2634,7 +2666,7 @@ void meter_scan_2(uint8_t id)
 	if (os_evt_wait_and(0x1, 200) == OS_R_TMO) 
 #endif	
 	{
-		printf(">>> ZX timeout ...\n");
+		printf(">>> ZX timeout [%d]...\n", id);
 		 // wave sampling를 다시시작한다 
  //		if (id == 0) 
  //			w8kQ.fr = w8kQ.re = 0;
@@ -2718,7 +2750,7 @@ void meter_scan_2(uint8_t id)
 
 	if (meter[id].cntl.rstEvtList == 0x1234) {
 		meter[id].cntl.rstEvtList = 0;
-		clearEventList();		
+		clearEventList(id);		
 	}
 	
 	// clear status0 & status1	
@@ -2751,6 +2783,9 @@ void meter_scan(uint8_t id)
 	uint32_t rms, stat0, stat1, vlevel, dtemp, i, cnt=0, mask;
 	void *msg;
 	uint64_t tick64, zxTo;
+
+	if (id >= METER_CH_COUNT)
+		return;
 
 	//PG_FULL intr: 기본 발생 주기
 	// 8K: (Max 8ms) -> Hi/Low 적용시 4ms
@@ -2850,7 +2885,7 @@ void meter_scan(uint8_t id)
 
 	if (meter[id].cntl.rstEvtList == 0x1234) {
 		meter[id].cntl.rstEvtList = 0;
-		clearEventList();		
+		clearEventList(id);		
 	}
 	// if(id==0) {
 	// 	if (meter[id].cntl.rstIticList == 0x1234) {

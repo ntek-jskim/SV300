@@ -1102,7 +1102,7 @@ static void cmd_help (char *par) {
  *        Initialize a Flash Memory Card
  *----------------------------------------------------------------------------*/
 static void init_card (void) {
-#ifdef CH3
+#ifdef NOSDMEM
   {
     U32 retv;
 

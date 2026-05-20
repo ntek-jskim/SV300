@@ -579,7 +579,7 @@ void app_init(void *params) {
 			TRACE_ERROR("Failed to create task(energy)\r\n");
 		}
 
-		
+#if 0
 		// Meter
 		taskParams.priority = OS_TASK_PRIORITY_REALTIME;
 		taskParams.stackSize = 256;
@@ -607,6 +607,7 @@ void app_init(void *params) {
 		}
 #endif
 #endif /* CH1 */
+#endif /* 0 */
 
 		// FS
 		taskParams.priority = OS_TASK_PRIORITY_LOW;

@@ -65,10 +65,11 @@ void Board_SystemInit(void);
  */
 void Board_SetupMuxing(void);
 
-#ifdef CH3
+/* CH3: 미터 채널 수(3). HWV1: SSP1 3CS·GPIO CS 배선. NOSDMEM: SPIFI NOR(S:) 비사용(SD 등만). */
+#ifndef NOSDMEM
 /**
  * @brief	SPIFI 외부 SPI Flash 핀 초기화 (LPC4357 CH3 회로: P3_3..P3_8, FUNC3)
- * @note	빌드 시 -DCH3 로 활성화. 기존 보드와 호환을 위해 CH3 미정의 시 컴파일/실행되지 않음.
+ * @note	CH3이면서 NOSDMEM 미정의일 때만 링크된다.
  */
 void Board_SPIFI_FlashPinInit(void);
 #endif

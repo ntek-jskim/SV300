@@ -281,10 +281,14 @@ const uint32_t _WDT_GPIO[][2] = {
 };
 
 const uint32_t _EINT_GPIO[][2] = {
-   {5, 8},  // enable
-   {5, 9},  // clear
-   {6, 1},  // enable
-   {6, 2}  // clear
+   {5, 8},  // M0 IRQ#0
+   {5, 9},  // M0 IRQ#1 (unused)
+   {6, 1},  // M1 IRQ#0
+#ifdef HWV1
+   {6, 2}   // M2 IRQ#0 (CH3, board.c EINT_GPIO[3] 동일)
+#else
+   {6, 2}   // M1 IRQ#1 (2CH: unused)
+#endif
 };
 
 const uint32_t _DI_GPIO[][2] = {

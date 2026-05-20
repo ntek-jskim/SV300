@@ -13,7 +13,7 @@
 #include <LPC43xx.h>                    /* LPC43xx Definitions                */
 #include "SDIO_LPC43xx.h"
 
-#ifndef CH3
+#ifdef NOSDMEM
 
 /*-----------------------------------------------------------------------------
   Memory Card FAT Driver instance definition
@@ -67,7 +67,7 @@ static SDIO_DMA_DESC DMADesc[4];
 /*--------------------------- Init -------------------------------------------*/
 
 static BOOL Init (void) {
-#ifndef CH3
+#if !defined(CH3) || defined(NOSDMEM)
   /* Initialize SD/MMC interface. */
   
   /* Connect SDIO base clock to PLL1                                          */
@@ -122,7 +122,7 @@ static BOOL Init (void) {
   /* Success, SDIO initialized. */
   return (__TRUE);
 #else
-  /* CH3: SD_MMC 미장착(SPIFI Flash 보드). SDIO 클럭·핀·컨트롤러 초기화 생략 */
+  /* NOSDMEM: SD_MMC 미장착(SPIFI Flash 보드). SDIO 클럭·핀·컨트롤러 초기화 생략 */
   return (__FALSE);
 #endif
 }
@@ -131,7 +131,7 @@ static BOOL Init (void) {
 /*--------------------------- UnInit -----------------------------------------*/
 
 static BOOL UnInit (void) {
-#ifndef CH3
+#ifdef NOSDMEM
   /* Set SDIO port pins to their reset values */
   LPC_SCU->SFSPC_0  = 0;                /* PC.0  = Function reserved          */
   LPC_SCU->SFSPC_4  = 0;                /* PC.4  = Function reserved          */
@@ -413,7 +413,7 @@ static U32 CheckMedia (void) {
   return (stat);
 }
 
-#endif /* CH3: mci0_drv 미제공 */
+#endif /* NOSDMEM: mci0_drv 미제공 */
 
 /*-----------------------------------------------------------------------------
  * End of file

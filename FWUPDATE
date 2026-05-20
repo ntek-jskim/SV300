@@ -1,0 +1,32 @@
+2026/05/14 : piocfg IOM_DATA 정합, METER_DEF 반영 Meter0 덤프 순서, DATETIME 무인자 조회/6인자 설정(FS·SD_File), initPQHeader M0 직렬(0~2)·M1/M2 제거, M0 REALTIME·M1/M2 HIGH, meter_scan_2 PQM 슬라이스+CH3 M1↔M2 RR, FWUPDATE 신설
+2026/05/14 : Cursor 프로젝트 규칙 추가(.cursor/rules/fwupdate-log.mdc) — 이후 Cursor에서 코드 변경 시 FWUPDATE 한 줄 요약
+2026/05/14 : meter_scan_2 ZX 타임아웃 연쇄 수정 — PQM 슬라이스로 W1C 비트를 빼지 말고 stat0_snap으로 전체 클리어, 핸들러만 RR/슬라이스
+2026/05/14 : ade9000 meter_scan_2 — Keil C89: stat0_snap 선언 블록 상단 이동·할당 분리
+2026/05/14 : meter.c FS_task INITDB(factReset) — saveSetting 정리 후 NVIC_SystemReset으로 즉시 재부팅(반죽 구간 제거)
+2026/05/14 : Quality getQualWeekEndTs·initPQHeader — 주간 end는 M0 tod만 사용, 깨진 파일 endTs 보정; app_main tickHandler에서 M1/M2 tod 동기화
+2026/05/14 : alarm.c alarmProc — 알람 chan이 MAX_ALARM_CH 이상이면 스킵(almTbl OOB HardFault 방지); meter.c PostScan — rstMaxMin/fr·re는 meter[id].maxmin 사용
+2026/05/14 : ssplib read_reg16/32·write_reg32 — 스택 uint8_t rb/tb에 *(uint32_t*) 캐스트 제거(memcpy, UNALIGN_TRP HardFault 방지); ade9000 readTemp 채널별 Temp, checkPqEvent sag holdOff db[id], meter_scan(2) id 가드
+2026/05/14 : ssplib spiIO_32n·dma_read32n — uint16_t temp[]·uint8_t prb[]에서 *(uint32_t*) 제거, memcpy로 워드 조립(UNALIGN_TRP 방지)
+2026/05/14 : alarm.c checkTrendHeader — fread(&trdInf[i], sizeof(trdInf)→sizeof(trdInf[0])) 버퍼 오버런 수정(인접 row[] 덮어쓰기 → RTX TCB 포인터 오염 가능성)
+2026/05/14 : ssplib read_reg32/write_reg32 — 결과·원본 uint32_t 접근을 *pdata 대신 memcpy(pdata/…)(비정렬 STORE/LOAD 방지)
+2026/05/14 : alarm.c loadAlarmLog/storeAlarmLog/fetchAlarm — fifo 헤더 magic·count/fr 검증·상한, fread sizeof(ALARM_LOG), memcpy ix·fr/re 범위, bottom cmd N_ALARM_LIST
+2026/05/14 : meter.h·alarm.c loadAlarmLog — ALARM_FIFO_PURGE_SENTINEL 없을 때만 ALARM_FIFO_FILE 1회 삭제 후 센티넬 생성(손상 FIFO 정리)
+2026/05/16 : app_main·meter Wave/Meter0 — getHwCh() 런타임 분기 제거, CH1/CH3/기본(2ch) 빌드 매크로·ACTIVE_METER_CH_COUNT로 채널 동작 결정
+2026/05/16 : FS/SPIFI/SDIO·보드 SPIFI/SDMMC — CH3 대신 NOSDMEM(CH3=3채널 미터만, SPIFI·SD 미사용은 NOSDMEM)
+2026/05/16 : board.c·ssplib — SSP1 3CS 핀·mutex는 CH3 대신 HWV1(CH3=채널 수, HWV1=SSP1 핀/CS 배선)
+2026/05/16 : meter.c·smb_rtu — CH3 db[2] loadSettings/init·saveSetting/factReset/build_set_db·clearEnergy·initExtSettings 채널 수(METER_CH_COUNT) 반영
+2026/05/16 : meter.c buildExtSettings — IP/MAC 네트워크 로그는 id==0일 때만 1회 출력(CH3 루프 중복 제거)
+2026/05/16 : meter.c loadEnergyLogFs — egy_log0/1.d 없으면 기본 ENERGY_LOG 생성 후 SPIFI 저장
+2026/05/16 : meter.c loadEnergyFs/loadDemand/loadMaxMin — SPIFI 파일 없을 때 loadEnergyLogFs와 동일하게 기본 생성, loadEnergy는 FS 성공 시 memset 생략
+2026/05/16 : meter.h SETTINGS — comm/pt/ct/etc/iom을 SETTINGS_SYS(CH1/db[0] 영역), CH1 빌드 시 METER_CH_COUNT·DB 3슬롯 CH3와 동일
+2026/05/19 : meter.c·meter.h — Cursor 로컬 히스토리 5/16 최종 스냅샷(dlhX·2cA4)으로 복원; staged 23개 파일 working tree를 index(5/16 Stage All)로 복원
+2026/05/20 : meter.h·meter.c — FWUPDATE 20행(5/16 SETTINGS_SYS 적용 전) 시점으로 되돌림: SETTINGS_SYS·SETTINGS_HAS_SYS·union/_sys_rsv 제거(flat SETTINGS), METER_CH_COUNT/ENERGY_CH_COUNT는 #ifdef CH3 분리, initSettings·loadSettings sys 가드 제거
+2026/05/20 : ade9000.c·alarm.c — meter.h CH3 API 정합(updateQualData/clearEventList/fetchEvent·ppqEvtCnt·pqLog 채널별)
+2026/05/20 : ade9000.c — getAdeStatus·ade_status[]·initADE9000 SPI 진단/early return, meter_scan(2) offline 가드(FS.c 링크 오류 수정)
+2026/05/20 : meter.h 5/16(d3d5662) SETTINGS_SYS·PT_CH 복원; ade9000 SPI 실패 시 init 계속·online=1(5/16 보드 동작), offline 가드 제거
+2026/05/20 : meter.h PT_DEF — PT_CH(20B)+fd[9]+union overlay 복원(sizeof=188B→PT:94), pt.wiring 직접 접근·5/16 SETTINGS=1268B 정합
+2026/05/20 : board.c·ssplib·board_sysinit·File_Config·FS·FS_SPIFI·SDIO·SD_File — Keil HWV1/NOSDMEM과 소스 정합(CH3+HWV1=SSP1 3CS·mutex, CH3+!NOSDMEM=SPIFI, CH3+NOSDMEM=SD·SDIO)
+2026/05/20 : meter.h·meter.c·ade9000·alarm·app_main·fft_radix2_czt·smb_rtu — PT_DEF(fd[9]·feeder_cnt)에 맞춰 wiring/vnorm/PT1/PT2는 pt.fd[PT_PRIMARY_IDX] 접근
+2026/05/20 : meter.h — PT_CH/PT_DEF 주석·바이트 설명을 현재 레이아웃(16B×9+상위 freq/feeder_cnt)에 맞춤, PT_PRIMARY_IDX 매크로
+2026/05/20 : meter.c — initSettings·build_cal_db1/2/3·build_set_db에 pt.feeder_cnt=1 설정
+2026/05/20 : app_main.c — tid_meter[METER_CH_COUNT]·미터 태스크 #if 0 제거 적용 안 함: tid_meter[2] 유지, Meter0/1/2 생성은 #if 0으로 비활성(실험·ADCH 점검용)

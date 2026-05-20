@@ -454,7 +454,7 @@ void FFT_Task(void)
 
 			t1 = sysTick64;							
 			for (i=0; i<3; i++) {
-				if (pdb->pt.wiring == WM_3LL3CT || pdb->pt.wiring == WM_3LL2CT) {
+				if (pdb->pt.fd[0].wiring == WM_3LL3CT || pdb->pt.fd[0].wiring == WM_3LL2CT) {
 					k = (i == 0) ? 0 : (i == 1) ? 2 : 1;
 				}
 				else
@@ -474,7 +474,7 @@ void FFT_Task(void)
 			
 			// phase-to-phase voltage
 			for (i=0; i<3; i++) {
-				if (pdb->pt.wiring == WM_3LL3CT || pdb->pt.wiring == WM_3LL2CT) {
+				if (pdb->pt.fd[0].wiring == WM_3LL3CT || pdb->pt.fd[0].wiring == WM_3LL2CT) {
 					if(i==0)
 						k =0;
 					else if(i==1)

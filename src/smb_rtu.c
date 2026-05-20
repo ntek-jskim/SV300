@@ -403,11 +403,11 @@ void calibration(int code) {
 			}
 			break;
 		case 17:	
-			//pdb->pt.wiring = WM_3LN3CT;
+			//pdb->pt.fd[0].wiring = WM_3LN3CT;
 			//selWire(0);	// 3P4W
 			break;
 		case 18:
-			//pdb->pt.wiring = WM_3LL3CT;
+			//pdb->pt.fd[0].wiring = WM_3LL3CT;
 			//selWire(1);	// 3P3W
 			break;		
 	}
