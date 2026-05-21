@@ -53,10 +53,10 @@ __weak_func error_t fsInit(void)
    error_t error;
    int status;
 
-#ifndef CH3
+#ifndef HWV1
    status = finit("M0:");
 #else
-   /* CH3: SF0_DEF=1 → 기본 드라이브 S: (SPIFI NOR) */
+   /* HWV1: SF0_DEF=1 → 기본 드라이브 S: (SPIFI NOR) */
    status = finit(NULL);
 #endif
 

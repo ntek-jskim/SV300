@@ -56,8 +56,8 @@ STATIC const struct CLK_BASE_STATES InitClkStates[] = {
 	{CLK_BASE_USB1, CLKIN_IDIVD, true, true}
 };
 
-#ifdef CH3
-/* SPIFI: MX25L1636E 등 외부 Flash — P3_3..P3_8, FUNC3 (LPC4357 UM, CH3 회로) */
+#ifdef HWV1
+/* SPIFI: MX25L1636E 등 외부 Flash — P3_3..P3_8, FUNC3 (LPC4357 UM, HWV1 회로) */
 STATIC const PINMUX_GRP_T spifipinmuxing[] = {
 	{0x3, 3,  (SCU_PINIO_FAST | SCU_MODE_FUNC3)},	/* P3_3  SPIFI_SCK  */
 	{0x3, 4,  (SCU_PINIO_FAST | SCU_MODE_FUNC3)},	/* P3_4  SPIFI_IO3 */
@@ -71,7 +71,7 @@ void Board_SPIFI_FlashPinInit(void)
 {
 	Chip_SCU_SetPinMuxing(spifipinmuxing, sizeof(spifipinmuxing) / sizeof(PINMUX_GRP_T));
 }
-#endif /* CH3 */
+#endif /* HWV1 */
 
 STATIC const PINMUX_GRP_T pinmuxing[] = {
 	/* RMII pin group */
@@ -328,8 +328,8 @@ void Board_SetupMuxing(void)
 	for (i = 0; i < (sizeof(pinclockmuxing) / sizeof(pinclockmuxing[0])); i++) {
 		Chip_SCU_ClockPinMuxSet(pinclockmuxing[i].pinnum, pinclockmuxing[i].modefunc);
 	}
-#ifdef CH3
-	/* SPIFI 외부 Flash 핀 (CH3 회로에서만 사용) */
+#ifdef HWV1
+	/* SPIFI 외부 Flash 핀 (HWV1 회로에서만 사용) */
 	Board_SPIFI_FlashPinInit();
 #endif
 

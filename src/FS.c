@@ -906,7 +906,7 @@ static void cmd_ethrst(char *par) {
 //
 
 void init_card (void) {
-#ifdef CH3
+#ifdef HWV1
   /* RL-FlashFS: SF0_DEF → 기본 드라이브 S: (SPIFI NOR, sf0_drv) */
   {
     U32 retv;
