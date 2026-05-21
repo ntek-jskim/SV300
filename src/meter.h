@@ -444,13 +444,17 @@ enum FREQ_VAL {
 
 // 2016-12-19, Wiring mode 추가
 enum WIRING_MODE {
+	NOT_USED,
 	WM_3LN3CT, //WM_3P4W,
-	WM_3LL3CT, //WM_3P3W(3CT),
-	WM_1LN1CT, //WM_1P2W,
-	WM_1LL2CT, //WM_1P3W
 	WM_3LL2CT, //WM_3P3W(2CT)
+	WM_3LL3CT, //WM_3P3W(3CT),
+	WM_1LN1CT_L1, //WM_1P2W,
+	WM_1LN1CT_L2, //WM_1P2W,
+	WM_1LN1CT_L3, //WM_1P2W,
+	WM_1LL2CT, //WM_1P3W
 	SIMULATION,
 };
+#define IS_WM_1LN1CT(w) ((w) >= WM_1LN1CT_L1 && (w) <= WM_1LN1CT_L3)
 
 typedef struct {
 	uint32_t utc;	  // Year-Month-MDay, hour:minute:second	
@@ -874,7 +878,7 @@ typedef struct {
 	uint16_t  	maxminItv;
 	uint16_t  	testMode;
 	uint16_t  	testMode_Period;
-	uint16_t  	r3[7];
+	uint16_t  	r[2];
 //	uint16_t  	r3[9];
 } ETC_DEF;
 
@@ -884,6 +888,7 @@ typedef struct {
 	uint16_t  action;
 	uint16_t  holdOffCyc;
 	uint16_t  do_action;
+	uint16_t  r1;
 } PQEVENT;
 
 typedef struct {
@@ -1547,29 +1552,26 @@ typedef struct {
 
 typedef struct {
 	uint16_t sn[6];
+	uint16_t mac_msb[2];
 	uint16_t mac[4];
+	uint16_t ipAddr[4];		// dhcp or static ip
 	uint16_t hwModel;				// 0: 5A, 1:100mA, 2:10mA, 3:Rogowski
 	uint16_t hwVer;
 	uint16_t fwVer;
 	uint16_t fwBuildYear;
 	uint16_t fwBuildMon;
 	uint16_t fwBuildDay;
+	uint16_t HeartBit;
 	uint16_t mBusRxCnt;
 	uint16_t Alarm_sts;
 	uint16_t Event_sts;
 //	uint16_t r1[41];
 	uint16_t RSTP_sts[2];
-	uint16_t mac_msb[2];
-	uint16_t ipAddr[4];		// dhcp or static ip
 	uint16_t SNTP_sts;
 	uint16_t DEV_sts;
-	uint16_t HeartBit;
-	uint16_t iPSM_sts[2];
-	uint16_t iPSMDI_sts[2];
-	uint16_t Io_sts;
 	uint16_t NET_sts;
 	uint16_t TOT_sts;
-	uint16_t r1[23];
+	uint16_t r1[8];
 } METER_INFO;
 
 
@@ -1909,23 +1911,23 @@ typedef struct {
 	EN50160	rpt[2];
 	HARMONICS hd;
 	INTERHARMONICS interhd;
-	MAXMIN	maxmin;	// 3600	
-	ALARM_STATUS alarm;	// 3800
-	ALARM_LIST alist;	// 4200
-	EVENT_LIST elist;	// 4500
-	PQ_EVENT_COUNT pqEvtCnt;	// 4890
+	MAXMIN	maxmin;	// 2000	
+	ALARM_STATUS alarm;	// 2350
+	ALARM_LIST alist;	// 2550
+	EVENT_LIST elist;	// 2850
+	PQ_EVENT_COUNT pqEvtCnt;	// 3240
 	WAVEFORM_L16 wv;
-	LOG_DATA	 log;			// 4900
-	ENERGY_LOG	elog[2];// 5200
-	DEMAND_LOG	dlog;		// 5600 - last da demand log
+	LOG_DATA	 log;			// 4700
+	ENERGY_LOG	elog[2];// 5000
+	DEMAND_LOG	dlog;		// 5400 - last da demand log
 	//SAMPLE_BUF sample;	// 5800	- reserved area
-	MAXMIN	lastmaxmin;	// 5800
+	MAXMIN	lastmaxmin;	// 5600
 
-	ITIC_EVT_LIST	itic;	// 7400
-	ITIC_EVT_LIST	itic2;// 8000
+	ITIC_EVT_LIST	itic;	// 5950
+	ITIC_EVT_LIST	itic2;// 6410
 //	uint16_t			resv[1400];
-    IOM_DATA iom;		// 6100
-	METER_INFO info;		// 6240
+    IOM_DATA iom;		// 6870
+	METER_INFO info;		// 6890
 	SETTINGS	setting;	// 6300
 //	uint16_t 	_r[10];
 

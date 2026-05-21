@@ -15,7 +15,7 @@
 #define	FW_VER	0001
 #define	FW_BUILD_YEAR 26
 #define	FW_BUILD_MON  5
-#define	FW_BUILD_DAY  7
+#define	FW_BUILD_DAY  21
 
 #define	SQRT_2	 1.414213562 
 
@@ -446,9 +446,9 @@ int initSettings(int id)
 	db[id].etc.timezone = 540;	//60 * 9
 	
 	// Volt.
-	db[id].pt.fd[0].wiring = 0;	// 3P4W
 	db[id].pt.freq = 60;	// 60Hz
 	db[id].pt.feeder_cnt = 1;
+	db[id].pt.fd[0].wiring = WM_3LN3CT;	// 3P4W
 	db[id].pt.fd[0].vnorm = 220;	
 	db[id].pt.fd[0].PT1 = 220;
 	db[id].pt.fd[0].PT2 = 220;
@@ -543,7 +543,7 @@ int buildSettings(int id)
 	}
 	
 	//if (db[id].wiring > WM_3LL3CT) {
-	if (db[id].pt.fd[0].wiring > WM_3LL2CT) {
+	if (db[id].pt.fd[0].wiring > SIMULATION) {
 		printf("*** Invalid wiring mode = %d\n", db[id].pt.fd[0].wiring);
 		ret = -1;
 	}
@@ -1099,6 +1099,12 @@ int loadSettings(SETTINGS	*pdb)
 		if (fsize < (long)(sizeof(SETTINGS) * METER_CH_COUNT)) {
 			printf("{{Settings file short (%ld), init db[2]}}\n", fsize);
 			initSettings(2);
+			fp = fopen(SETTING_FILE, "wb");
+			if (fp != NULL) {
+				fwrite(pdb, 1, sizeof(*pdb) * METER_CH_COUNT, fp);
+				fclose(fp);
+				printf("[[Settings upgraded to 3CH, saved]]\n");
+			}
 		}
 #endif
 	}
@@ -3594,7 +3600,7 @@ void energy_scan(int id, METER_EH_REGS *ereg, ENERGY_NVRAM *pEgyNvr) {
 		//wiring모드에 따라 불 필요한 항목 지운다		
 		switch(db[id].pt.fd[0].wiring){
 		//1CT:2,3을지운다
-		case WM_1LN1CT:
+		case WM_1LN1CT_L1: case WM_1LN1CT_L2: case WM_1LN1CT_L3:
 			if (i != 0) wh = varh = vah = 0;
 			break;
 		

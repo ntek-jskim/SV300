@@ -353,7 +353,7 @@ OsTaskId taskIdWiznet;
 
 void db_init(void)
 {
-	int   wmode;
+	int   wmode,id;
 	// datetime timer
    	Timer1_Init(1000);	
    
@@ -382,6 +382,14 @@ void db_init(void)
 	loadHwSettings(pcal);	
 	setMeterInfo();
 
+#if 1
+	for (id = 0; id < METER_CH_COUNT; id++) {
+			initSettings(id);
+			initExtSettings(id);
+	}
+	build_set_db();
+	saveSettings(pdb);	/* 구 파일 덮어쓰기: loadSettings가 최신 값을 읽도록 */
+#endif
 	loadSettings(pdb);
 	
 	loadEnergy();
@@ -395,7 +403,7 @@ void db_init(void)
 
    
    init_smb();   
-	wmode = (pdb->pt.wiring == WM_3LL3CT || pdb->pt.wiring == WM_3LL2CT) ? 1 : 0;
+	wmode = (pdb->pt.fd[0].wiring == WM_3LL3CT || pdb->pt.fd[0].wiring == WM_3LL2CT) ? 1 : 0;
 	selWire(wmode);
 }
 
@@ -579,7 +587,7 @@ void app_init(void *params) {
 			TRACE_ERROR("Failed to create task(energy)\r\n");
 		}
 
-#if 0
+#if 1
 		// Meter
 		taskParams.priority = OS_TASK_PRIORITY_REALTIME;
 		taskParams.stackSize = 256;

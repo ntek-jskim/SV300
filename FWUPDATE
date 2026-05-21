@@ -1,3 +1,4 @@
+2026/05/21 : board_sysinit·fs_port_rtx·FS·board_api.h — SPIFI 관련 조건부 컴파일을 CH3→HWV1으로 변경(CH3=3채널 ADE9000 사용 여부, HWV1=SSP1 3CS 배선+SPIFI NOR Flash 하드웨어)
 2026/05/14 : piocfg IOM_DATA 정합, METER_DEF 반영 Meter0 덤프 순서, DATETIME 무인자 조회/6인자 설정(FS·SD_File), initPQHeader M0 직렬(0~2)·M1/M2 제거, M0 REALTIME·M1/M2 HIGH, meter_scan_2 PQM 슬라이스+CH3 M1↔M2 RR, FWUPDATE 신설
 2026/05/14 : Cursor 프로젝트 규칙 추가(.cursor/rules/fwupdate-log.mdc) — 이후 Cursor에서 코드 변경 시 FWUPDATE 한 줄 요약
 2026/05/14 : meter_scan_2 ZX 타임아웃 연쇄 수정 — PQM 슬라이스로 W1C 비트를 빼지 말고 stat0_snap으로 전체 클리어, 핸들러만 RR/슬라이스
@@ -30,3 +31,9 @@
 2026/05/20 : meter.h — PT_CH/PT_DEF 주석·바이트 설명을 현재 레이아웃(16B×9+상위 freq/feeder_cnt)에 맞춤, PT_PRIMARY_IDX 매크로
 2026/05/20 : meter.c — initSettings·build_cal_db1/2/3·build_set_db에 pt.feeder_cnt=1 설정
 2026/05/20 : app_main.c — tid_meter[METER_CH_COUNT]·미터 태스크 #if 0 제거 적용 안 함: tid_meter[2] 유지, Meter0/1/2 생성은 #if 0으로 비활성(실험·ADCH 점검용)
+2026/05/21 : board.c — M2 CS(P6_7→GPIO5_15) SCU 함수번호 FUNC0→FUNC4 수정(FUNC0=SGPIO3로 잘못 매핑, GPIO5_15는 FUNC4 필요)
+2026/05/21 : app_main.c — db_init() wmode 접근 경로 pt.wiring→pt.fd[0].wiring 수정(PT_DEF는 fd[9] 배열로 wiring 직접 멤버 없음)
+2026/05/21 : meter.c loadSettings — 파일 크기 부족(2CH→3CH 마이그레이션) 시 initSettings(2) 후 파일 재저장 추가(매 부팅마다 출력되던 문제 수정)
+2026/05/21 : app_main.c db_init #if 1 블록 — initSettings/build_set_db 후 saveSettings 추가(loadSettings가 구 파일 읽어 wiring=220 되던 구조체 레이아웃 불일치 문제 수정)
+2026/05/21 : meter.c buildSettings — wiring 유효성 검사 > WM_3LL2CT → > SIMULATION 수정(새 enum 추가 후 WM_3LL3CT 이상이 모두 Invalid로 오인되던 버그 수정)
+2026/05/21 : meter.h — WM_1LN1CT 세분화(L1/L2/L3), IS_WM_1LN1CT(w) 범위 매크로 추가, ade9000.c/meter.c 관련 비교·case 전체 반영

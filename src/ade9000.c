@@ -575,7 +575,7 @@ void calcAbsAngle(int id)
 		meter[id].meter.Pangle[1] = 0;
 		meter[id].meter.Pangle[2] = (meter[id].meter.I[2] == 0) ? 0 : 360 - meter[id].cntl.UIangle[2];		
 	}
-	else if(pdb->pt.fd[0].wiring==WM_1LN1CT){
+	else if(IS_WM_1LN1CT(pdb->pt.fd[0].wiring)){
 		meter[id].meter.Uangle[0] = meter[id].meter.Uangle[1] = meter[id].meter.Uangle[2] = 0;
 		
 		meter[id].meter.Iangle[0] = _toAngle(meter[id].meter.Uangle[0] + meter[id].cntl.UIangle[0]);	// V1-I1
@@ -1336,7 +1336,7 @@ void calcPower(int id) {
 	for (i=0; i<3; i++) {
 		switch(db[id].pt.fd[0].wiring){
 		//1LN : 2,3 전력을 지운다
-		case WM_1LN1CT:
+		case WM_1LN1CT_L1: case WM_1LN1CT_L2: case WM_1LN1CT_L3:
 			if(i!=0){
 				meter[id].cntl.P[i] = meter[id].cntl.Q[i] = meter[id].cntl.S[i] = 0;
 				meter[id].cntl.fP[i] = meter[id].cntl.fQ[i] = meter[id].cntl.fS[i] = 0;
@@ -1766,7 +1766,7 @@ void calcRmsAngle(int id) {
 		//
 		meter[id].meter.In = meter[id].cntl.In * (db[id].ct.zctScale / 1000.);	//Neutral Phase Current
 		meter[id].meter.Isum = meter[id].cntl.Is;	//Neutral Phase Current	= 
-		if(db[id].pt.fd[0].wiring == WM_1LN1CT){
+		if(IS_WM_1LN1CT(db[id].pt.fd[0].wiring)){
 			meter[id].meter.I[0] = meter[id].cntl.I[0];
 			meter[id].meter.I[1] = 0;
 			meter[id].meter.I[2] = 0;
@@ -1811,7 +1811,7 @@ void calcRmsAngle(int id) {
 		meter[id].meter.Itot = summation(meter[id].meter.I, 3);
 		
 		
-		if (db[id].pt.fd[0].wiring == WM_1LN1CT) {
+		if (IS_WM_1LN1CT(db[id].pt.fd[0].wiring)) {
 			meter[id].meter.Ibal[0] = meter[id].meter.Ibal[1] = 0;
 		}
 		else if (db[id].pt.fd[0].wiring == WM_1LL2CT) {
@@ -1835,7 +1835,7 @@ void calcRmsAngle(int id) {
 			meter[id].meter.fU[2] = meter[id].cntl.fU[1];	// V3 <- V32
 			meter[id].meter.fU[3] = average(meter[id].meter.fU, 3);			
 		}
-		else if(db[id].pt.fd[0].wiring==WM_1LN1CT){
+		else if(IS_WM_1LN1CT(db[id].pt.fd[0].wiring)){
 			meter[id].meter.U[0] = meter[id].meter.U[3] = meter[id].cntl.U[0];
 			meter[id].meter.U[1] = meter[id].meter.U[2] = 0;
 			meter[id].meter.fU[0] =meter[id].meter.fU[3] = meter[id].cntl.fU[0];
@@ -1863,7 +1863,7 @@ void calcRmsAngle(int id) {
 		}		
 		
 		// 전압 불평형률
-		if (db[id].pt.fd[0].wiring == WM_1LN1CT) {
+		if (IS_WM_1LN1CT(db[id].pt.fd[0].wiring)) {
 			meter[id].meter.Ubal[0] = meter[id].meter.Ubal[1] = 0;
 		}
 		else if (db[id].pt.fd[0].wiring == WM_1LL2CT) {
@@ -1906,7 +1906,7 @@ void calcRmsAngle(int id) {
 			meter[id].meter.Ig = meter[id].meter.In;
 		}
 		//3상3선일경우선간전압=상전압
-		else if (db[id].pt.fd[0].wiring == WM_1LN1CT) {
+		else if (IS_WM_1LN1CT(db[id].pt.fd[0].wiring)) {
 			meter[id].meter.Upp[0] = meter[id].meter.Upp[3] = meter[id].meter.U[0];			
 			meter[id].meter.Upp[1] = meter[id].meter.Upp[2] = 0;
 			meter[id].meter.Ig = meter[id].meter.In;				
@@ -2219,7 +2219,7 @@ void initADE9000(uint8_t id)
 	write_reg16(id, AD9X_ACCMODE, &wtemp);
 		
 	// change Isum mode -> Ig로 사용한다 
-	if (pdb->ct.CT2 == CT_5A && (pdb->pt.fd[0].wiring == WM_3LN3CT || pdb->pt.fd[0].wiring == WM_1LN1CT || pdb->pt.fd[0].wiring == WM_1LL2CT)) {
+	if (pdb->ct.CT2 == CT_5A && (pdb->pt.fd[0].wiring == WM_3LN3CT || IS_WM_1LN1CT(pdb->pt.fd[0].wiring) || pdb->pt.fd[0].wiring == WM_1LL2CT)) {
 		dtemp = 1;
 		read_reg16(id, AD9X_CONFIG0, &wtemp);
 	}

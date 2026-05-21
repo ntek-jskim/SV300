@@ -1416,7 +1416,7 @@ void Board_SSP_Init(LPC_SSP_T *pSSP, int w, int _auto, int speed)
 #ifdef CH3
 			/* CH3: M1_CS(P7_0/GPIO3_8), M2_CS(P6_7/GPIO5_15)를 GPIO 기능으로 설정 */
 			Chip_SCU_PinMuxSet(0x7, 0, (SCU_PINIO_FAST | SCU_MODE_FUNC0));	/* P7_0 -> GPIO3_8 */
-			Chip_SCU_PinMuxSet(0x6, 7, (SCU_PINIO_FAST | SCU_MODE_FUNC0));	/* P6_7 -> GPIO5_15 */
+			Chip_SCU_PinMuxSet(0x6, 7, (SCU_PINIO_FAST | SCU_MODE_FUNC4));	/* P6_7 -> GPIO5_15 */
 #endif
 			Chip_GPIO_SetPinDIR(LPC_GPIO_PORT, SSEL_GPIO[1].port, SSEL_GPIO[1].num, 1);
 			Chip_GPIO_SetPinOutHigh(LPC_GPIO_PORT, SSEL_GPIO[1].port, SSEL_GPIO[1].num);				
