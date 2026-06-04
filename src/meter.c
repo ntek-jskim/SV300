@@ -14,8 +14,8 @@
 
 #define	FW_VER	0001
 #define	FW_BUILD_YEAR 26
-#define	FW_BUILD_MON  5
-#define	FW_BUILD_DAY  21
+#define	FW_BUILD_MON  6
+#define	FW_BUILD_DAY  4
 
 #define	SQRT_2	 1.414213562 
 
@@ -26,7 +26,7 @@ METER_DEF	meter[3] __attribute__ ((section ("EXT_RAM"), zero_init));
 METER_DEF	meter[2] __attribute__ ((section ("EXT_RAM"), zero_init));
 #endif
 METER_CAL	meterCal __attribute__ ((section ("EXT_RAM"), zero_init));
-SETTINGS	db[METER_CH_COUNT] __attribute__ ((section ("EXT_RAM"), zero_init));
+SETTINGS	db __attribute__ ((section ("EXT_RAM"), zero_init));
 ALARM_LIST	alist __attribute__ ((section ("EXT_RAM"), zero_init));
 EVENT_LIST	elist __attribute__ ((section ("EXT_RAM"), zero_init));
 #ifdef CH3
@@ -42,13 +42,12 @@ SIMPLE_DATA	*psmap=&smap;
 //METER_CAL	*pcal=&meter[0].cal;
 METER_CAL	*pcal=&meterCal;
 
-SETTINGS	*pdb=&db[0];
+SETTINGS	*pdb=&db;
 SETTINGS	*pdbk=&meter[0].setting;
-SETTINGS	*pdb2=&db[1];
-SETTINGS	*pdbk2=&meter[1].setting;
+uint16_t	*pmset=METER_MB_SETTING_REGS(meter[0]);
+uint16_t	*pmset2=METER_MB_SETTING_REGS(meter[1]);
 #if METER_CH_COUNT > 2
-SETTINGS	*pdb3=&db[2];
-SETTINGS	*pdbk3=&meter[2].setting;
+uint16_t	*pmset3=METER_MB_SETTING_REGS(meter[2]);
 #endif
 
 METERING 	*pmeter=&meter[0].meter;
@@ -75,7 +74,7 @@ EVENT_LIST	*pelist=&elist;
 //ADE9000_REG _ade9000, *pchip=&_ade9000;
 TIME_STAMP freezeTod;
 //COMM_CFG *pComm=&meter.db.comm;
-IO_CFG	*piocfg=&meter[0].db.iom;
+IO_CFG	*piocfg=&meter[0].setting.iom;
 #if 1	// 2023-9
 ALARM_FIFO *pAlmFifo=&meter[0].alarmFifo;
 #endif
@@ -224,300 +223,218 @@ uint32_t getThresHold(int type)
 	return 0;
 }
 
+/* 교정용 PT/CT 프리셋 — db 갱신 후 meter[0].setting 동기화·저장(build_set_db와 동일) */
+static void set_cal_channel_pt_ct(int id, uint16_t wiring, int inorm, int ct1, int zctScale)
+{
+	db.pt[id].wiring = wiring;
+	db.pt[id].vnorm = 220;
+	db.pt[id].PT1 = 220;
+	db.pt[id].PT2 = 220;
+	db.ct[id].inorm = inorm;
+	db.ct[id].CT1 = ct1;
+	db.ct[id].CT2 = 1;
+	db.ct[id].zctScale = zctScale;
+	db.ct[id].zctType = 1;
+}
+
+static void commit_db_settings(void)
+{
+	memcpy(&meter[0].setting, &db, sizeof(SETTINGS));
+	reqSaveSettings(0x1234);
+}
+
+static void apply_cal_preset_all_ch(uint16_t wiring, int inorm, int ct1, int zctScale)
+{
+	int id;
+
+	db.feeder_cnt = METER_CH_COUNT;
+	db.freq = 60;
+	for (id = 0; id < METER_CH_COUNT; id++)
+		set_cal_channel_pt_ct(id, wiring, inorm, ct1, zctScale);
+}
+
 void build_cal_db1(void)
 {
-	int id=0;
-	// Volt.
-	meter[id].setting.pt.feeder_cnt = 3;
-	meter[id].setting.pt.fd[0].wiring = 0;	// 3P4W, 3P3W(2), 3P3W(3)
-	meter[id].setting.pt.freq = 60;	// 60Hz
-	meter[id].setting.pt.fd[0].vnorm = 220;	
-	meter[id].setting.pt.fd[0].PT1 = 220;
-	meter[id].setting.pt.fd[0].PT2 = 220;
-	meter[id].setting.ct.inorm = 100;
-	meter[id].setting.ct.CT1 = 100;
-	meter[id].setting.ct.CT2 = 1;		// 5A CT
-	meter[id].setting.ct.zctScale = 1000;	// 2nd scale
-	meter[id].setting.ct.zctType = 1;
-	// db[id].pt.fd[0].wiring = 0;	// 3P4W, 3P3W(2), 3P3W(3)
-	// db[id].pt.freq = 60;	// 60Hz
-	// db[id].pt.fd[0].vnorm = 220;	
-	// db[id].pt.fd[0].PT1 = 220;
-	// db[id].pt.fd[0].PT2 = 220;
-	// db[id].ct.inorm = 100;
-	// db[id].ct.CT1 = 100;
-	// db[id].ct.CT2 = 1;		// 5A CT
-	// db[id].ct.zctScale = 1000;	// 2nd scale
-	// db[id].ct.zctType = 1;
-	
-	id = 1;
-	meter[id].setting.pt.feeder_cnt = 1;
-	meter[id].setting.pt.fd[0].wiring = 0;	// 3P4W, 3P3W(2), 3P3W(3)
-	meter[id].setting.pt.freq = 60;	// 60Hz
-	meter[id].setting.pt.fd[0].vnorm = 220;	
-	meter[id].setting.pt.fd[0].PT1 = 220;
-	meter[id].setting.pt.fd[0].PT2 = 220;
-	meter[id].setting.ct.inorm = 100;
-	meter[id].setting.ct.CT1 = 100;
-	meter[id].setting.ct.CT2 = 1;		// 5A CT
-	meter[id].setting.ct.zctScale = 1000;	// 2nd scale
-	meter[id].setting.ct.zctType = 1;
-	reqSaveSettings(0x1234);
+	apply_cal_preset_all_ch(0, 100, 100, 1000);
+	commit_db_settings();
 }
 
 void build_cal_db2(void)
 {
-	int id=0;
-	// Volt.
-	meter[id].setting.pt.feeder_cnt = 1;
-	meter[id].setting.pt.fd[0].wiring = 1;	// 3P4W, 3P3W(2), 3P3W(3)
-	meter[id].setting.pt.freq = 60;	// 60Hz
-	meter[id].setting.pt.fd[0].vnorm = 220;	
-	meter[id].setting.pt.fd[0].PT1 = 220;
-	meter[id].setting.pt.fd[0].PT2 = 220;
-	meter[id].setting.ct.inorm = 100;
-	meter[id].setting.ct.CT1 = 100;
-	meter[id].setting.ct.CT2 = 1;		// 5A CT
-	meter[id].setting.ct.zctScale = 1000;	// 2nd scale
-	meter[id].setting.ct.zctType = 1;
-	
-	id = 1;
-	meter[id].setting.pt.feeder_cnt = 1;
-	meter[id].setting.pt.fd[0].wiring = 1;	// 3P4W, 3P3W(2), 3P3W(3)
-	meter[id].setting.pt.freq = 60;	// 60Hz
-	meter[id].setting.pt.fd[0].vnorm = 220;	
-	meter[id].setting.pt.fd[0].PT1 = 220;
-	meter[id].setting.pt.fd[0].PT2 = 220;
-	meter[id].setting.ct.inorm = 100;
-	meter[id].setting.ct.CT1 = 100;
-	meter[id].setting.ct.CT2 = 1;		// 5A CT
-	meter[id].setting.ct.zctScale = 1000;	// 2nd scale
-	meter[id].setting.ct.zctType = 1;
-	
-	reqSaveSettings(0x1234);
+	apply_cal_preset_all_ch(1, 100, 100, 1000);
+	commit_db_settings();
 }
+
 void build_cal_db3(void)
 {
-	int id=0;
-	// Volt.
-	meter[id].setting.pt.feeder_cnt = 1;
-	meter[id].setting.pt.fd[0].wiring = 0;	// 3P4W, 3P3W(2), 3P3W(3)
-	meter[id].setting.pt.freq = 60;	// 60Hz
-	meter[id].setting.pt.fd[0].vnorm = 220;	
-	meter[id].setting.pt.fd[0].PT1 = 220;
-	meter[id].setting.pt.fd[0].PT2 = 220;
-	meter[id].setting.ct.inorm = 250;
-	meter[id].setting.ct.CT1 = 250;
-	meter[id].setting.ct.CT2 = 1;		// 5A CT
-	meter[id].setting.ct.zctScale = 1250;	// 2nd scale
-	meter[id].setting.ct.zctType = 1;
-	// db[id].pt.fd[0].wiring = 0;	// 3P4W, 3P3W(2), 3P3W(3)
-	// db[id].pt.freq = 60;	// 60Hz
-	// db[id].pt.fd[0].vnorm = 220;	
-	// db[id].pt.fd[0].PT1 = 220;
-	// db[id].pt.fd[0].PT2 = 220;
-	// db[id].ct.inorm = 100;
-	// db[id].ct.CT1 = 100;
-	// db[id].ct.CT2 = 1;		// 5A CT
-	// db[id].ct.zctScale = 1000;	// 2nd scale
-	// db[id].ct.zctType = 1;
-	
-	id = 1;
-	meter[id].setting.pt.feeder_cnt = 1;
-	meter[id].setting.pt.fd[0].wiring = 0;	// 3P4W, 3P3W(2), 3P3W(3)
-	meter[id].setting.pt.freq = 60;	// 60Hz
-	meter[id].setting.pt.fd[0].vnorm = 220;	
-	meter[id].setting.pt.fd[0].PT1 = 220;
-	meter[id].setting.pt.fd[0].PT2 = 220;
-	meter[id].setting.ct.inorm = 250;
-	meter[id].setting.ct.CT1 = 250;
-	meter[id].setting.ct.CT2 = 1;		// 5A CT
-	meter[id].setting.ct.zctScale = 1250;	// 2nd scale
-	meter[id].setting.ct.zctType = 1;
-	reqSaveSettings(0x1234);
+	apply_cal_preset_all_ch(0, 250, 250, 1250);
+	commit_db_settings();
 }
 
 void build_set_db(void)
 {
-	int id=0;
-	// Volt.
-	meter[id].setting.pt.feeder_cnt = 1;
-	meter[id].setting.pt.fd[0].wiring = 1;	// 3P3W
-	meter[id].setting.pt.freq = 60;	// 60Hz
-	meter[id].setting.pt.fd[0].vnorm = 220;	
-	meter[id].setting.pt.fd[0].PT1 = 220;
-	meter[id].setting.pt.fd[0].PT2 = 220;
-	meter[id].setting.ct.inorm = 100;
-	meter[id].setting.ct.CT1 = 100;
-	meter[id].setting.ct.CT2 = 1;		// 5A CT
-	meter[id].setting.ct.zctScale = 1000;	// 2nd scale
-	meter[id].setting.ct.zctType = 1;
-	
-	id = 1;
-	meter[id].setting.pt.feeder_cnt = 1;
-	meter[id].setting.pt.fd[0].wiring = 2;	// 1P2W
-	meter[id].setting.pt.freq = 60;	// 60Hz
-	meter[id].setting.pt.fd[0].vnorm = 220;	
-	meter[id].setting.pt.fd[0].PT1 = 220;
-	meter[id].setting.pt.fd[0].PT2 = 220;
-	meter[id].setting.ct.inorm = 100;
-	meter[id].setting.ct.CT1 = 100;
-	meter[id].setting.ct.CT2 = 1;		// 5A CT
-	meter[id].setting.ct.zctScale = 1000;	// 2nd scale
-	meter[id].setting.ct.zctType = 1;
+	int id = 0;
 
-	meter[id].setting.comm.comMode = 0;		// master
-	meter[id].setting.comm.devId = 1;		// master
-	meter[id].setting.comm.baud = 0;
-	meter[id].setting.comm.parity = 1;
+	db.feeder_cnt = METER_CH_COUNT;
+	db.freq = 60;
+
+	db.pt[0].wiring = 1;	/* 3P3W */
+	db.pt[0].vnorm = 220;
+	db.pt[0].PT1 = 220;
+	db.pt[0].PT2 = 220;
+	db.ct[0].inorm = 100;
+	db.ct[0].CT1 = 100;
+	db.ct[0].CT2 = 1;
+	db.ct[0].zctScale = 1000;
+	db.ct[0].zctType = 1;
+
+	id = 1;
+	db.pt[id].wiring = 2;	/* 1P2W */
+	db.pt[id].vnorm = 220;
+	db.pt[id].PT1 = 220;
+	db.pt[id].PT2 = 220;
+	db.ct[id].inorm = 100;
+	db.ct[id].CT1 = 100;
+	db.ct[id].CT2 = 1;
+	db.ct[id].zctScale = 1000;
+	db.ct[id].zctType = 1;
 
 #if METER_CH_COUNT > 2
 	id = 2;
-	meter[id].setting.pt.feeder_cnt = 1;
-	meter[id].setting.pt.fd[0].wiring = 2;	/* 1P2W, M1과 동일 */
-	meter[id].setting.pt.freq = 60;
-	meter[id].setting.pt.fd[0].vnorm = 220;
-	meter[id].setting.pt.fd[0].PT1 = 220;
-	meter[id].setting.pt.fd[0].PT2 = 220;
-	meter[id].setting.ct.inorm = 100;
-	meter[id].setting.ct.CT1 = 100;
-	meter[id].setting.ct.CT2 = 1;
-	meter[id].setting.ct.zctScale = 1000;
-	meter[id].setting.ct.zctType = 1;
-	meter[id].setting.comm.comMode = 0;
-	meter[id].setting.comm.devId = 1;
-	meter[id].setting.comm.baud = 0;
-	meter[id].setting.comm.parity = 1;
+	db.pt[id].wiring = 2;
+	db.pt[id].vnorm = 220;
+	db.pt[id].PT1 = 220;
+	db.pt[id].PT2 = 220;
+	db.ct[id].inorm = 100;
+	db.ct[id].CT1 = 100;
+	db.ct[id].CT2 = 1;
+	db.ct[id].zctScale = 1000;
+	db.ct[id].zctType = 1;
 #endif
 
-	// memset(&meter[0].setting.f_setting[0], 0, sizeof(FLOW_SETTING)*4);
-	// memcpy(&pflow->f_setting[0], &pdbk->f_setting[0], sizeof(FLOW_SETTING)*4);
-	reqSaveSettings(0x1234);
+	db.comm.comMode = 0;
+	db.comm.devId = 1;
+	db.comm.baud = 0;
+	db.comm.parity = 1;
+
+	commit_db_settings();
+}
+
+/* METER_DEF.pqevt~trend — settings.dat에는 없고 meter[] RAM 전용 */
+static void initMeterPqeSettings(int id)
+{
+	meter[id].transient[0].level = 200;
+	meter[id].transient[0].fastChange = 4;
+	meter[id].transient[0].holdOff = 500;
+	meter[id].transient[0].action = 0;
+
+	meter[id].transient[1].level = 150;
+	meter[id].transient[1].fastChange = 4;
+	meter[id].transient[1].holdOff = 500;
+	meter[id].transient[1].action = 0;
+
+	meter[id].pqevt[PQE_OC].level = 200;
+	meter[id].pqevt[PQE_OC].nCyc = 1;
+	meter[id].pqevt[PQE_OC].action = 0;
+	meter[id].pqevt[PQE_OC].holdOffCyc = 500;
+
+	meter[id].pqevt[PQE_SAG].level = 80;
+	meter[id].pqevt[PQE_SAG].nCyc = 1;
+	meter[id].pqevt[PQE_SAG].action = 0;
+	meter[id].pqevt[PQE_SAG].holdOffCyc = 500;
+
+	meter[id].pqevt[PQE_SWELL].level = 120;
+	meter[id].pqevt[PQE_SWELL].nCyc = 1;
+	meter[id].pqevt[PQE_SWELL].action = 0;
+	meter[id].pqevt[PQE_SWELL].holdOffCyc = 500;
+
+	meter[id].pqevt[PQE_INTR].level = 5;
+	meter[id].pqevt[PQE_INTR].nCyc = 1;
+	meter[id].pqevt[PQE_INTR].action = 0;
+	meter[id].pqevt[PQE_INTR].holdOffCyc = 500;
+
+	meter[id].pqRpt.active = 1;
+	meter[id].trend[0].chan[0] = 1;
+	meter[id].trend[0].chan[1] = 2;
 }
 
 int initSettings(int id)
 {
-	printf("{{initSettings}}\n");
-	memset(&db[id], 0, sizeof(*pdb));
-		
-	//db[id].password = 0;
-	// com.
-	db[id].comm.comMode = 1;
-	db[id].comm.baud = 4; // 115200
-	db[id].comm.devId = 1;
-	db[id].comm.parity = 0;
-	db[id].comm.tcpPort = 502;
-	db[id].comm.dhcpEn = 0;		// disble
-	
-	db[id].comm.ip0[0] = 192;
-	db[id].comm.ip0[1] = 168;
-	db[id].comm.ip0[2] = 9;
-	db[id].comm.ip0[3] = 124;
-	
-	db[id].comm.sm0[0] = 255;
-	db[id].comm.sm0[1] = 255;
-	db[id].comm.sm0[2] = 0;
-	db[id].comm.sm0[3] = 0;
-	
-	db[id].comm.gw0[0] = 192;
-	db[id].comm.gw0[1] = 168;
-	db[id].comm.gw0[2] = 9;
-	db[id].comm.gw0[3] = 1;	
-	
-	db[id].comm.dns0[0] = 168;
-	db[id].comm.dns0[1] = 126;
-	db[id].comm.dns0[2] = 63;
-	db[id].comm.dns0[3] = 1;	
-	
-	db[id].comm.sntp[0] = 0;
-	db[id].comm.sntp[1] = 0;
-	db[id].comm.sntp[2] = 0;
-	db[id].comm.sntp[3] = 0;		
-		
-	strcpy((char *)db[id].comm.host, "SV300");
-	db[id].comm.tcpPort = 502;
-	
-	db[id].comm.gwEable = 0x0f;
-	db[id].comm.RS485MasterMode = 2;		// slave
-	db[id].comm.dhcpEn = 0;				// disble
-	//
-	db[id].etc.backlightTime = 0;
-	db[id].etc.brightness = 4;	// 100%
-	db[id].etc.timezone = 540;	//60 * 9
-	
-	// Volt.
-	db[id].pt.freq = 60;	// 60Hz
-	db[id].pt.feeder_cnt = 1;
-	db[id].pt.fd[0].wiring = WM_3LN3CT;	// 3P4W
-	db[id].pt.fd[0].vnorm = 220;	
-	db[id].pt.fd[0].PT1 = 220;
-	db[id].pt.fd[0].PT2 = 220;
-	
-	// Current
-	if(id == 0) {
-		db[id].ct.inorm = 250;
-		db[id].ct.CT1 = 250;
-		db[id].ct.CT2 = 1;	// 5A CT
-		db[id].ct.zctScale = 1000;	// 2nd scale
-		db[id].ct.zctType = 1;
-	}
-	else {
-		db[id].ct.inorm = 100;
-		db[id].ct.CT1 = 100;
-		db[id].ct.CT2 = 1;	// 5A CT
-		db[id].ct.zctScale = 1000;	// 2nd scale
-		db[id].ct.zctType = 1;
+	if (id < 0 || id >= METER_CH_COUNT)
+		return -1;
+
+	printf("{{initSettings(%d)}}\n", id);
+
+	if (id == 0) {
+		memset(&db, 0, sizeof(db));
+
+		db.comm.comMode = 1;
+		db.comm.baud = 4; /* 115200 */
+		db.comm.devId = 1;
+		db.comm.parity = 0;
+		db.comm.tcpPort = 502;
+		db.comm.dhcpEn = 0;
+
+		db.comm.ip0[0] = 192;
+		db.comm.ip0[1] = 168;
+		db.comm.ip0[2] = 9;
+		db.comm.ip0[3] = 124;
+
+		db.comm.sm0[0] = 255;
+		db.comm.sm0[1] = 255;
+		db.comm.sm0[2] = 0;
+		db.comm.sm0[3] = 0;
+
+		db.comm.gw0[0] = 192;
+		db.comm.gw0[1] = 168;
+		db.comm.gw0[2] = 9;
+		db.comm.gw0[3] = 1;
+
+		db.comm.dns0[0] = 168;
+		db.comm.dns0[1] = 126;
+		db.comm.dns0[2] = 63;
+		db.comm.dns0[3] = 1;
+
+		db.comm.sntp[0] = 0;
+		db.comm.sntp[1] = 0;
+		db.comm.sntp[2] = 0;
+		db.comm.sntp[3] = 0;
+
+		strcpy((char *)db.comm.host, "SV300");
+		db.comm.tcpPort = 502;
+		db.comm.gwEable = 0x0f;
+		db.comm.RS485MasterMode = 2;
+		db.comm.dhcpEn = 0;
+
+		db.etc.backlightTime = 1;
+		db.etc.brightness = 2;
+		db.etc.timezone = 540;
+		db.etc.interval = 2;
+		db.etc.Iload = 50;
+		db.etc.autorotation = 2;
+		db.etc.maxminItv = 2;
+
+		db.freq = 60;
+		db.feeder_cnt = METER_CH_COUNT;
 	}
 
-			
-	//
-	db[id].etc.interval = 2;		// demand Interval, 15분(0:1,1:5,2:15,3:30,4:60)
-	db[id].etc.timezone = 540;	// 9:00
-	db[id].etc.Iload = 50;		// for TDD calculation	(unused)
-	db[id].etc.backlightTime = 1;	// 2min
-	db[id].etc.brightness = 2;	// 60%
-	db[id].etc.autorotation = 2;	// 6sec
-	db[id].etc.maxminItv = 2;		// none
-	
-	// Transient Event
-	db[id].transient[0].level = 200;		// 0:disabled, 100 ~ 200%
-	db[id].transient[0].fastChange = 4;	// 0:disabled, 1 ~ 10%
-	db[id].transient[0].holdOff = 500;	
-	db[id].transient[0].action = 0;			// default : No Action
-	
-	db[id].transient[1].level = 150;		// 0:disabled, 100 ~ 200%
-	db[id].transient[1].fastChange = 4;	// 0:disabled, 1 ~ 10%
-	db[id].transient[1].holdOff = 500;
-	db[id].transient[1].action = 0;	
-	
-	// PQ Event
-	db[id].pqevt[PQE_OC].level=200;
-	db[id].pqevt[PQE_OC].nCyc=1;
-	db[id].pqevt[PQE_OC].action = 0;
-	db[id].pqevt[PQE_OC].holdOffCyc = 500;	// 500ms
-	// sag
-	db[id].pqevt[PQE_SAG].level=80;
-	db[id].pqevt[PQE_SAG].nCyc=1;
-	db[id].pqevt[PQE_SAG].action = 0;
-	db[id].pqevt[PQE_SAG].holdOffCyc = 500;	// 500ms
-	// swell
-	db[id].pqevt[PQE_SWELL].level=120;
-	db[id].pqevt[PQE_SWELL].nCyc=1;
-	db[id].pqevt[PQE_SWELL].action = 0;
-	db[id].pqevt[PQE_SWELL].holdOffCyc = 500;	// 500ms
-	// Interruption
-	db[id].pqevt[PQE_INTR].level=5;
-	db[id].pqevt[PQE_INTR].nCyc=1;
-	db[id].pqevt[PQE_INTR].action = 0;
-	db[id].pqevt[PQE_INTR].holdOffCyc = 500;	// 500ms, not used
-		
-	// PQ report
-	db[id].pqRpt.active = 1;	
-	
-	// Trend	
-	db[id].trend[0].chan[0] = 1;
-	db[id].trend[0].chan[1] = 2;
-	
+	db.pt[id].wiring = WM_3LN3CT;
+	db.pt[id].vnorm = 220;
+	db.pt[id].PT1 = 220;
+	db.pt[id].PT2 = 220;
+
+	if (id == 0) {
+		db.ct[id].inorm = 250;
+		db.ct[id].CT1 = 250;
+	} else {
+		db.ct[id].inorm = 100;
+		db.ct[id].CT1 = 100;
+	}
+	db.ct[id].CT2 = 1;
+	db.ct[id].zctScale = (id == 0) ? 1000 : 1000;
+	db.ct[id].zctType = 1;
+
+	initMeterPqeSettings(id);
 
 	return 0;
 }
@@ -530,33 +447,31 @@ int buildSettings(int id)
 	float ptratio;
 	CNTL_DATA	*_pcntl = &meter[id].cntl;
 
-	meter[id].meter.vType = (uint16_t)db[id].pt.fd[0].wiring;
-	
-	if (db[id].comm.devId > 250) {
-		printf("*** Invalid devId = %d\n", db[id].comm.devId);
-		ret = -1;
-	}
-	
-	if (db[id].comm.baud >= 5) {
-		printf("*** Invalid baudrate = %d\n", db[id].comm.baud);
-		ret = -1;
-	}
-	
-	//if (db[id].wiring > WM_3LL3CT) {
-	if (db[id].pt.fd[0].wiring > SIMULATION) {
-		printf("*** Invalid wiring mode = %d\n", db[id].pt.fd[0].wiring);
-		ret = -1;
-	}
-	
-	if (strlen(db[id].comm.host) == 0) {
-		strcpy(db[id].comm.host, "SV300");
-	}
-		
-	db[id].ct.CT2 = getHwModel();
-	printf("[HW : Model = %d, Version = %d]\n", db[id].ct.CT2, getHwVersion());
+	meter[id].meter.vType = (uint16_t)db.pt[id].wiring;
 
-	_pcntl->I_start = (float)(db[id].ct.inorm) * db[id].ct.I_start/1000.;
-	printf("[start Current = %f, %d, %d]\n", _pcntl->I_start, db[id].ct.inorm, db[id].ct.I_start);
+	if (id == 0) {
+		if (db.comm.devId > 250) {
+			printf("*** Invalid devId = %d\n", db.comm.devId);
+			ret = -1;
+		}
+		if (db.comm.baud >= 5) {
+			printf("*** Invalid baudrate = %d\n", db.comm.baud);
+			ret = -1;
+		}
+		if (strlen(db.comm.host) == 0)
+			strcpy(db.comm.host, "SV300");
+	}
+
+	if (db.pt[id].wiring > SIMULATION) {
+		printf("*** Invalid wiring mode = %d\n", db.pt[id].wiring);
+		ret = -1;
+	}
+
+	db.ct[id].CT2 = getHwModel();
+	printf("[HW : Model = %d, Version = %d]\n", db.ct[id].CT2, getHwVersion());
+
+	_pcntl->I_start = (float)(db.ct[id].inorm) * db.ct[id].I_start/1000.;
+	printf("[start Current = %f, %d, %d]\n", _pcntl->I_start, db.ct[id].inorm, db.ct[id].I_start);
 
 	// 정격전압이 150V 보다 적으면 phase volt. gain을 2로 한다 
 	// 2017-11-23, vnorm을 PT2로 변경한다, VNORM은 sag/swell 기준값으로 사용한다 
@@ -564,9 +479,9 @@ int buildSettings(int id)
 
 	meter[id].cntl.pga_vgain = 1;	// 2x
 	meter[id].cntl.wh_scale = 2;	// 전압이 1/2이므로 wh를 2배한다 
-	meter[id].cntl.pthreshold = getThresHold(db[id].ct.CT2);
+	meter[id].cntl.pthreshold = getThresHold(db.ct[id].CT2);
 	// 2021-7-7, pt ration 구하는 과정에서 정수비가 아닌경우 오류 발생함.// 	
-	ptratio = (float)db[id].pt.fd[0].PT1/db[id].pt.fd[0].PT2;	
+	ptratio = (float)db.pt[id].PT1/db.pt[id].PT2;	
 	meter[id].cntl.vscale    = (V_FULL/RMS_MAX) *ptratio/2;
 	meter[id].cntl.wv_vscale = (V_FULL/WAVE_MAX)*ptratio/2; //(V_FULL/WAVE_MAX)/2;	
 	meter[id].cntl.wscale    = (V_FULL)*(ptratio)/2;
@@ -575,35 +490,35 @@ int buildSettings(int id)
 	meter[id].cntl.wv_vscale = (V_FULL/WAVE_MAX)*10/2;
 	meter[id].wv.vscale = meter[id].cntl.wv_vreverse = ptratio/10.;
 		
-	switch (db[id].ct.CT2) {	
+	switch (db.ct[id].CT2) {	
 	case CT_5A:		
 		// 부담저항 : 66.6
 		if (getHwVersion() == 0) {
-			meter[id].cntl.iscale    = I_FULL_5A/RMS_MAX  * db[id].ct.CT1/5.; 		
-			meter[id].cntl.wscale   *= I_FULL_5A*(db[id].ct.CT1/5.);
+			meter[id].cntl.iscale    = I_FULL_5A/RMS_MAX  * db.ct[id].CT1/5.; 		
+			meter[id].cntl.wscale   *= I_FULL_5A*(db.ct[id].CT1/5.);
 			meter[id].cntl.pga_igain = 0;	// 1x
 			meter[id].cntl.inoload   = RMS_MAX*I_NOLOAD_5A/I_FULL_5A;	// 2020-4-3, CT ration 적용전에 처리해야 한다 
-			//meter[id].cntl.inoload   = db[id].ct.CT1/5.*I_NOLOAD_5A;	// -> 전류에 해당하는 raw 값으로 변환한다 
+			//meter[id].cntl.inoload   = db.ct[id].CT1/5.*I_NOLOAD_5A;	// -> 전류에 해당하는 raw 값으로 변환한다 
 		
 			// CT1이 적으면 계단파로 표시된다 
-			//meter[id].cntl.wv_iscale = I_FULL_5A/WAVE_MAX * db[id].ct.CT1/5.; 	
+			//meter[id].cntl.wv_iscale = I_FULL_5A/WAVE_MAX * db.ct[id].CT1/5.; 	
 			meter[id].cntl.wv_iscale = I_FULL_5A/WAVE_MAX * 2000;	// ~10617
-			meter[id].wv.iscale   = meter[id].cntl.wv_ireverse = (db[id].ct.CT1/5)/2000.;
+			meter[id].wv.iscale   = meter[id].cntl.wv_ireverse = (db.ct[id].CT1/5)/2000.;
 			// add pulse config
 			meter[id].cntl.CFxDEN    = CFxDEN_5A;
 		}
 		else {
 			// 부담저항 : 20
-			meter[id].cntl.iscale    = I_FULL_5AN/RMS_MAX  * db[id].ct.CT1/5.; 		
-			meter[id].cntl.wscale   *= I_FULL_5AN*(db[id].ct.CT1/5.);
+			meter[id].cntl.iscale    = I_FULL_5AN/RMS_MAX  * db.ct[id].CT1/5.; 		
+			meter[id].cntl.wscale   *= I_FULL_5AN*(db.ct[id].CT1/5.);
 			meter[id].cntl.pga_igain = 0;	// 1x
 			meter[id].cntl.inoload   = RMS_MAX*I_NOLOAD_5AN/I_FULL_5AN;	// 2020-4-3, CT ration 적용전에 처리해야 한다 
-			//meter[id].cntl.inoload   = db[id].ct.CT1/5.*I_NOLOAD_5A;	// -> 전류에 해당하는 raw 값으로 변환한다 
+			//meter[id].cntl.inoload   = db.ct[id].CT1/5.*I_NOLOAD_5A;	// -> 전류에 해당하는 raw 값으로 변환한다 
 		
 			// CT1이 적으면 계단파로 표시된다 
-			//meter[id].cntl.wv_iscale = I_FULL_5A/WAVE_MAX * db[id].ct.CT1/5.; 	
+			//meter[id].cntl.wv_iscale = I_FULL_5A/WAVE_MAX * db.ct[id].CT1/5.; 	
 			meter[id].cntl.wv_iscale = I_FULL_5AN/WAVE_MAX * 2000;	// ~10617
-			meter[id].wv.iscale   = meter[id].cntl.wv_ireverse = (db[id].ct.CT1/5)/2000.;
+			meter[id].wv.iscale   = meter[id].cntl.wv_ireverse = (db.ct[id].CT1/5)/2000.;
 			// add pulse config
 //			meter[id].cntl.CFxDEN    = CFxDEN_5AN;			
 			meter[id].cntl.CFxDEN    = CFxDEN_5AN - getHwVersion();			
@@ -612,23 +527,23 @@ int buildSettings(int id)
 		
 	case CT_100mA:
 	case CT_333mV:		
-		meter[id].cntl.iscale    = I_FULL_100mA/RMS_MAX  * (db[id].ct.CT1/50.)/2; 				
-		meter[id].cntl.wscale   *= I_FULL_100mA*(db[id].ct.CT1/50.)/2;
+		meter[id].cntl.iscale    = I_FULL_100mA/RMS_MAX  * (db.ct[id].CT1/50.)/2; 				
+		meter[id].cntl.wscale   *= I_FULL_100mA*(db.ct[id].CT1/50.)/2;
 		meter[id].cntl.pga_igain  = 0;	// 1x
 		meter[id].cntl.inoload   = RMS_MAX*I_NOLOAD_100mA/I_FULL_100mA;	// 2020-4-3, CT ration 적용전에 처리해야 한다 
-		//meter[id].cntl.inoload   = db[id].ct.CT1/50.*I_NOLOAD_100mA;
+		//meter[id].cntl.inoload   = db.ct[id].CT1/50.*I_NOLOAD_100mA;
 	
 		// CT1이 적으면 계단파로 표시된다 
-		//meter[id].cntl.wv_iscale = I_FULL_100mA/WAVE_MAX * (db[id].ct.CT1/50.)/2; 		
+		//meter[id].cntl.wv_iscale = I_FULL_100mA/WAVE_MAX * (db.ct[id].CT1/50.)/2; 		
 		meter[id].cntl.wv_iscale = I_FULL_100mA/WAVE_MAX * 200; // ~11000	
-		meter[id].wv.iscale   = meter[id].cntl.wv_ireverse = (db[id].ct.CT1/50.)/200.;
+		meter[id].wv.iscale   = meter[id].cntl.wv_ireverse = (db.ct[id].CT1/50.)/200.;
 		// add pulse config
 		meter[id].cntl.CFxDEN    = CFxDEN_100mA;
 		break;
 		
 	// wave 표시와 관련된 수정 필요하다 ...
 	case CT_RCT:		
-		if (db[id].pt.freq == 60) {
+		if (db.freq == 60) {
 			meter[id].cntl.iscale    = I_FULL_RCT_60Hz / RMS_MAX;			
 			meter[id].cntl.wscale   *= I_FULL_RCT_60Hz;		
 			meter[id].cntl.wv_iscale = I_FULL_RCT_60Hz / WAVE_MAX;
@@ -640,14 +555,14 @@ int buildSettings(int id)
 		}
 		
 		// 500 ~ 1000(GAIN=2)
-		if (db[id].ct.CT1 > 500 && db[id].ct.CT1 <= 1000) {
+		if (db.ct[id].CT1 > 500 && db.ct[id].CT1 <= 1000) {
 			meter[id].cntl.iscale /= 2; 
 			meter[id].cntl.wscale /= 2;
 			meter[id].cntl.pga_igain = 2;		// 4x						
 			meter[id].cntl.wv_iscale /= 2;
 		}	
 		// 1000 ~ 3000(GAIN=1)
-		else if (db[id].ct.CT1 > 1000 && db[id].ct.CT1 <= 3000) {
+		else if (db.ct[id].CT1 > 1000 && db.ct[id].CT1 <= 3000) {
 			meter[id].cntl.pga_igain = 1;		// 2x
 			meter[id].cntl.wv_iscale *= 10;
 		}
@@ -661,7 +576,7 @@ int buildSettings(int id)
 		break;	
 	}	
 	
-	if (db[id].ct.CT2 == CT_5A) {
+	if (db.ct[id].CT2 == CT_5A) {
 		meter[id].cntl.pga_ingain = 0;	// 1x
 		meter[id].cntl.igscale = meter[id].cntl.iscale;		// In의 scale은 Ia,Ib,Ic와 같다
 	}
@@ -669,7 +584,7 @@ int buildSettings(int id)
 		// 200mA:1.5mA CT 만 지원한다 
 		meter[id].cntl.pga_ingain = 2;	// 4x
 		meter[id].cntl.igscale = IZ_FULL/RMS_MAX; 			
-//		switch (db[id].ct.zctType) {
+//		switch (db.ct[id].zctType) {
 //		case 0:	// none
 //			meter[id].cntl.pga_ingain = 0;	// 2x
 //			meter[id].cntl.igscale = 0;	// 1x
@@ -677,24 +592,24 @@ int buildSettings(int id)
 //		
 //		case 1:	// 100mV@200mA, rb=66.6 ohm, unused			
 //			meter[id].cntl.pga_ingain = 1;	// 2x
-//			meter[id].cntl.igscale = 12.856/RMS_MAX * (db[id].ct.CT1/50.)/2; 		
+//			meter[id].cntl.igscale = 12.856/RMS_MAX * (db.ct[id].CT1/50.)/2; 		
 //			break;
 //		
 //		case 2:	// 1.5mA@200mA, rb=66.6, unsed		
 //			meter[id].cntl.pga_ingain = 0;	// 1x
-//			meter[id].cntl.igscale = 1.416/RMS_MAX * (db[id].ct.CT1/50.)/2; 		
+//			meter[id].cntl.igscale = 1.416/RMS_MAX * (db.ct[id].CT1/50.)/2; 		
 //			break;		
 //		
 //		case 3:	// 0.1mA@200mA, rb=66.6, unused
 //			meter[id].cntl.pga_ingain = 2;	// 8x
-//			meter[id].cntl.igscale = 1.416/RMS_MAX * (db[id].ct.CT1/50.); 		
+//			meter[id].cntl.igscale = 1.416/RMS_MAX * (db.ct[id].CT1/50.); 		
 //			break;
 //		}
 	}
 	
 	// zct 2nd Scale
-	if (db[id].ct.zctScale == 0) {
-		db[id].ct.zctScale = 1000;
+	if (db.ct[id].zctScale == 0) {
+		db.ct[id].zctScale = 1000;
 	}
 			
 	printf("iscale: %f\n", meter[id].cntl.iscale);
@@ -703,7 +618,7 @@ int buildSettings(int id)
 	printf("wscale: %f\n", meter[id].cntl.wscale);
 	
 	
-	switch (db[id].etc.interval) {
+	switch (db.etc.interval) {
 	case 0:
 		meter[id].cntl.dInterval = 1*60;
 		break;
@@ -720,23 +635,23 @@ int buildSettings(int id)
 		meter[id].cntl.dInterval = 60*60;
 		break;	
 	default:
-		db[id].etc.interval = 0;
+		db.etc.interval = 0;
 		meter[id].cntl.dInterval = 1*60;		
 		break;
 	}
 	
 	meter[id].cntl.sumMax = 5;	// 10/12 rms를 읽고 1초 평균 계산한다 
-	meter[id].cntl.nFastRMS = db[id].pt.freq*2;
+	meter[id].cntl.nFastRMS = db.freq*2;
 	
-	meter[id].cntl.freqLo[0] = db[id].pt.freq - db[id].pt.freq*0.01;
-	meter[id].cntl.freqHi[0] = db[id].pt.freq + db[id].pt.freq*0.01;
-	meter[id].cntl.freqLo[1] = db[id].pt.freq - db[id].pt.freq*0.06;
-	meter[id].cntl.freqHi[1] = db[id].pt.freq + db[id].pt.freq*0.04;
+	meter[id].cntl.freqLo[0] = db.freq - db.freq*0.01;
+	meter[id].cntl.freqHi[0] = db.freq + db.freq*0.01;
+	meter[id].cntl.freqLo[1] = db.freq - db.freq*0.06;
+	meter[id].cntl.freqHi[1] = db.freq + db.freq*0.04;
 	
-	meter[id].cntl.uLo[0] = db[id].pt.fd[0].vnorm - db[id].pt.fd[0].vnorm*0.1;
-	meter[id].cntl.uHi[0] = db[id].pt.fd[0].vnorm + db[id].pt.fd[0].vnorm*0.1;
-	meter[id].cntl.uLo[1] = db[id].pt.fd[0].vnorm - db[id].pt.fd[0].vnorm*0.15;
-	meter[id].cntl.uHi[1] = db[id].pt.fd[0].vnorm + db[id].pt.fd[0].vnorm*0.1;	
+	meter[id].cntl.uLo[0] = db.pt[id].vnorm - db.pt[id].vnorm*0.1;
+	meter[id].cntl.uHi[0] = db.pt[id].vnorm + db.pt[id].vnorm*0.1;
+	meter[id].cntl.uLo[1] = db.pt[id].vnorm - db.pt[id].vnorm*0.15;
+	meter[id].cntl.uHi[1] = db.pt[id].vnorm + db.pt[id].vnorm*0.1;	
 	
 			
 // initSag 호출하는 부분으로 이동	
@@ -748,117 +663,117 @@ int buildSettings(int id)
 
 	//printf("sag   : %d, %d\n", db[id].Sag_lvl, db[id].Sag_cyc);
 	//printf("swell : %d, %d\n", db[id].Swell_lvl, db[id].Swell_cyc);
-	printf("devId=%d, speed=%d, parity=%d\n", db[id].comm.devId, db[id].comm.baud, db[id].comm.parity);
+	printf("devId=%d, speed=%d, parity=%d\n", db.comm.devId, db.comm.baud, db.comm.parity);
 
 #ifdef METER_TEST_DATA
 	// alarm db
-	db[id].etc.timezone = 540;
+	db.etc.timezone = 540;
 #endif	
 	
 
 #ifdef METER_TEST_DATA
 	// trend
-	db[id].trend[0].active = 1;
-	db[id].trend[0].interval = 0;
+	meter[id].trend[0].active = 1;
+	meter[id].trend[0].interval = 0;
 	
 	i=0;
-	db[id].trend[0].chan[i++] = 2;	// Freq
-	db[id].trend[0].chan[i++] = 3;	// U
-	db[id].trend[0].chan[i++] = 4;	// 
-	db[id].trend[0].chan[i++] = 5;	// 
+	meter[id].trend[0].chan[i++] = 2;	// Freq
+	meter[id].trend[0].chan[i++] = 3;	// U
+	meter[id].trend[0].chan[i++] = 4;	// 
+	meter[id].trend[0].chan[i++] = 5;	// 
 	
-	db[id].trend[0].chan[i++] = 13;	// I
-	db[id].trend[0].chan[i++] = 14;	// 
-	db[id].trend[0].chan[i++] = 15;	// 
-	db[id].trend[0].chan[i++] = 22;	// P
+	meter[id].trend[0].chan[i++] = 13;	// I
+	meter[id].trend[0].chan[i++] = 14;	// 
+	meter[id].trend[0].chan[i++] = 15;	// 
+	meter[id].trend[0].chan[i++] = 22;	// P
 	
-	db[id].trend[0].chan[i++] = 26;	// Q
-	db[id].trend[0].chan[i++] = 34;	// S	
+	meter[id].trend[0].chan[i++] = 26;	// Q
+	meter[id].trend[0].chan[i++] = 34;	// S	
 #endif	
 	//
 	//
 	// sag range
-	if (db[id].pqevt[PQE_SAG].level > 90 || db[id].pqevt[PQE_SAG].level < 10) {		
-		printf("@@@ invalid sag level = %d\n", db[id].pqevt[PQE_SAG].level);
-		db[id].pqevt[PQE_SAG].level=90;
+	if (meter[id].pqevt[PQE_SAG].level > 90 || meter[id].pqevt[PQE_SAG].level < 10) {		
+		printf("@@@ invalid sag level = %d\n", meter[id].pqevt[PQE_SAG].level);
+		meter[id].pqevt[PQE_SAG].level=90;
 	}	
 	// intr range
-	if (db[id].pqevt[PQE_INTR].level < 5) {		
-		printf("@@@ invalid intr level = %d\n", db[id].pqevt[PQE_INTR].level);
-		db[id].pqevt[PQE_INTR].level=5;
+	if (meter[id].pqevt[PQE_INTR].level < 5) {		
+		printf("@@@ invalid intr level = %d\n", meter[id].pqevt[PQE_INTR].level);
+		meter[id].pqevt[PQE_INTR].level=5;
 	}	
 	// swell range		
-	if (db[id].pqevt[PQE_SWELL].level < 110 || db[id].pqevt[PQE_SWELL].level > 180) {
-		printf("@@@ invalid swell level = %d\n", db[id].pqevt[PQE_SWELL].level);
-		db[id].pqevt[PQE_SWELL].level = 110;
+	if (meter[id].pqevt[PQE_SWELL].level < 110 || meter[id].pqevt[PQE_SWELL].level > 180) {
+		printf("@@@ invalid swell level = %d\n", meter[id].pqevt[PQE_SWELL].level);
+		meter[id].pqevt[PQE_SWELL].level = 110;
 	}	
 	// 2025-3-20, 범위를 0 ~ 200으로 처리
 	// oc range 
-	if (db[id].pqevt[PQE_OC].level > 200) {
-		printf("@@@ invalid swell level = %d\n", db[id].pqevt[PQE_OC].level);
-		db[id].pqevt[PQE_OC].level = 200;
+	if (meter[id].pqevt[PQE_OC].level > 200) {
+		printf("@@@ invalid swell level = %d\n", meter[id].pqevt[PQE_OC].level);
+		meter[id].pqevt[PQE_OC].level = 200;
 	}	
 	
 #ifdef METER_TEST_DATA	
 	//	
 	// transient voltage, current
 	//
-	db[id].transient[0].level = 200;		// 0:disabled, 100 ~ 200%
-	db[id].transient[0].fastChange = 4;	// 0:disabled, 1 ~ 10%
-	db[id].transient[0].holdOff = 500;	// 500ms
-	db[id].transient[0].action = 1;			// capture
+	meter[id].transient[0].level = 200;		// 0:disabled, 100 ~ 200%
+	meter[id].transient[0].fastChange = 4;	// 0:disabled, 1 ~ 10%
+	meter[id].transient[0].holdOff = 500;	// 500ms
+	meter[id].transient[0].action = 1;			// capture
 	
-	db[id].transient[1].level = 150;		// 0:disabled, 100 ~ 200%
-	db[id].transient[1].fastChange = 4;	// 0:disabled, 1 ~ 10%
-	db[id].transient[1].holdOff = 500;	// 500ms
-	db[id].transient[1].action = 1;			// capture
+	meter[id].transient[1].level = 150;		// 0:disabled, 100 ~ 200%
+	meter[id].transient[1].fastChange = 4;	// 0:disabled, 1 ~ 10%
+	meter[id].transient[1].holdOff = 500;	// 500ms
+	meter[id].transient[1].action = 1;			// capture
 #endif	
 	
 	for (i=0; i<2; i++) {
-		if (db[id].transient[i].level < 120 || db[id].transient[i].level > 300) {		// 0:disabled, 120 ~ 200%
-			db[id].transient[i].level = 200;
+		if (meter[id].transient[i].level < 120 || meter[id].transient[i].level > 300) {		// 0:disabled, 120 ~ 200%
+			meter[id].transient[i].level = 200;
 		}	
 	}	
 	
 	i=0;
-	if (db[id].transient[i].fastChange > 10) {	// 0:disabled, 1 ~ 10%	
-		db[id].transient[i].fastChange = 4;
+	if (meter[id].transient[i].fastChange > 10) {	// 0:disabled, 1 ~ 10%	
+		meter[id].transient[i].fastChange = 4;
 	}
 	
 	i=1;
-	if (db[id].transient[i].fastChange > 10) {	// 0:disabled, 1 ~ 10%	
-		db[id].transient[i].fastChange = 4;
+	if (meter[id].transient[i].fastChange > 10) {	// 0:disabled, 1 ~ 10%	
+		meter[id].transient[i].fastChange = 4;
 	}
 	//
 	//
 	//
 #ifdef METER_TEST_DATA	
 	// sag
-	db[id].pqevt[PQE_SAG].level=80;
-	db[id].pqevt[PQE_SAG].nCyc=1;
-	db[id].pqevt[PQE_SAG].action = 1;
-	db[id].pqevt[PQE_SAG].holdOffCyc = 500;	// 500ms
-	db[id].pqevt[PQE_SAG].do_action = 3;
+	meter[id].pqevt[PQE_SAG].level=80;
+	meter[id].pqevt[PQE_SAG].nCyc=1;
+	meter[id].pqevt[PQE_SAG].action = 1;
+	meter[id].pqevt[PQE_SAG].holdOffCyc = 500;	// 500ms
+	meter[id].pqevt[PQE_SAG].do_action = 3;
 	// OC
-	db[id].pqevt[PQE_OC].level=200;
-	db[id].pqevt[PQE_OC].nCyc=1;
-	db[id].pqevt[PQE_OC].action = 1;
-	db[id].pqevt[PQE_OC].holdOffCyc = 500;	// 500ms
+	meter[id].pqevt[PQE_OC].level=200;
+	meter[id].pqevt[PQE_OC].nCyc=1;
+	meter[id].pqevt[PQE_OC].action = 1;
+	meter[id].pqevt[PQE_OC].holdOffCyc = 500;	// 500ms
 	// // sag
-	db[id].pqevt[PQE_SAG].level=80;
-	db[id].pqevt[PQE_SAG].nCyc=1;
-	db[id].pqevt[PQE_SAG].action = 1;
-	db[id].pqevt[PQE_SAG].holdOffCyc = 500;	// 500ms
+	meter[id].pqevt[PQE_SAG].level=80;
+	meter[id].pqevt[PQE_SAG].nCyc=1;
+	meter[id].pqevt[PQE_SAG].action = 1;
+	meter[id].pqevt[PQE_SAG].holdOffCyc = 500;	// 500ms
 	// // swell
-	db[id].pqevt[PQE_SWELL].level=120;
-	db[id].pqevt[PQE_SWELL].nCyc=1;
-	db[id].pqevt[PQE_SWELL].action = 1;
-	db[id].pqevt[PQE_SWELL].holdOffCyc = 500;	// 500ms
+	meter[id].pqevt[PQE_SWELL].level=120;
+	meter[id].pqevt[PQE_SWELL].nCyc=1;
+	meter[id].pqevt[PQE_SWELL].action = 1;
+	meter[id].pqevt[PQE_SWELL].holdOffCyc = 500;	// 500ms
 	// // Interruption
-	db[id].pqevt[PQE_INTR].level=5;
-	db[id].pqevt[PQE_INTR].nCyc=1;
-	db[id].pqevt[PQE_INTR].action = 1;
-	db[id].pqevt[PQE_INTR].holdOffCyc = 500;	// 500ms, not used
+	meter[id].pqevt[PQE_INTR].level=5;
+	meter[id].pqevt[PQE_INTR].nCyc=1;
+	meter[id].pqevt[PQE_INTR].action = 1;
+	meter[id].pqevt[PQE_INTR].holdOffCyc = 500;	// 500ms, not used
 #endif	
 
 	return ret;
@@ -883,15 +798,15 @@ void initExtSettings(int id)
 //	pComm->g35k_sb[1].devId = 2;
 //#endif
 	for (i=0; i<4; i++) {
-		db[id].trend[i].active = 0;
+		meter[id].trend[i].active = 0;
 	}
 	
 	for (i=0; i<4; i++) {
-		db[id].transient[0].action = 0;
+		meter[id].transient[0].action = 0;
 	}
 	
 	for (i=0; i<4; i++) {
-		db[id].pqevt[i].action = 0;
+		meter[id].pqevt[i].action = 0;
 	}
 	
 	
@@ -920,8 +835,8 @@ int buildExtSettings(int id)
 //	COMM_CFG *pcom = &piocfg->com;
 //	IO_CFG *piom = piocfg->io;
 	int i, j, ret=0;
-	ALARM_DEF *paset = &db[id].alarm;
-	COMM_CFG *pComm=&db[0].comm;
+	ALARM_DEF *paset = &meter[id].almSet;
+	COMM_CFG *pComm=&db.comm;
 
 	if (id == 0) {
 		printf("ipaddress = %d.%d.%d.%d\n", pComm->ip0[0], pComm->ip0[1], pComm->ip0[2], pComm->ip0[3]);
@@ -952,9 +867,9 @@ int buildExtSettings(int id)
 	}
 	// event do check
 	for(i=0; i<4; i++) {
-		if(db[id].pqevt[i].do_action != 0) {
-			piocfg->doType[db[id].pqevt[i].do_action-1] = DOTYPE_EVENT;			// event set
-			printf("[event output channel(%d, %d)]\n", i, db[id].pqevt[i].do_action);
+		if(meter[id].pqevt[i].do_action != 0) {
+			piocfg->doType[meter[id].pqevt[i].do_action-1] = DOTYPE_EVENT;			// event set
+			printf("[event output channel(%d, %d)]\n", i, meter[id].pqevt[i].do_action);
 		}
 	}
 #endif
@@ -1065,6 +980,26 @@ void storeHwSettings(METER_CAL *pcal) {
 	dump((void *)pcal, sizeof(METER_CAL));
 }
 
+/* settings.dat 없음·크기 불일치 — initSettings 후 build_set_db로 PT/CT 통일 */
+static void recreate_settings_dat(const char *banner)
+{
+	int id;
+	FILE *fp;
+
+	for (id = 0; id < METER_CH_COUNT; id++) {
+		initSettings(id);
+		initExtSettings(id);
+	}
+	build_set_db();
+	fp = fopen(SETTING_FILE, "wb");
+	if (fp != NULL) {
+		fwrite(&db, 1, sizeof(db), fp);
+		fclose(fp);
+		if (banner != NULL)
+			printf("%s\n", banner);
+	}
+}
+
 int loadSettings(SETTINGS	*pdb)
 {
 	int ret=0, id;
@@ -1072,18 +1007,7 @@ int loadSettings(SETTINGS	*pdb)
 	fp = fopen(SETTING_FILE, "rb");
 	if (fp == NULL) {
 		printf("{{Can't load Settings}}\n");
-		for (id = 0; id < METER_CH_COUNT; id++) {
-			initSettings(id);
-			initExtSettings(id);
-		}
-		build_set_db();
-		
-		fp = fopen(SETTING_FILE, "wb");
-		if (fp != NULL) {
-			fwrite(pdb, 1, sizeof(*pdb) * METER_CH_COUNT, fp);
-			fclose(fp);
-			printf("[[Create Default Settings(%s)]]\n", SETTING_FILE);
-		}		
+		recreate_settings_dat("[[Create Default Settings(" SETTING_FILE ")]]");
 		ret = -1;
 	}
 	else {
@@ -1092,33 +1016,26 @@ int loadSettings(SETTINGS	*pdb)
 		fseek(fp, 0, SEEK_END);
 		fsize = ftell(fp);
 		fseek(fp, 0, SEEK_SET);
-		fread(pdb, 1, sizeof(*pdb) * METER_CH_COUNT, fp);
-		fclose(fp);
-		printf("loadSettings ok\n");
-#if METER_CH_COUNT > 2
-		if (fsize < (long)(sizeof(SETTINGS) * METER_CH_COUNT)) {
-			printf("{{Settings file short (%ld), init db[2]}}\n", fsize);
-			initSettings(2);
-			fp = fopen(SETTING_FILE, "wb");
-			if (fp != NULL) {
-				fwrite(pdb, 1, sizeof(*pdb) * METER_CH_COUNT, fp);
-				fclose(fp);
-				printf("[[Settings upgraded to 3CH, saved]]\n");
-			}
+		if (fsize != (long)sizeof(db)) {
+			printf("{{Settings file size mismatch (%ld != %u), re-init}}\n",
+			       fsize, (unsigned)sizeof(db));
+			fclose(fp);
+			recreate_settings_dat("[[Settings re-created (" SETTING_FILE ")]]");
+			ret = -1;
+		} else {
+			fread(&db, 1, sizeof(db), fp);
+			fclose(fp);
+			printf("loadSettings ok\n");
 		}
-#endif
 	}
 
-#if METER_CH_COUNT > 1
-	memcpy(&db[1].comm, &db[0].comm, sizeof(COMM_CFG));
-#endif
-	memcpy(&meter[0].setting, &db[0], sizeof(SETTINGS));
-#if METER_CH_COUNT > 1
-	memcpy(&meter[1].setting, &db[1], sizeof(SETTINGS));
-#endif
-#if METER_CH_COUNT > 2
-	memcpy(&meter[2].setting, &db[2], sizeof(SETTINGS));
-#endif
+	memcpy(&meter[0].setting, &db, sizeof(SETTINGS));
+
+	for (id = 0; id < METER_CH_COUNT; id++) {
+		/* settings.dat는 SETTINGS만 저장 — PQE 미초기화 시 기본값 */
+		if (meter[id].pqevt[PQE_SAG].nCyc == 0)
+			initMeterPqeSettings(id);
+	}
 
 	for (id = 0; id < METER_CH_COUNT; id++)
 		buildSettings(id);
@@ -1130,17 +1047,17 @@ int loadSettings(SETTINGS	*pdb)
 		buildExtSettings(id);
 		
 #ifdef	DAQ
-	db[id].comm.daq_ip[0] = 192;
-	db[id].comm.daq_ip[0] = 168;
-	db[id].comm.daq_ip[0] = 8;
-	db[id].comm.daq_ip[0] = 71;
-	
-	db[id].comm.daq_format = 0;	// wave
-	db[id].comm.daq_id = 1;
-	db[id].comm.daq_interval = 1;	// 1 minute
-	db[id].comm.daq_length = 4;	// 32k (2k<<4)
-	db[id].comm.daq_srate = 2;	// 8k (2k<<2)
-	db[id].comm.daq_bitpersample = 0;	// 16bit
+	db.comm.daq_ip[0] = 192;
+	db.comm.daq_ip[1] = 168;
+	db.comm.daq_ip[2] = 8;
+	db.comm.daq_ip[3] = 71;
+
+	db.comm.daq_format = 0;
+	db.comm.daq_id = 1;
+	db.comm.daq_interval = 1;
+	db.comm.daq_length = 4;
+	db.comm.daq_srate = 2;
+	db.comm.daq_bitpersample = 0;
 #endif
 	
 	// setting을 backup영역으로 복사한다 
@@ -1153,7 +1070,7 @@ int loadSettings(SETTINGS	*pdb)
 int saveSettings(SETTINGS	*pdb) {
 	FILE *fp = fopen(SETTING_FILE, "wb");
 	if (fp != NULL) {
-		fwrite(pdb, 1, sizeof(*pdb) * METER_CH_COUNT, fp);
+		fwrite(pdb, 1, sizeof(SETTINGS), fp);
 		fclose(fp);
 		printf("[[Save Settings(%s)]]\n", SETTING_FILE);
 		return 0;
@@ -1353,49 +1270,49 @@ void initTransientTrigger(int id) {
 	TS_CNTL *ptvc = &tvCntl;
 	TS_CNTL *ptcc = &tcCntl;	
 	int normraw;	// overflow 조심해야 ....
-	float rev_ptratio = (float)db[id].pt.fd[0].PT2/db[id].pt.fd[0].PT1;
-	float ptratio = (float)db[id].pt.fd[0].PT1/db[id].pt.fd[0].PT2;
+	float rev_ptratio = (float)db.pt[id].PT2/db.pt[id].PT1;
+	float ptratio = (float)db.pt[id].PT1/db.pt[id].PT2;
 		
 	// rms 단위로 peaklevel 계산하고, peak levelpeak 전압은 계측된값에 sqrt(2)를 곱한다 
-	normraw = (WAVE_MAX/V_FULL)*(1<<meter[id].cntl.pga_vgain)*(db[id].pt.fd[0].vnorm*rev_ptratio);	
-	ptvc->peakLevel = (db[id].transient[0].level < 120) ? 0 : normraw*(db[id].transient[0].level/100.);	
-	ptvc->rocLevel  = (db[id].transient[0].fastChange == 0) ? WAVE_MAX : normraw*(db[id].transient[0].fastChange/100.*31.25);
+	normraw = (WAVE_MAX/V_FULL)*(1<<meter[id].cntl.pga_vgain)*(db.pt[id].vnorm*rev_ptratio);	
+	ptvc->peakLevel = (meter[id].transient[0].level < 120) ? 0 : normraw*(meter[id].transient[0].level/100.);	
+	ptvc->rocLevel  = (meter[id].transient[0].fastChange == 0) ? WAVE_MAX : normraw*(meter[id].transient[0].fastChange/100.*31.25);
 	ptvc->rscale    = V_FULL/WAVE_MAX*SQRT_2*ptratio;
-	ptvc->holdT     = db[id].transient[0].holdOff;	// msec
+	ptvc->holdT     = meter[id].transient[0].holdOff;	// msec
 	ptvc->mode      = 0;
-	ptvc->action    = db[id].transient[0].action;
+	ptvc->action    = meter[id].transient[0].action;
 	
 	// Current
-	switch (db[id].ct.CT2) {
+	switch (db.ct[id].CT2) {
 	case CT_5A:
 #if 1
-		normraw = WAVE_MAX/I_FULL_5AN * (1<<meter[id].cntl.pga_igain)*db[id].ct.inorm * (5/db[id].ct.CT1);
-		ptcc->rscale    = I_FULL_5AN  / WAVE_MAX*SQRT_2*db[id].ct.CT1/5;		// peak(DC)로 환산			
+		normraw = WAVE_MAX/I_FULL_5AN * (1<<meter[id].cntl.pga_igain)*db.ct[id].inorm * (5/db.ct[id].CT1);
+		ptcc->rscale    = I_FULL_5AN  / WAVE_MAX*SQRT_2*db.ct[id].CT1/5;		// peak(DC)로 환산			
 #else
 		if (getHwVersion() == 0) {
-			normraw = WAVE_MAX/I_FULL_5A * (1<<meter[id].cntl.pga_igain)*db[id].ct.inorm * (5/db[id].ct.CT1);
-			ptcc->rscale    = I_FULL_5A  / WAVE_MAX*SQRT_2*db[id].ct.CT1/5;		// peak(DC)로 환산
+			normraw = WAVE_MAX/I_FULL_5A * (1<<meter[id].cntl.pga_igain)*db.ct[id].inorm * (5/db.ct[id].CT1);
+			ptcc->rscale    = I_FULL_5A  / WAVE_MAX*SQRT_2*db.ct[id].CT1/5;		// peak(DC)로 환산
 		}
 		else {
-			normraw = WAVE_MAX/I_FULL_5AN * (1<<meter[id].cntl.pga_igain)*db[id].ct.inorm * (5/db[id].ct.CT1);
-			ptcc->rscale    = I_FULL_5AN  / WAVE_MAX*SQRT_2*db[id].ct.CT1/5;		// peak(DC)로 환산			
+			normraw = WAVE_MAX/I_FULL_5AN * (1<<meter[id].cntl.pga_igain)*db.ct[id].inorm * (5/db.ct[id].CT1);
+			ptcc->rscale    = I_FULL_5AN  / WAVE_MAX*SQRT_2*db.ct[id].CT1/5;		// peak(DC)로 환산			
 		}
 #endif
 		break;
 	
 	case CT_100mA:
 	case CT_333mV:
-		normraw = WAVE_MAX/I_FULL_100mA * (1<<meter[id].cntl.pga_igain)*db[id].ct.inorm * (100/db[id].ct.CT1);
-		ptcc->rscale    = I_FULL_100mA / WAVE_MAX*SQRT_2*db[id].ct.CT1/100;	// peak(DC)로 환산
+		normraw = WAVE_MAX/I_FULL_100mA * (1<<meter[id].cntl.pga_igain)*db.ct[id].inorm * (100/db.ct[id].CT1);
+		ptcc->rscale    = I_FULL_100mA / WAVE_MAX*SQRT_2*db.ct[id].CT1/100;	// peak(DC)로 환산
 		break;
 	}
 	
-	ptcc->peakLevel = (db[id].transient[1].level < 120) ? 0 : normraw*(db[id].transient[1].level/100.);
+	ptcc->peakLevel = (meter[id].transient[1].level < 120) ? 0 : normraw*(meter[id].transient[1].level/100.);
 	if (ptcc->peakLevel > WAVE_MAX) ptcc->peakLevel = WAVE_MAX;
-	ptcc->rocLevel  = (db[id].transient[1].fastChange == 0) ? WAVE_MAX : normraw*(db[id].transient[1].fastChange/100.*31.25);
-	ptcc->holdT     = db[id].transient[1].holdOff;	// msec
+	ptcc->rocLevel  = (meter[id].transient[1].fastChange == 0) ? WAVE_MAX : normraw*(meter[id].transient[1].fastChange/100.*31.25);
+	ptcc->holdT     = meter[id].transient[1].holdOff;	// msec
 	ptcc->mode      = 1;
-	ptcc->action    = db[id].transient[1].action;
+	ptcc->action    = meter[id].transient[1].action;
 	
 	printf("[U peak level=%d, roc level=%d, holdT=%d, action=%d]\n", ptvc->peakLevel, ptvc->rocLevel, ptvc->holdT, ptvc->action);
 	printf("[I peak level=%d, roc level=%d, holdT=%d, action=%d]\n", ptcc->peakLevel, ptcc->rocLevel, ptcc->holdT, ptcc->action);
@@ -2025,7 +1942,7 @@ void copyModbusWaveData(int id) {
 	}
 	// Modbus Wave영역으로 데이터 복사
 	// 16bit로 Down Scale 위해 scale factor 곱한다	
-	if (db[id].pt.fd[0].wiring == WM_3LL3CT || db[id].pt.fd[0].wiring == WM_3LL2CT) {		
+	if (db.pt[id].wiring == WM_3LL3CT || db.pt[id].wiring == WM_3LL2CT) {		
 		for (i=0, dx=ix; i<160; i++, dx+=2) meter[id].wv.U[0][i] =  wv->w[0][dx]*vscl[0];
 		for (i=0, dx=ix; i<160; i++, dx+=2) meter[id].wv.U[1][i] = -wv->w[2][dx]*vscl[2];
 		for (i=0, dx=ix; i<160; i++, dx+=2) meter[id].wv.U[2][i] =  wv->w[1][dx]*vscl[1];
@@ -2045,7 +1962,7 @@ void copyModbusWaveData(int id) {
 	}		
 	
 	// 3P4W 이면 선간 전압파형 계산한다 
-	if (db[id].pt.fd[0].wiring == WM_3LN3CT) {
+	if (db.pt[id].wiring == WM_3LN3CT) {
 		// cal. Upp
 		for (j=0; j<3; j++) {
 			k = (j+1)%3;
@@ -2103,10 +2020,10 @@ int copyGUIWaveData(int id,int sel) {
 	}	
 	
 	// 
-	// vscale = (V_FULL/RMS_MAX)*(db[id].pt.fd[0].PT1/db[id].pt.fd[0].PT2)/4;
+	// vscale = (V_FULL/RMS_MAX)*(db.pt[id].PT1/db.pt[id].PT2)/4;
 	// GUI Wave영역으로 데이터 복사
 	if (sel == 0 || sel == 1) {
-		if (db[id].pt.fd[0].wiring == WM_3LL3CT || db[id].pt.fd[0].wiring == WM_3LL2CT) {
+		if (db.pt[id].wiring == WM_3LL3CT || db.pt[id].wiring == WM_3LL2CT) {
 			pwvgui->Umax[0] = pwvgui->Umax[1] = pwvgui->Umax[2] = 0;
 		
 			j = 0;
@@ -2146,7 +2063,7 @@ int copyGUIWaveData(int id,int sel) {
 		}
 		
 		if (sel == 1) {
-			if (db[id].pt.fd[0].wiring == WM_3LL3CT || db[id].pt.fd[0].wiring == WM_3LL2CT) {
+			if (db.pt[id].wiring == WM_3LL3CT || db.pt[id].wiring == WM_3LL2CT) {
 				// cal. Upp	
 				for (j=0; j<3; j++) {				
 					pwvgui->UppMax[j] = 0;
@@ -2543,7 +2460,7 @@ void Test_task(void *arg)
 {
 	int	 dTime;
 
-	dTime = db[0].etc.testMode_Period * 1000;
+	dTime = db.etc.testMode_Period * 1000;
 
 	if(dTime == 0)
 		dTime = 5000;
@@ -2707,15 +2624,9 @@ void FS_task(void *arg)
 			}			
 		}
 		else if (meter[id].cntl.saveSetting == 0x1234) {
-			// 저장 후 정지
-			memcpy(&db[0], pdbk, sizeof(*pdb));
-#if METER_CH_COUNT > 1
-			memcpy(&db[1], pdbk2, sizeof(*pdb));
-#endif
-#if METER_CH_COUNT > 2
-			memcpy(&db[2], pdbk3, sizeof(*pdb));
-#endif
-			saveSettings(db);
+			/* 파일: SETTINGS 단일(db). PT/CT는 db.pt[id]/ct[id], PQE는 meter[] */
+			memcpy(&db, &meter[0].setting, sizeof(SETTINGS));
+			saveSettings(&db);
 
 			meter[id].cntl.saveSetting = 0;
 			meter[id].cntl.runFlag = 0;
@@ -2735,13 +2646,8 @@ void FS_task(void *arg)
 				}
 			}
 			build_set_db();
-			{
-				int ch;
-
-				for (ch = 0; ch < METER_CH_COUNT; ch++)
-					memcpy(&db[ch], &meter[ch].setting, sizeof(SETTINGS));
-			}
-			saveSettings(db);
+			memcpy(&db, &meter[0].setting, sizeof(SETTINGS));
+			saveSettings(&db);
 			meter[id].cntl.factReset = 0;
 			meter[id].cntl.saveSetting = 0;
 			printf("[[INITDB: saved, NVIC_SystemReset]]\n");
@@ -2793,7 +2699,7 @@ void RMSCapture(int id, int ix) {
 	Ts = pqE->rQ.Q[pqE->rQ.re].Ts;
 	
 	if (pCur->ts <= Ts && Ts < pNext->ts) {				
-		i = 1000./db[id].pt.freq;	// 시간간격		
+		i = 1000./db.freq;	// 시간간격		
 		rmsCap.pos  = pos = (Ts-pCur->ts)/i;	// sag 시작위치 검색
 		rmsCap.ts   = Ts;
 		rmsCap.mask = pqE->rQ.Q[pqE->rQ.re].mask;
@@ -3598,7 +3504,7 @@ void energy_scan(int id, METER_EH_REGS *ereg, ENERGY_NVRAM *pEgyNvr) {
 		meter[id].cntl.vah[i]  = vah;
 		
 		//wiring모드에 따라 불 필요한 항목 지운다		
-		switch(db[id].pt.fd[0].wiring){
+		switch(db.pt[id].wiring){
 		//1CT:2,3을지운다
 		case WM_1LN1CT_L1: case WM_1LN1CT_L2: case WM_1LN1CT_L3:
 			if (i != 0) wh = varh = vah = 0;
@@ -3613,7 +3519,7 @@ void energy_scan(int id, METER_EH_REGS *ereg, ENERGY_NVRAM *pEgyNvr) {
 		}
 		
 		//total energy
-		if(db[id].ct.ct_dir[i]){
+		if(db.ct[id].ct_dir[i]){
 			wh = -wh;
 			varh = -varh;
 		}
@@ -3627,7 +3533,7 @@ void energy_scan(int id, METER_EH_REGS *ereg, ENERGY_NVRAM *pEgyNvr) {
 	//noload,16-10-12
 	meter[id].cntl.dtP = scaleEnergy(id, es[0]);
 	meter[id].cntl.dtQ = scaleEnergy(id, es[1]);		
-	if (db[id].pt.fd[0].wiring == WM_3LL3CT || db[id].pt.fd[0].wiring == WM_3LL2CT)  
+	if (db.pt[id].wiring == WM_3LL3CT || db.pt[id].wiring == WM_3LL2CT)  
 		meter[id].cntl.dtS = scaleEnergy(id,es[2])*SQRT_3/2;
 	else
 		meter[id].cntl.dtS = scaleEnergy(id,es[2]);
@@ -3815,27 +3721,27 @@ int pushEvent(int id, PQ_EVENT_INFO *pInf) {
 			for (i=0; i<3; i++) {
 				pilog->level[i] = scaleVrms(id, pInf->Val[i]);
 			}	
-			pilog->norm = db[id].pt.fd[0].PT1;
+			pilog->norm = db.pt[id].PT1;
 			break;
 			
 		case E_OC:
 			for (i=0; i<3; i++) {
 				pilog->level[i] = scaleIrms(id, pInf->Val[i]);	// 값
 			}	
-			pilog->norm = db[id].ct.CT1;
+			pilog->norm = db.ct[id].CT1;
 			break;
 		
 		case E_TrV:
 			for (i=0; i<3; i++) {
 				pilog->level[i] = scaleVWave(pInf->Val[i]);	// 값
 			}	
-			pilog->norm = db[id].pt.fd[0].PT1;
+			pilog->norm = db.pt[id].PT1;
 			break;
 		case E_TrC:
 			for (i=0; i<3; i++) {
 				pilog->level[i] = scaleCWave(pInf->Val[i]);	// 값
 			}	
-			pilog->norm = db[id].ct.CT1;
+			pilog->norm = db.ct[id].CT1;
 			break;
 	}		
 
@@ -3892,23 +3798,23 @@ int pushEvent(int id, PQ_EVENT_INFO *pInf) {
 	{
 		switch (pInf->type) {
 			case E_OC:
-				assertEventOutput(db[id].pqevt[0].do_action, 1);
+				assertEventOutput(meter[id].pqevt[0].do_action, 1);
 				break;
 			case E_SAG:
-				assertEventOutput(db[id].pqevt[1].do_action, 1);
+				assertEventOutput(meter[id].pqevt[1].do_action, 1);
 				break;
 			case E_SWELL:
-				assertEventOutput(db[id].pqevt[2].do_action, 1);
+				assertEventOutput(meter[id].pqevt[2].do_action, 1);
 				break;						
 			case E_sINTR:
 			case E_lINTR:
-				assertEventOutput(db[id].pqevt[3].do_action, 1);
+				assertEventOutput(meter[id].pqevt[3].do_action, 1);
 				break;			
 			case E_TrV:
-				assertEventOutput(db[id].pqevt[4].do_action, 1);
+				assertEventOutput(meter[id].pqevt[4].do_action, 1);
 				break;			
 			case E_TrC:
-				assertEventOutput(db[id].pqevt[5].do_action, 1);
+				assertEventOutput(meter[id].pqevt[5].do_action, 1);
 				break;							
 		}		
 	}
@@ -4023,7 +3929,7 @@ void RMSLog_Task(void *arg)
 // 전압이 sag 시작 조건(모든 전압이 sag limit 보다 커야한다)
 int checkSagVolt(int id) {
 	int i, ret=1;
-	float	level = db[id].pt.fd[0].vnorm*db[id].pqevt[PQE_SAG].level/100.;
+	float	level = db.pt[id].vnorm*meter[id].pqevt[PQE_SAG].level/100.;
 	
 	for (i=0; i<3; i++) {
 		if (meter[id].cntl.U[i] < level) {	// level 보다 작으면 false
@@ -4035,12 +3941,12 @@ int checkSagVolt(int id) {
 }
 
 int checkSagCond(int id) {
-	return (db[id].pqevt[PQE_SWELL].nCyc > 0 && checkSagVolt(id));
+	return (meter[id].pqevt[PQE_SWELL].nCyc > 0 && checkSagVolt(id));
 }
 
 int checkSwellVolt(int id) {
 	int i, ret=1;
-	float	level = db[id].pt.fd[0].vnorm*db[id].pqevt[PQE_SWELL].level/100.;
+	float	level = db.pt[id].vnorm*meter[id].pqevt[PQE_SWELL].level/100.;
 	
 	for (i=0; i<3; i++) {
 		if (meter[id].cntl.U[i] > level) {	// level 보다 크면 false
@@ -4052,7 +3958,7 @@ int checkSwellVolt(int id) {
 }
 
 int checkSwellCond(int id) {
-	return (db[id].pqevt[PQE_SWELL].nCyc > 0 && checkSwellVolt(id));
+	return (meter[id].pqevt[PQE_SWELL].nCyc > 0 && checkSwellVolt(id));
 }
 
 
@@ -4075,7 +3981,7 @@ void resetAlarm(int c) {
 
 void initMaxMinItv(int id) {
 	// maxmin reset interval
-	switch (db[id].etc.maxminItv) {
+	switch (db.etc.maxminItv) {
 		case 0:	// daily
 			meter[id].cntl.maxminTs = meter[id].cntl.tod.tm_mday;
 			break;
@@ -4091,7 +3997,7 @@ void initMaxMinItv(int id) {
 
 // max, min refresh 주기를 검사하고 flag를 설정한다 
 int checkMaxMinItv(int id) {
-	switch (db[id].etc.maxminItv) {
+	switch (db.etc.maxminItv) {
 		case 0:	// daily
 			if (meter[id].cntl.maxminTs != meter[id].cntl.tod.tm_mday) {
 				meter[id].cntl.maxminTs = meter[id].cntl.tod.tm_mday;
@@ -4261,6 +4167,14 @@ void Meter0_Task(void *param)
 	printf("lmm:  %d, %d\n", ((uint32_t)&_pmeter->lastmaxmin - (uint32_t)_pmeter)/2, sizeof(_pmeter->lastmaxmin)/2);
 	printf("itic: %d, %d\n", ((uint32_t)&_pmeter->itic - (uint32_t)_pmeter)/2, sizeof(_pmeter->itic)/2);
 	printf("itic2:%d, %d\n", ((uint32_t)&_pmeter->itic2 - (uint32_t)_pmeter)/2, sizeof(_pmeter->itic2)/2);
+//	printf("pqevt:%d, %d\n", ((uint32_t)&_pmeter->pqevt - (uint32_t)_pmeter)/2, sizeof(_pmeter->pqevt)/2);
+	printf("PQE:      %d, %d\n", ((uint32_t)&_pmeter->pqevt - (uint32_t)_pmeter)/2, sizeof(_pmeter->pqevt)/2);
+	printf("TVC:      %d, %d\n", ((uint32_t)&_pmeter->transient - (uint32_t)_pmeter)/2, sizeof(_pmeter->transient)/2);
+	printf("rcrd:     %d, %d\n", ((uint32_t)&_pmeter->rcrd - (uint32_t)_pmeter)/2, sizeof(_pmeter->rcrd)/2);
+	printf("trend:    %d, %d\n", ((uint32_t)&_pmeter->trend - (uint32_t)_pmeter)/2, sizeof(_pmeter->trend)/2);
+	printf("pqRpt:    %d, %d\n", ((uint32_t)&_pmeter->pqRpt - (uint32_t)_pmeter)/2, sizeof(_pmeter->pqRpt)/2);
+	printf("almSet:   %d, %d\n", ((uint32_t)&_pmeter->almSet - (uint32_t)_pmeter)/2, sizeof(_pmeter->almSet)/2);
+
 	printf("iom:  %d, %d\n", ((uint32_t)&_pmeter->iom - (uint32_t)_pmeter)/2, sizeof(_pmeter->iom)/2);
 	printf("info: %d, %d\n", ((uint32_t)&_pmeter->info - (uint32_t)_pmeter)/2, sizeof(_pmeter->info)/2);
 	printf("set:  %d, %d\n", ((uint32_t)&_pmeter->setting - (uint32_t)_pmeter)/2, sizeof(_pmeter->setting)/2);
@@ -4275,15 +4189,11 @@ void Meter0_Task(void *param)
 	printf("almCnt:%d, %d\n", ((uint32_t)&_pmeter->almCnt - (uint32_t)_pmeter)/2, sizeof(_pmeter->almCnt)/2);
 
 	printf("comm:     %d, %d\n", ((uint32_t)&_pmeter->setting.comm - (uint32_t)&_pmeter->setting)/2, sizeof(_pmeter->setting.comm)/2);
-	printf("PT:       %d, %d\n", ((uint32_t)&_pmeter->setting.pt - (uint32_t)&_pmeter->setting)/2, sizeof(_pmeter->setting.pt)/2);
-	printf("CT:       %d, %d\n", ((uint32_t)&_pmeter->setting.ct - (uint32_t)&_pmeter->setting)/2, sizeof(_pmeter->setting.ct)/2);
+	printf("PT[0]:    %d, %d\n", ((uint32_t)&_pmeter->setting.pt[0] - (uint32_t)&_pmeter->setting)/2, sizeof(_pmeter->setting.pt[0])/2);
+	printf("PT[]:     %d, %d\n", ((uint32_t)&_pmeter->setting.pt - (uint32_t)&_pmeter->setting)/2, sizeof(_pmeter->setting.pt)/2);
+	printf("CT[0]:    %d, %d\n", ((uint32_t)&_pmeter->setting.ct[0] - (uint32_t)&_pmeter->setting)/2, sizeof(_pmeter->setting.ct[0])/2);
+	printf("CT[]:     %d, %d\n", ((uint32_t)&_pmeter->setting.ct - (uint32_t)&_pmeter->setting)/2, sizeof(_pmeter->setting.ct)/2);
 	printf("ETC:      %d, %d\n", ((uint32_t)&_pmeter->setting.etc - (uint32_t)&_pmeter->setting)/2, sizeof(_pmeter->setting.etc)/2);
-	printf("PQE:      %d, %d\n", ((uint32_t)&_pmeter->setting.pqevt - (uint32_t)&_pmeter->setting)/2, sizeof(_pmeter->setting.pqevt)/2);
-	printf("TVC:      %d, %d\n", ((uint32_t)&_pmeter->setting.transient - (uint32_t)&_pmeter->setting)/2, sizeof(_pmeter->setting.transient)/2);
-	printf("rcrd:     %d, %d\n", ((uint32_t)&_pmeter->setting.rcrd - (uint32_t)&_pmeter->setting)/2, sizeof(_pmeter->setting.rcrd)/2);
-	printf("trend:    %d, %d\n", ((uint32_t)&_pmeter->setting.trend - (uint32_t)&_pmeter->setting)/2, sizeof(_pmeter->setting.trend)/2);
-	printf("pqRpt:    %d, %d\n", ((uint32_t)&_pmeter->setting.pqRpt - (uint32_t)&_pmeter->setting)/2, sizeof(_pmeter->setting.pqRpt)/2);
-	printf("alarm:    %d, %d\n", ((uint32_t)&_pmeter->setting.alarm - (uint32_t)&_pmeter->setting)/2, sizeof(_pmeter->setting.alarm)/2);
 	printf("iom:      %d, %d\n", ((uint32_t)&_pmeter->setting.iom - (uint32_t)&_pmeter->setting)/2, sizeof(_pmeter->setting.iom)/2);
 
 	printf("egyNvr:   %d\n", sizeof(ENERGY_NVRAM));

@@ -37,15 +37,15 @@ void initAlarmTable() {
 	// [0..2]
 	setAlarmChannel(ix++, "-", 0, NULL);
 	setAlarmChannel(ix++, "Temp.", 100, &pmeter->Temp);
-	setAlarmChannel(ix++, "Freq.", pdb->pt.freq, &pmeter->Freq);
+	setAlarmChannel(ix++, "Freq.", pdb->freq, &pmeter->Freq);
 	// [3..6]
-	temp = pdb->pt.fd[0].vnorm;
+	temp = pdb->pt[0].vnorm;
 	setAlarmChannel(ix++, "U1",  temp, &pmeter->U[0]);
 	setAlarmChannel(ix++, "U2",  temp, &pmeter->U[1]);
 	setAlarmChannel(ix++, "U3",  temp, &pmeter->U[2]);
 	setAlarmChannel(ix++, "U~",  temp, &pmeter->U[3]);
 	// [7..10]
-	temp = (pdb->pt.fd[0].wiring == WM_3LN3CT) ? pdb->pt.fd[0].vnorm*sqrt(3) : pdb->pt.fd[0].vnorm; 
+	temp = (pdb->pt[0].wiring == WM_3LN3CT) ? pdb->pt[0].vnorm*sqrt(3) : pdb->pt[0].vnorm; 
 	setAlarmChannel(ix++, "U12", temp, &pmeter->Upp[0]);
 	setAlarmChannel(ix++, "U23", temp, &pmeter->Upp[1]);
 	setAlarmChannel(ix++, "U31", temp, &pmeter->Upp[2]);
@@ -55,7 +55,7 @@ void initAlarmTable() {
 	setAlarmChannel(ix++, "Uu", temp, &pmeter->Ubal[0]);
 	setAlarmChannel(ix++, "Uo", temp, &pmeter->Ubal[1]);
 	// [13..18]
-	temp = pdb->ct.inorm;
+	temp = pdb->ct[0].inorm;
 	setAlarmChannel(ix++, "I1", temp, &pmeter->I[0]);
 	setAlarmChannel(ix++, "I2", temp, &pmeter->I[1]);
 	setAlarmChannel(ix++, "I3", temp, &pmeter->I[2]);
@@ -63,25 +63,25 @@ void initAlarmTable() {
 	setAlarmChannel(ix++, "Itotal", temp*3, &pmeter->I[4]);
 	setAlarmChannel(ix++, "In", temp, &pmeter->In);
 	// [19..22]
-	temp = pdb->pt.fd[0].vnorm*pdb->ct.inorm;
+	temp = pdb->pt[0].vnorm*pdb->ct[0].inorm;
 	setAlarmChannel(ix++, "P1", temp, &pmeter->P[0]);
 	setAlarmChannel(ix++, "P2", temp, &pmeter->P[1]);
 	setAlarmChannel(ix++, "P3", temp, &pmeter->P[2]);
 	setAlarmChannel(ix++, "Ptotal", temp*3, &pmeter->P[3]);
 	// [23..26]
-	temp = pdb->pt.fd[0].vnorm*pdb->ct.inorm;
+	temp = pdb->pt[0].vnorm*pdb->ct[0].inorm;
 	setAlarmChannel(ix++, "Q1", temp, &pmeter->Q[0]);
 	setAlarmChannel(ix++, "Q2", temp, &pmeter->Q[1]);
 	setAlarmChannel(ix++, "Q3", temp, &pmeter->Q[2]);
 	setAlarmChannel(ix++, "Q4", temp*3, &pmeter->Q[3]);
 	// [27..30]
-	temp = pdb->pt.fd[0].vnorm*pdb->ct.inorm;
+	temp = pdb->pt[0].vnorm*pdb->ct[0].inorm;
 	setAlarmChannel(ix++, "D1", temp*3, &pmeter->D[0]);
 	setAlarmChannel(ix++, "D2", temp*3, &pmeter->D[1]);
 	setAlarmChannel(ix++, "D3", temp*3, &pmeter->D[2]);
 	setAlarmChannel(ix++, "Dtotal", temp, &pmeter->D[3]);
 	// [31..34]
-	temp = pdb->pt.fd[0].vnorm*pdb->ct.inorm;
+	temp = pdb->pt[0].vnorm*pdb->ct[0].inorm;
 	setAlarmChannel(ix++, "S1", temp, &pmeter->S[0]);
 	setAlarmChannel(ix++, "S2", temp, &pmeter->S[1]);
 	setAlarmChannel(ix++, "S3", temp, &pmeter->S[2]);
@@ -108,26 +108,26 @@ void initAlarmTable() {
 	setAlarmChannel(ix++, "THD I2", temp, &pmeter->THD_I[1]);
 	setAlarmChannel(ix++, "THD I3", temp, &pmeter->THD_I[2]);
 	// [49..52]
-	temp = pdb->pt.fd[0].vnorm*pdb->ct.inorm;
+	temp = pdb->pt[0].vnorm*pdb->ct[0].inorm;
 	setAlarmChannel(ix++, "DD P+", temp, &pdm->DD_P[0]);
 	setAlarmChannel(ix++, "DD P-", temp, &pdm->DD_P[1]);
 	setAlarmChannel(ix++, "DD Q-L", temp, &pdm->DD_Q[0]);
 	setAlarmChannel(ix++, "DD Q-C", temp, &pdm->DD_Q[1]);
 	setAlarmChannel(ix++, "DD S", temp, &pdm->DD_S);
 	// [53..55]
-	temp = pdb->ct.inorm;
+	temp = pdb->ct[0].inorm;
 	setAlarmChannel(ix++, "DD I1", temp, &pdm->DD_I[0]);
 	setAlarmChannel(ix++, "DD I2", temp, &pdm->DD_I[1]);
 	setAlarmChannel(ix++, "DD I3", temp, &pdm->DD_I[2]);
 	// [56..60]
-	temp = pdb->pt.fd[0].vnorm*pdb->ct.inorm;
+	temp = pdb->pt[0].vnorm*pdb->ct[0].inorm;
 	setAlarmChannel(ix++, "MD P+", temp, &pdm->MD_P[0].value);
 	setAlarmChannel(ix++, "MD P-", temp, &pdm->MD_P[1].value);
 	setAlarmChannel(ix++, "MD Q-L", temp, &pdm->MD_Q[0].value);
 	setAlarmChannel(ix++, "MD Q-C", temp, &pdm->MD_Q[1].value);	
 	setAlarmChannel(ix++, "MD S", temp, &pdm->MD_S.value);
 	// [61..63]
-	temp = pdb->ct.inorm;
+	temp = pdb->ct[0].inorm;
 	setAlarmChannel(ix++, "MD I1", temp, &pdm->MD_I[0].value);
 	setAlarmChannel(ix++, "MD I2", temp, &pdm->MD_I[1].value);
 	setAlarmChannel(ix++, "MD I3", temp, &pdm->MD_I[2].value);
@@ -262,7 +262,7 @@ int loadAlarmStatus(void) {
 	FILE *fp;
 	char path[64];
 	int i;
-	ALARM_DEF *paset = &pdb->alarm;
+	ALARM_DEF *paset = &meter[0].almSet;
 	
 	sprintf(path, "%s", ALARM_ST_FILE);
 	fp = fopen(path, "rb");
@@ -859,7 +859,7 @@ void fetchItic2(int id, int cmd) {
 int alarmProc() {
 	int i, chan, cond, change=0, result, almCount=0, doPoint=0;
 	float level, *src;
-	ALARM_DEF *paset = &pdb->alarm;
+	ALARM_DEF *paset = &meter[0].almSet;
 	
 	// 시작 후 모든 값이 안정화 될때 까지 기다린다(5s)
 	if (pcntl->online2++ < 5) return 0;
@@ -972,7 +972,7 @@ void buildAlarmSettings() {
 	int i=0, chan;
 	float pcent;
 	
-	ALARM_DEF *paset = &pdb->alarm;
+	ALARM_DEF *paset = &meter[0].almSet;
 	
 	paset->delay = 1;
 
@@ -1021,7 +1021,7 @@ void buildAlarmSettings() {
 
 
 void buildTrendSetting() {
-	TREND_DEF *ptrd = pdb->trend;
+	TREND_DEF *ptrd = meter[0].trend;
 	int ix=0;
 	
 	ptrd[0].active = 1;
@@ -1084,9 +1084,9 @@ int appendTrendRcrd(int g) {
 		if (fp) {
 			trdInf[g].ts = sysTick1s;;
 			trdInf[g].type = 1;
-			trdInf[g].version = pdb->trend[g].version;
+			trdInf[g].version = meter[0].trend[g].version;
 			for (j=0; j<16; j++) {
-				trdInf[g].channel[j] = pdb->trend[g].chan[j];
+				trdInf[g].channel[j] = meter[0].trend[g].chan[j];
 			}								
 			fwrite(&trdInf[g], sizeof(trdInf[0]), 1, fp);	// 마지막에 새 record 기록한다 
 			fwrite(&row[g], sizeof(row[0]), 1, fp);			
@@ -1110,7 +1110,7 @@ void checkTrendHeader() {
 	FILE *fp;
 	
 	for (i=0; i<4; i++) {
-		if (pdb->trend[i].active == 0) 
+		if (meter[0].trend[i].active == 0) 
 			continue;
 		
 		getTrendFile(fn, i);
@@ -1120,8 +1120,8 @@ void checkTrendHeader() {
 			fclose(fp);	
 
 			for (err=0, j=0; j<16; j++) {
-				if (trdInf[i].channel[j] != pdb->trend[i].chan[j]) {
-					printf("### Trend info changed, trdInf[%d][%d] = %d, %d\n", i, j, trdInf[i].channel[j], pdb->trend[i].chan[j]);
+				if (trdInf[i].channel[j] != meter[0].trend[i].chan[j]) {
+					printf("### Trend info changed, trdInf[%d][%d] = %d, %d\n", i, j, trdInf[i].channel[j], meter[0].trend[i].chan[j]);
 					err++;
 				}
 			}
@@ -1158,13 +1158,13 @@ void Trend_Task(void *arg)
 		
 		// trend data 생성
 		for (i=0; i<4; i++) {			
-			if (pdb->trend[i].active == 0) {
+			if (meter[0].trend[i].active == 0) {
 				continue;
 			}
 				
-			itv = (pdb->trend[i].interval >= 8) ? 10 : trdTime[pdb->trend[i].interval];
+			itv = (meter[0].trend[i].interval >= 8) ? 10 : trdTime[meter[0].trend[i].interval];
 			if ((pcntl->tod.tm_min % itv) == 0) {				
-				getTrendData(i, pdb->trend[i].chan);
+				getTrendData(i, meter[0].trend[i].chan);
 			}
 		}
 			

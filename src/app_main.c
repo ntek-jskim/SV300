@@ -403,7 +403,7 @@ void db_init(void)
 
    
    init_smb();   
-	wmode = (pdb->pt.fd[0].wiring == WM_3LL3CT || pdb->pt.fd[0].wiring == WM_3LL2CT) ? 1 : 0;
+	wmode = (pdb->pt[0].wiring == WM_3LL3CT || pdb->pt[0].wiring == WM_3LL2CT) ? 1 : 0;
 	selWire(wmode);
 }
 

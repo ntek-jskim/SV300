@@ -856,13 +856,13 @@ int	writeMultiMem(uint16_t start, uint16_t count, uint8_t *pcmd)
 #if METER_CH_COUNT > 2
 	if (start >= (MBAD_G7_SETTING + ADD_ADE9000_M3) && start < (MBAD_G7_CMD + ADD_ADE9000_M3)) {
 		printf("recv Settings(M3), s=%d, c=%d ...\n", start, count);
-		putSettings(start - (MBAD_G7_SETTING + ADD_ADE9000_M3), count, pcmd, (uint16_t *)&meter[2].setting);
+		putSettings(start - (MBAD_G7_SETTING + ADD_ADE9000_M3), count, pcmd, pmset3);
 		return 0;
 	}
 #endif
 	if (start >= (MBAD_G7_SETTING + ADD_ADE9000) && start < (MBAD_G7_CMD + ADD_ADE9000)) {
 		printf("recv Settings(M2), s=%d, c=%d ...\n", start, count);
-		putSettings(start - (MBAD_G7_SETTING + ADD_ADE9000), count, pcmd, (uint16_t *)pdbk2);
+		putSettings(start - (MBAD_G7_SETTING + ADD_ADE9000), count, pcmd, pmset2);
 		return 0;
 	}
 	if (start >= MBAD_SET_TS && count == 2 && start < ADD_ADE9000) {
@@ -875,7 +875,7 @@ int	writeMultiMem(uint16_t start, uint16_t count, uint8_t *pcmd)
 	}
 	if (start >= MBAD_G7_SETTING && start < MBAD_G7_CMD) {
 		printf("recv Settings(M1), s=%d, c=%d ...\n", start, count);
-		putSettings(start-MBAD_G7_SETTING, count, pcmd, (uint16_t *)pdbk);
+		putSettings(start-MBAD_G7_SETTING, count, pcmd, pmset);
 		return 0;
 	}
 	return 0;
@@ -930,17 +930,17 @@ int   readMemCb(uint16_t address, uint16_t *value)
 int writeMemCb(uint16_t address, uint16_t value) {
    	static uint32_t _utc;   
    	uint16_t *uptr = (uint16_t *)&_utc;
-   	uint16_t *psmb = (uint16_t *)pdbk;
+   	uint16_t *psmb = pmset;
    
 #if METER_CH_COUNT > 2
 	if (address >= ADD_ADE9000_M3 && address < 30000) {
-		psmb = (uint16_t *)&meter[2].setting;
+		psmb = pmset3;
 		psmb[address - ADD_ADE9000_M3] = value;
 	}
 	else
 #endif
 	if (address >= ADD_ADE9000 && address < ADD_ADE9000_M3) {
-		psmb = (uint16_t *)pdbk2;
+		psmb = pmset2;
 		psmb[address-ADD_ADE9000] = value;
 	}
 	else if (address < ADD_ADE9000) {

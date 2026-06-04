@@ -285,15 +285,15 @@ float FFT_postproc(int n, int sel, uint16_t *pHD) {
 	for (i=2; i<=63; i++) {
 	  // harmoics를 각 차수별(2~63)로 %로 환산하여 저장
 		//ix = (i*50)/5;
-		ix = i*pdb->pt.freq/5;
+		ix = i*db.freq/5;
 		if(sel == 2) {
-			if(pdb->pt.freq==50)
+			if(db.freq==50)
 				gain = i_harm_gain[0][i];
 			else
 				gain = i_harm_gain[1][i];
 		}
 		else {
-			if(pdb->pt.freq==50)
+			if(db.freq==50)
 				gain = v_harm_gain[0][i];
 			else
 				gain = v_harm_gain[1][i];
@@ -317,7 +317,7 @@ float calcKF() {
 	float IhSqSum=0, IhNSqSum=0;
 	int i, ix, res;
 
-	res = pdb->pt.freq/5;
+	res = db.freq/5;
 //	res = lineFreq/5;
 
 	// irms = h1^2+h2^2+ ....h63^2)
@@ -454,7 +454,7 @@ void FFT_Task(void)
 
 			t1 = sysTick64;							
 			for (i=0; i<3; i++) {
-				if (pdb->pt.fd[0].wiring == WM_3LL3CT || pdb->pt.fd[0].wiring == WM_3LL2CT) {
+				if (db.pt[id].wiring == WM_3LL3CT || db.pt[id].wiring == WM_3LL2CT) {
 					k = (i == 0) ? 0 : (i == 1) ? 2 : 1;
 				}
 				else
@@ -474,7 +474,7 @@ void FFT_Task(void)
 			
 			// phase-to-phase voltage
 			for (i=0; i<3; i++) {
-				if (pdb->pt.fd[0].wiring == WM_3LL3CT || pdb->pt.fd[0].wiring == WM_3LL2CT) {
+				if (db.pt[id].wiring == WM_3LL3CT || db.pt[id].wiring == WM_3LL2CT) {
 					if(i==0)
 						k =0;
 					else if(i==1)

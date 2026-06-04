@@ -30,6 +30,7 @@
 2026/05/20 : meter.h·meter.c·ade9000·alarm·app_main·fft_radix2_czt·smb_rtu — PT_DEF(fd[9]·feeder_cnt)에 맞춰 wiring/vnorm/PT1/PT2는 pt.fd[PT_PRIMARY_IDX] 접근
 2026/05/20 : meter.h — PT_CH/PT_DEF 주석·바이트 설명을 현재 레이아웃(16B×9+상위 freq/feeder_cnt)에 맞춤, PT_PRIMARY_IDX 매크로
 2026/05/20 : meter.c — initSettings·build_cal_db1/2/3·build_set_db에 pt.feeder_cnt=1 설정
+2026/05/20 : meter.h·meter.c — SETTINGS comm/pt 선행·pq/trend/alarm 후행, METER_DEF setting을 IOM_DATA(iom) 앞으로 이동
 2026/05/20 : app_main.c — tid_meter[METER_CH_COUNT]·미터 태스크 #if 0 제거 적용 안 함: tid_meter[2] 유지, Meter0/1/2 생성은 #if 0으로 비활성(실험·ADCH 점검용)
 2026/05/21 : board.c — M2 CS(P6_7→GPIO5_15) SCU 함수번호 FUNC0→FUNC4 수정(FUNC0=SGPIO3로 잘못 매핑, GPIO5_15는 FUNC4 필요)
 2026/05/21 : app_main.c — db_init() wmode 접근 경로 pt.wiring→pt.fd[0].wiring 수정(PT_DEF는 fd[9] 배열로 wiring 직접 멤버 없음)
@@ -37,3 +38,8 @@
 2026/05/21 : app_main.c db_init #if 1 블록 — initSettings/build_set_db 후 saveSettings 추가(loadSettings가 구 파일 읽어 wiring=220 되던 구조체 레이아웃 불일치 문제 수정)
 2026/05/21 : meter.c buildSettings — wiring 유효성 검사 > WM_3LL2CT → > SIMULATION 수정(새 enum 추가 후 WM_3LL3CT 이상이 모두 Invalid로 오인되던 버그 수정)
 2026/05/21 : meter.h — WM_1LN1CT 세분화(L1/L2/L3), IS_WM_1LN1CT(w) 범위 매크로 추가, ade9000.c/meter.c 관련 비교·case 전체 반영
+2026/06/02 : meter.h·meter.c — SETTINGS_LEGACY·settings_from_legacy·loadSettings 구형 마이그레이션 제거(신규 개발)
+2026/06/02 : meter.h — METER_DEF ALARM_DEF 멤버 alarm→almSet (ALARM_STATUS alarm 중복 선언 해소)
+2026/06/02 : meter.h·meter.c 2-A — SETTINGS 전역 db 단일, settings.dat 1블록, db.pt[id]/ct[id], load/save·initSettings
+2026/06/02 : meter.c 2-B — build_cal_db1~3·build_set_db commit_db_settings 동기화, loadSettings 재생성 경로 통일, buildSettings comm id==0
+2026/06/02 : ade9000.c·alarm.c·app_main.c·fft_radix2_czt.c 2-C — db.pt[id]/ct[id]/freq, initADE9000 &db[id] 제거

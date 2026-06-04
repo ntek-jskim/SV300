@@ -80,6 +80,8 @@
 #define ENERGY_CH_COUNT 2
 #endif
 
+#define MAX_CH		9
+
 /* 활성 미터 채널(스캔·Wave·Meter 태스크): 빌드 매크로만 사용, getHwCh() 무관
  *  CH1  → 1채널(M0)
  *  CH3  → 3채널(M0~M2)
@@ -126,6 +128,8 @@
 /* Modbus 20000번대: 3번 미터(METER index 2) 데이터/설정 베이스 오프셋 */
 #define	ADD_ADE9000_M3 20000
 
+/* Modbus MBAD_G7_SETTING(6300~) — METER_DEF.pqevt 선두, readMem은 meter.meter+start 와 동일 오프셋 */
+#define METER_MB_SETTING_REGS(m)	((uint16_t *)&(m).pqevt)
 
 #define ZCT_NONE		0
 #define ZCT_2000_1		1
@@ -836,13 +840,7 @@ typedef struct {
 	uint32_t	PT1;
 	uint16_t	PT2;
 	uint16_t	r1;
-} PT_CH;	/* 16 bytes: wiring, _r0, vnorm, PT1, PT2, r1 */
-
-typedef struct {
-	uint16_t	freq;	// 0:60, 1:50
-	uint16_t	feeder_cnt;
-	PT_CH		fd[9];	/* 피더별 PT (Modbus 9워드/피더 레이아웃) */
-} PT_DEF;	/* 4 + 9*16 = 148 bytes (컴파일러 패딩에 따라 달라질 수 있음) */
+} PT_DEF;	/* 16 bytes: wiring, _r0, vnorm, PT1, PT2, r1 */
 
 #ifndef PT_PRIMARY_IDX
 #define PT_PRIMARY_IDX	0	/* 기존 단일 PT 로직: fd[0] 대표 */
@@ -922,7 +920,6 @@ typedef struct {
 		uint16_t chan, cond, dband, do_action;
 		float level;
 	} set[32];
-	uint16_t r1[4];
 } ALARM_DEF;
 
 
@@ -953,11 +950,13 @@ typedef struct {
 #define	PQE_SWELL	2
 #define	PQE_INTR	3
 
-/* comm/pt/ct/etc/iom — db[0] CH1 시스템 영역 (CH1 빌드는 slot 0만 사용, 1/2는 파일 호환 패딩) */
+/* comm + pt[9]/ct[9] — 전역 db 단일, 미터 ch는 db.pt[ch]/db.ct[ch] */
 typedef struct {
 	COMM_CFG	comm;
-	PT_DEF		pt;
-	CT_DEF		ct;
+	uint16_t	freq;	// 0:60, 1:50
+	uint16_t	feeder_cnt;
+	PT_DEF		pt[9];
+	CT_DEF		ct[9];
 	ETC_DEF		etc;
 	IO_CFG		iom;
 } SETTINGS_SYS;
@@ -970,26 +969,18 @@ typedef struct {
 #endif
 
 typedef struct {
-	PQEVENT pqevt[4];		// 0: OC, 1: sag, 2:swell, 3: Interruption
-	TRANSIENT_DEF	transient[2];
-	uint16_t _r1[12];
-	RECORDER_DEF rcrd[2];
-	uint16_t _r2[12];
-	TREND_DEF	trend[4];
-	uint16_t _r3[4];
-	PQREPORT_DEF pqRpt;	
-	ALARM_DEF	alarm;
 	union {
 		struct {
 			COMM_CFG	comm;
-			PT_DEF		pt;
-			CT_DEF		ct;
+			uint16_t	freq;	// 0:60, 1:50
+			uint16_t	feeder_cnt;
+			PT_DEF		pt[MAX_CH];
+			CT_DEF		ct[MAX_CH];
 			ETC_DEF		etc;
 			IO_CFG		iom;
 		};
 		uint8_t		_sys_rsv[sizeof(SETTINGS_SYS)];
 	};
-
 //	FLOW_SETTING	f_setting[MAX_FLOW];
 	//uint16_t _r4[9], crc;
 } SETTINGS;
@@ -1925,10 +1916,22 @@ typedef struct {
 
 	ITIC_EVT_LIST	itic;	// 5950
 	ITIC_EVT_LIST	itic2;// 6410
-//	uint16_t			resv[1400];
-    IOM_DATA iom;		// 6870
+
+	/* PQE/Trend/Alarm 설정 — METER_DEF에서 IOM_DATA(iom) 직전 영역( Modbus P2~P4 ) */
+	PQEVENT pqevt[4];		/* 0: OC, 1: sag, 2:swell, 3: Interruption */
+	TRANSIENT_DEF	transient[2];
+	uint16_t _r1[12];
+	RECORDER_DEF rcrd[2];
+	uint16_t _r2[12];
+	TREND_DEF	trend[4];
+	uint16_t _r3[4];
+	PQREPORT_DEF pqRpt;
+	ALARM_DEF	almSet;		/* Modbus P4 알람 설정 (ALARM_STATUS alarm 과 구분) */
+ 
+	IOM_DATA iom;		// 6870
 	METER_INFO info;		// 6890
-	SETTINGS	setting;	// 6300
+
+	SETTINGS	setting;	/* comm/pt/ct/etc/iom — 파일(settings.dat) 및 P1(별도 맵) */
 //	uint16_t 	_r[10];
 
 	COMMANDS	cmds;			// 6950
@@ -2060,12 +2063,13 @@ extern ENERGY_NVRAM egyNvr;
 
 extern MAXMIN 	*pmm;
 extern METER_CAL	*pcal;
-extern SETTINGS		db[];
+extern SETTINGS		db;
 extern SETTINGS		setting[];
 extern METERING 	*pmeter;
-extern SETTINGS		*pdb, *pdbk, *pdb2, *pdbk2;
+extern SETTINGS		*pdb, *pdbk;
+extern uint16_t		*pmset, *pmset2;
 #if METER_CH_COUNT > 2
-extern SETTINGS		*pdb3, *pdbk3;
+extern uint16_t		*pmset3;
 #endif
 extern METER_INFO *pInfo;
 //extern CMD_AREA 	*pcmd;
