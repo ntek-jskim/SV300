@@ -234,7 +234,7 @@ int modbusSlvProcFrame(uint8_t *prx, uint16_t rxsize, uint8_t *ptx, int longFram
 			if (longFrame) 
 				size = readMem2(&ptx[inx], start, count);
 			else {
-				if (start == MBAD_G7_SETTING) {
+				if (start == MBAD_SETTING) {
 					printf("read setting #1, s=%d, c=%d\n", start, count);
 				}
 				size = readMem(&ptx[inx], start, count);		
@@ -245,7 +245,7 @@ int modbusSlvProcFrame(uint8_t *prx, uint16_t rxsize, uint8_t *ptx, int longFram
 			if (longFrame) 
 				size = readMem4(&ptx[inx], start-10000, count);
 			else {
-				if (start == (MBAD_G7_SETTING+ADD_ADE9000)) {
+				if (start == (MBAD_SETTING+ADD_ADE9000_M2)) {
 					printf("read setting #2, s=%d, c=%d\n", start, count);
 				}
 				size = readMem3(&ptx[inx], start-10000, count);		
@@ -255,7 +255,7 @@ int modbusSlvProcFrame(uint8_t *prx, uint16_t rxsize, uint8_t *ptx, int longFram
 			if (longFrame) 
 				size = readMem4_m3(&ptx[inx], start-ADD_ADE9000_M3, count);
 			else {
-				if (start == (MBAD_G7_SETTING+ADD_ADE9000_M3)) {
+				if (start == (MBAD_SETTING+ADD_ADE9000_M3)) {
 					printf("read setting #3, s=%d, c=%d\n", start, count);
 				}
 				size = readMem3_m3(&ptx[inx], start-ADD_ADE9000_M3, count);		
@@ -271,7 +271,7 @@ int modbusSlvProcFrame(uint8_t *prx, uint16_t rxsize, uint8_t *ptx, int longFram
 			if (longFrame) 
 				size = readMem4(&ptx[inx], start-10000, count);
 			else {
-				if (start == (MBAD_G7_SETTING+ADD_ADE9000)) {
+				if (start == (MBAD_SETTING+ADD_ADE9000_M2)) {
 					printf("read setting #2, s=%d, c=%d\n", start, count);
 				}
 				size = readMem3(&ptx[inx], start-10000, count);		
@@ -290,7 +290,7 @@ int modbusSlvProcFrame(uint8_t *prx, uint16_t rxsize, uint8_t *ptx, int longFram
 			}
 			else if (start < 20000) {
 				id = 1;
-				start -= ADD_ADE9000;
+				start -= ADD_ADE9000_M2;
 			}
 #if METER_CH_COUNT > 2
 			else if (start < 30000) {
@@ -311,14 +311,14 @@ int modbusSlvProcFrame(uint8_t *prx, uint16_t rxsize, uint8_t *ptx, int longFram
 		
 	// Setting 변경용으로 사용
 	case 16:
-		if (start >= MBAD_G7_SETTING && (start+count) <= MBAD_G7_CMD) {
+		if (start >= MBAD_SETTING && (start+count) <= MBAD_SET_CMD) {
 			size = writeMultiMem(start, count, &prx[7]);				
 			ptx[inx++] = start >> 8;
 			ptx[inx++] = start;
 			ptx[inx++] = count >> 8;
 			ptx[inx++] = count;
 		}
-		else if (start >= (MBAD_G7_SETTING + ADD_ADE9000) && (start+count) <= (MBAD_G7_CMD + ADD_ADE9000)) {
+		else if (start >= (MBAD_SETTING + ADD_ADE9000_M2) && (start+count) <= (MBAD_SET_CMD + ADD_ADE9000_M2)) {
 			size = writeMultiMem(start, count, &prx[7]);				
 			ptx[inx++] = start >> 8;
 			ptx[inx++] = start;
@@ -326,7 +326,7 @@ int modbusSlvProcFrame(uint8_t *prx, uint16_t rxsize, uint8_t *ptx, int longFram
 			ptx[inx++] = count;
 		}
 #if METER_CH_COUNT > 2
-		else if (start >= (MBAD_G7_SETTING + ADD_ADE9000_M3) && (start+count) <= (MBAD_G7_CMD + ADD_ADE9000_M3)) {
+		else if (start >= (MBAD_SETTING + ADD_ADE9000_M3) && (start+count) <= (MBAD_SET_CMD + ADD_ADE9000_M3)) {
 			size = writeMultiMem(start, count, &prx[7]);				
 			ptx[inx++] = start >> 8;
 			ptx[inx++] = start;
@@ -432,7 +432,7 @@ static uint16_t *getMeterRegBaseById(int id) {
 }
 
 static int decodeMeterAddress(uint16_t address, int *id, uint16_t *offset) {
-	if (address < ADD_ADE9000) {
+	if (address < ADD_ADE9000_M2) {
 		*id = 0;
 		*offset = address;
 		return 0;
@@ -440,7 +440,7 @@ static int decodeMeterAddress(uint16_t address, int *id, uint16_t *offset) {
 #if METER_CH_COUNT > 2
 	if (address < ADD_ADE9000_M3) {
 		*id = 1;
-		*offset = address - ADD_ADE9000;
+		*offset = address - ADD_ADE9000_M2;
 		return 0;
 	}
 	if (address < 30000) {
@@ -451,7 +451,7 @@ static int decodeMeterAddress(uint16_t address, int *id, uint16_t *offset) {
 #else
 	if (address < 20000) {
 		*id = 1;
-		*offset = address - ADD_ADE9000;
+		*offset = address - ADD_ADE9000_M2;
 		return 0;
 	}
 #endif
@@ -775,17 +775,11 @@ int checkFwApply(void)
 //	//printf("decodeCmd, s=%d, c=%d\n", start, count);
 //	
 //	// IOM Control 영역
-//	if (start >= IOM_DO_BASE0 && start < (IOM_DO_BASE0+8)) {
-//		putCommandS(start, count);
-//	}
-//	else if (start >= IOM_DO_BASE1 && start < (IOM_DO_BASE1+8)) {
-//		putCommand(start, count, pcmd);
-//	}	
 //	// Write Single Hold Register
 //	// setting
 
 //	// Command Area	
-//	else if (start >= MBAD_G7_CMD && start < MBAD_G7_CMD) {
+//	else if (start >= MBAD_SET_CMD && start < MBAD_SET_CMD) {
 //		putCommand(start, count, pcmd);
 //	}		
 //}
@@ -824,21 +818,19 @@ int	writeSingleMem(int id, uint16_t start, uint16_t cmd)
 {
 	uint16_t    i, inx = 0, six=0;
 	
-	if ((start >= IOM_DO_BASE0 && start <(IOM_DO_BASE0+8)) || 
-			(start >= IOM_DO_BASE1 && start <(IOM_DO_BASE1+8)) || 
-			(start >= MBAD_G7_CMD && start < MBAD_G7_END))
+	if (start >= MBAD_SET_CMD && start < MBAD_SET_END)
 	{	
 		switch (start) {
-			case 7370:
+			case MBAD_CMD_FETCH_EVENT:
 				fetchEvent(id, cmd);
 				break;
-			case 7371:
+			case MBAD_CMD_FETCH_ALARM:
 				fetchAlarm(cmd);
 				break;
-			case 7372:
+			case MBAD_CMD_FETCH_ITIC:
 				fetchItic(id, cmd);
 				break;
-			case 7373:
+			case MBAD_CMD_FETCH_ITIC2:
 				fetchItic2(id, cmd);
 				break;
 			default:
@@ -854,18 +846,18 @@ int	writeMultiMem(uint16_t start, uint16_t count, uint8_t *pcmd)
 	// setting 영역에 바로 쓰면 어느부분이 변경되었는지 알수 없기때문에
 	// 영역별로 따로 처리한다.
 #if METER_CH_COUNT > 2
-	if (start >= (MBAD_G7_SETTING + ADD_ADE9000_M3) && start < (MBAD_G7_CMD + ADD_ADE9000_M3)) {
+	if (start >= (MBAD_SETTING + ADD_ADE9000_M3) && start < (MBAD_SET_CMD + ADD_ADE9000_M3)) {
 		printf("recv Settings(M3), s=%d, c=%d ...\n", start, count);
-		putSettings(start - (MBAD_G7_SETTING + ADD_ADE9000_M3), count, pcmd, pmset3);
+		putSettings(start - (MBAD_SETTING + ADD_ADE9000_M3), count, pcmd, pmset3);
 		return 0;
 	}
 #endif
-	if (start >= (MBAD_G7_SETTING + ADD_ADE9000) && start < (MBAD_G7_CMD + ADD_ADE9000)) {
+	if (start >= (MBAD_SETTING + ADD_ADE9000_M2) && start < (MBAD_SET_CMD + ADD_ADE9000_M2)) {
 		printf("recv Settings(M2), s=%d, c=%d ...\n", start, count);
-		putSettings(start - (MBAD_G7_SETTING + ADD_ADE9000), count, pcmd, pmset2);
+		putSettings(start - (MBAD_SETTING + ADD_ADE9000_M2), count, pcmd, pmset2);
 		return 0;
 	}
-	if (start >= MBAD_SET_TS && count == 2 && start < ADD_ADE9000) {
+	if (start >= MBAD_SET_TS && count == 2 && start < MBAD_SET_CMD) {
 #if 1
 		uint32_t utc = pcmd[0]<<24 | pcmd[1]<<16 | pcmd[2]<<8 | pcmd[3];
 		printf("recv UTC Time, s=%d, c=%d, UTC=%d ...\n", start, count, utc);
@@ -873,9 +865,9 @@ int	writeMultiMem(uint16_t start, uint16_t count, uint8_t *pcmd)
 		putUTCtime(start-MBAD_SET_TS, count, pcmd);
 		return 0;
 	}
-	if (start >= MBAD_G7_SETTING && start < MBAD_G7_CMD) {
+	if (start >= MBAD_SETTING && start < MBAD_SET_CMD) {
 		printf("recv Settings(M1), s=%d, c=%d ...\n", start, count);
-		putSettings(start-MBAD_G7_SETTING, count, pcmd, pmset);
+		putSettings(start-MBAD_SETTING, count, pcmd, pmset);
 		return 0;
 	}
 	return 0;
@@ -939,11 +931,11 @@ int writeMemCb(uint16_t address, uint16_t value) {
 	}
 	else
 #endif
-	if (address >= ADD_ADE9000 && address < ADD_ADE9000_M3) {
+	if (address >= ADD_ADE9000_M2 && address < ADD_ADE9000_M3) {
 		psmb = pmset2;
-		psmb[address-ADD_ADE9000] = value;
+		psmb[address-ADD_ADE9000_M2] = value;
 	}
-	else if (address < ADD_ADE9000) {
+	else if (address < ADD_ADE9000_M2) {
 		if (address == MBAD_SET_TS) {
 			uptr[0] = value;
 		 }
@@ -953,25 +945,24 @@ int writeMemCb(uint16_t address, uint16_t value) {
 			tickSet(_utc, 0, 1);		
 			RTC_SetTimeUTC(_utc);
 		 }
-		 else if (address >= MBAD_G7_SETTING && address < MBAD_G7_CMD) {
+		 else if (address >= MBAD_SETTING && address < MBAD_SET_CMD) {
 		  //printf("writeMemCb Settings, s=%d, v=%d ...\n", address, value);
-			psmb[address-MBAD_G7_SETTING] = value;
+			psmb[address-MBAD_SETTING] = value;
 	  	}
-	  	else if((address >= IOM_DO_BASE0 && address <(IOM_DO_BASE0+8)) || 
-		  (address >= MBAD_G7_CMD && address < MBAD_G7_END)) {
+	  	else if (address >= MBAD_SET_CMD && address < MBAD_SET_END) {
 		  printf("putCmdQ Settings, s=%d, v=%d ...\n", address, value);
 			  
 		  switch (address) {
-			  case 7370:
+			  case MBAD_CMD_FETCH_EVENT:
 				  fetchEvent(0, value);
 				  break;
-			  case 7371:
+			  case MBAD_CMD_FETCH_ALARM:
 				  fetchAlarm(value);
 				  break;
-			  case 7372:
+			  case MBAD_CMD_FETCH_ITIC:
 				  fetchItic(0, value);
 				  break;
-			  case 7373:
+			  case MBAD_CMD_FETCH_ITIC2:
 				  fetchItic2(0, value);
 				  break;
 			  default:
@@ -980,7 +971,7 @@ int writeMemCb(uint16_t address, uint16_t value) {
 		  	}
 	  	}
 	}
-	// else if(address >= MBAD_G7_END1 && address < MBAD_G7_END2) {
+	// else if(address >= MBAD_SET_END1 && address < MBAD_SET_END2) {
 	// 	ackIOEvent(address, value);
 	// 	printf("INT DI Ack rcv = [%d][0x%x]\n", address, value);	
 	// }
@@ -989,9 +980,6 @@ int writeMemCb(uint16_t address, uint16_t value) {
 	// 	psmb[address-MBAD_SET_DI] = value;
 	//  	return 0;
 	// }
-//	else if (address >= IOM_DO_BASE0 && address < (IOM_DO_BASE0+8)) {
-//		sendExtIOMControl(0, address-IOM_DO_BASE0, value);
-//	}
 }
 
 // 2025-2-26, cskang

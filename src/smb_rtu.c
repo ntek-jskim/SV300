@@ -474,20 +474,11 @@ void cmdProc()
 
 	id = (s < 10000) ? 0 : 1;
 	printf("cmdProc, s=%d, c=%x\n", s, c);
-			
-	// IO module #1
-	if (s >= IOM_DO_BASE0 && s < (IOM_DO_BASE0+8)) {
-//		sendExtIOMControl(0, s-IOM_DO_BASE0, c);
-	}
-	// IO module #2
-	// else if (s >= IOM_DO_BASE1 && s <= (IOM_DO_BASE1+8)) {		
-	// 	sendExtIOMControl(1, s-IOM_DO_BASE1, c);
-	// }
-	else {		
-		addr = s-MBAD_G7_CMD;	// 6950	
-		
-		printf("{{cmdProc(%d, 0x%x)}}\n", s, c);
-		switch (addr) {	
+
+	addr = s - MBAD_SET_CMD;
+
+	printf("{{cmdProc(%d, 0x%x)}}\n", s, c);
+	switch (addr) {
 		// reboot
 		case 0:
 			// iom reset send
@@ -570,8 +561,6 @@ void cmdProc()
 		// 	// iom pi clear send
 		// 	sendIOCommand(IOM_COMMAND+1, 0x1234);
 		// 	break;
-		// }
-		}
 	}
 }
 

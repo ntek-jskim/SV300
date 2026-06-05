@@ -43,3 +43,14 @@
 2026/06/02 : meter.h·meter.c 2-A — SETTINGS 전역 db 단일, settings.dat 1블록, db.pt[id]/ct[id], load/save·initSettings
 2026/06/02 : meter.c 2-B — build_cal_db1~3·build_set_db commit_db_settings 동기화, loadSettings 재생성 경로 통일, buildSettings comm id==0
 2026/06/02 : ade9000.c·alarm.c·app_main.c·fft_radix2_czt.c 2-C — db.pt[id]/ct[id]/freq, initADE9000 &db[id] 제거
+2026/06/02 : meter.h·modbus.c·smb_rtu.c — IOM_DO_BASE0/1 제거, 명령·쓰기는 MBAD_G7_CMD(6950~)만 사용
+2026/06/02 : meter.h — 미사용 매크로 안전 삭제(PQ/_DM_, Tid_Sntp/NET, SETTINGS_HAS_SYS, DO_OPEN_PHASE, MAX_EREG32, ENERGY_SIGN_COUNT 중복)
+2026/06/02 : meter.h — Modbus 맵 문서용 MBAD_G7_*·MBAD_SET_P1~6 매크로 삭제(memorymap xlsx·주석으로 이전)
+2026/06/02 : meter.h — PT_PRIMARY_IDX(fd[0] 잔재) 삭제
+2026/06/02 : meter.h·modbus.c — MBAD_G7_SETTING→MBAD_SETTING 명칭 통일
+2026/06/02 : meter.h·modbus.c·smb_rtu.c — Modbus 설정 7280/7616/7626/7765, MBAD_SET_CMD/END·fetch 명령 주소 정합
+2026/06/02 : meter.h — MBAD_CMD_FETCH_* 오프셋 memory map 반영(CMD+85/86/90/91)
+2026/06/02 : meter.h — MBAD_CMD_FETCH_ALARM/ITIC/ITIC2 오프셋 +94/+130/+139 (7711/7720/7756/7765)
+2026/06/02 : meter.h — MBAD_SET_END 7766(ITIC2=7765가 address<END에 포함되도록)
+2026/06/02 : meter.h — MBAD_CMD_FETCH_ITIC2 오프셋 +133 (7759)
+2026/06/02 : meter.h·modbus.c — Modbus CH2 베이스 ADD_ADE9000→ADD_ADE9000_M2(10000) 명칭 통일

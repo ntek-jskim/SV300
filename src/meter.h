@@ -98,37 +98,24 @@
 #define DEMAND_PHASE_COUNT   3   /* I, DD_I, etc. */
 #define DEMAND_PQ_DIR_COUNT  2   /* P/Q 방향 (예: imp/exp 또는 lag/lead) */
 
-#define ENERGY_SIGN_COUNT 2
+/* Modbus holding map (gems7000) — memorymap/SV300 memory map_*.xlsx 참고
+ * 0 meter … 3550 soe | 7280 settings, 7616 time(2), 7626 cmd … 7765 last
+ */
+#define	MBAD_SETTING 7280
+#define	MBAD_SET_TS  7616
+#define	MBAD_SET_CMD 7626
+#define	MBAD_SET_END 7766	/* exclusive: last holding reg 7765 */
+/* 명령 영역 fetch (memory map: +85/+94/+130/+133 → 7711/7720/7756/7759) */
+#define	MBAD_CMD_FETCH_EVENT	(MBAD_SET_CMD + 85)
+#define	MBAD_CMD_FETCH_ALARM	(MBAD_SET_CMD + 94)
+#define	MBAD_CMD_FETCH_ITIC		(MBAD_SET_CMD + 130)
+#define	MBAD_CMD_FETCH_ITIC2	(MBAD_SET_CMD + 133)
 
-#define	IOM_DO_BASE0	6148	// ~ 3451
-#define	IOM_DO_BASE1	6208	// ~ 3493
-// gems7000
-#define	MBAD_G7_METER	0
-#define	MBAD_G7_MINMAX	300
-#define	MBAD_G7_HARMONICS 800
-#define	MBAD_G7_DEMAND 1300
-#define	MBAD_G7_ALARM 1500
-#define	MBAD_G7_WAVE 1900
-#define	MBAD_G7_EVENT 3000
-#define	MBAD_G7_IOM 3400
-#define	MBAD_G7_SOE 3550
-
-#define	MBAD_G7_SETTING 6300
-#define	MBAD_SET_P1	6300		// Comm, PT, CT, ETC
-#define	MBAD_SET_P2	6410		// Sag, Swell, Transient, WaveRcrd, Disturbance
-#define	MBAD_SET_P3	6470		// Trend Rcrd, PQ Report, 
-#define	MBAD_SET_P4 6560		// Alarm Setting
-#define	MBAD_SET_P5	6760		// IO Setting#1
-#define	MBAD_SET_P6 6850		// IO Setting#2
-#define	MBAD_SET_TS 6940		// Time 
-#define	MBAD_G7_CMD 6950		
-#define	MBAD_G7_END 7000
-
-#define	ADD_ADE9000 10000
+#define	ADD_ADE9000_M2 10000
 /* Modbus 20000번대: 3번 미터(METER index 2) 데이터/설정 베이스 오프셋 */
 #define	ADD_ADE9000_M3 20000
 
-/* Modbus MBAD_G7_SETTING(6300~) — METER_DEF.pqevt 선두, readMem은 meter.meter+start 와 동일 오프셋 */
+/* Modbus MBAD_SETTING — METER_DEF.pqevt 선두(P2~), FC16 설정 쓰기는 pmset 오프셋 */
 #define METER_MB_SETTING_REGS(m)	((uint16_t *)&(m).pqevt)
 
 #define ZCT_NONE		0
@@ -517,7 +504,6 @@ typedef struct {
 
 
 #define	MAX_EREG64	(99999999999LL)
-#define	MAX_EREG32	(999999999)
 #define	EREG32_UNIT		(100)
 
 // REG64: 99,999,999.999 wh (1w 단위)
@@ -842,10 +828,6 @@ typedef struct {
 	uint16_t	r1;
 } PT_DEF;	/* 16 bytes: wiring, _r0, vnorm, PT1, PT2, r1 */
 
-#ifndef PT_PRIMARY_IDX
-#define PT_PRIMARY_IDX	0	/* 기존 단일 PT 로직: fd[0] 대표 */
-#endif
-
 typedef struct {
 	uint16_t	inorm;
 	uint16_t	CT1;
@@ -857,18 +839,15 @@ typedef struct {
 	uint16_t	rogowskiParam;	// unused
 	int16_t		phaseOfs[3];
 	uint16_t  	zctType, zctScale;
-	uint16_t	r2[6];	
+	uint16_t	r2[2];	
 } CT_DEF;
-
-#define		DO_OPEN_PHASE		0
-
 
 typedef struct {
 	uint16_t	VA_type;
 	uint16_t	PF_sign;
 	uint16_t	interval;
 	uint16_t  	Iload;	
-	uint32_t	P_target;	
+	uint32_t	P_target[MAX_CH];	
 	uint16_t  	backlightTime;		// 0: always, 1 ~ 15분
 	uint16_t  	brightness;		// 0 ~ 9
 	uint16_t  	autorotation;	// 0: hold, 1: auto rotation	
@@ -876,7 +855,7 @@ typedef struct {
 	uint16_t  	maxminItv;
 	uint16_t  	testMode;
 	uint16_t  	testMode_Period;
-	uint16_t  	r[2];
+	uint16_t  	r;
 //	uint16_t  	r3[9];
 } ETC_DEF;
 
@@ -926,23 +905,11 @@ typedef struct {
 
 typedef struct {
 	uint16_t modType, _r0;	// 1,2:DIO, 3,4:RTD, 5,6:AIO, Com: 16
-	uint32_t ts;
 	
-	uint16_t diType[8];	// 0:di, 1: pi
-	uint16_t debounce[8];	// 1 ~ 255msec
-	uint16_t piConst[8];	// 1 ~ 255msec
-	// DO Channel을 4->8으로 증설(2개는 비운다)
-	uint16_t doType[8];	// 0:output, 1:alarm	 	
-	uint16_t doMode[8];	// 0:latch, 1: pulse
-	uint16_t doTimer[8];	// pulse width, 0.1 ~ 10s		
-	float	aiScale[4][2];// Eng Scale(Gain/Offset)
-	struct {
-		uint16_t shuntType;	// Shunt Type : 0=50mV, 1:60mV, 2:100mV)
-		uint16_t shuntNorm;	// Shunt Nominal Current(default:50A)	
-	} dcm[2];
-	uint16_t aoDataIndex[2];
-	float	aoScale[2][2]; // Eng Scale
-	uint16_t _r[8];
+	uint16_t diType[4];	// 0:di, 1: pi
+	uint16_t debounce[4];	// 1 ~ 255msec
+	uint16_t piConst[4];	// 1 ~ 255msec
+	uint16_t _r[14];
 } IO_CFG;
 
 #define	PQE_OC	0
@@ -960,13 +927,6 @@ typedef struct {
 	ETC_DEF		etc;
 	IO_CFG		iom;
 } SETTINGS_SYS;
-
-#define SETTINGS_SYS_SLOT	0
-#if defined(CH1)
-#define SETTINGS_HAS_SYS(id)	((id) == SETTINGS_SYS_SLOT)
-#else
-#define SETTINGS_HAS_SYS(id)	1
-#endif
 
 typedef struct {
 	union {
@@ -1934,7 +1894,7 @@ typedef struct {
 	SETTINGS	setting;	/* comm/pt/ct/etc/iom — 파일(settings.dat) 및 P1(별도 맵) */
 //	uint16_t 	_r[10];
 
-	COMMANDS	cmds;			// 6950
+	COMMANDS	cmds;			/* MBAD_SET_CMD */
 //	FLOW_DATA	flowMeter;
 //
 
@@ -2025,7 +1985,6 @@ typedef struct {
 	uint8_t fwVer, fwDate[3], _r[2];
 } RESP_NETINF;
 
-#define	Tid_Sntp		0
 #define Tid_Shell		1 
 #define	Tid_FFT			2 
 #define	Tid_Wave		3 
@@ -2041,13 +2000,8 @@ typedef struct {
 #define Tid_Trend		10
 #define Tid_Iom			11
 #define	Tid_SMB			12
-#define	Tid_NET			13
 #define	Tid_Led			14
 #define	Tid_GW			15
-
-#define PQ
-#define _DM_
-
 
 //#define _EGY_LOG_ 
 //#define EGY_LOG
