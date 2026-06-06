@@ -33,7 +33,7 @@ extern void macAddrGet(uint8_t *);
 //extern MGEM_DATA  gm35_Full[2];
 //extern MGEM_ONION_DATA gm35_Small[2];
 
-int	writeSingleMem(int id, uint16_t start, uint16_t cmd);
+int	writeSingleMem(uint16_t start, uint16_t cmd);
 int	writeMultiMem(uint16_t start, uint16_t count, uint8_t *prx);
 uint16_t 	gencrc_modbus(uint8_t * ptr, int len);
 void cmd_reboot(char *par);
@@ -230,7 +230,7 @@ int modbusSlvProcFrame(uint8_t *prx, uint16_t rxsize, uint8_t *ptx, int longFram
 	{
 	case 3:
 	case 4:
-		if(start < 10000) {
+		if (start < ADD_ADE9000_M2) {
 			if (longFrame) 
 				size = readMem2(&ptx[inx], start, count);
 			else {
@@ -241,99 +241,85 @@ int modbusSlvProcFrame(uint8_t *prx, uint16_t rxsize, uint8_t *ptx, int longFram
 			}
 		}
 #if METER_CH_COUNT > 2
-		else if (start < 20000) {
+		else if (start < ADD_ADE9000_M3) {
+			if (readRangeBlocked(start, count))
+				return makeExceptFrame(prx[0], fc, 2, ptx);
 			if (longFrame) 
-				size = readMem4(&ptx[inx], start-10000, count);
-			else {
-				if (start == (MBAD_SETTING+ADD_ADE9000_M2)) {
-					printf("read setting #2, s=%d, c=%d\n", start, count);
-				}
-				size = readMem3(&ptx[inx], start-10000, count);		
-			}
+				size = readMem4(&ptx[inx], start - ADD_ADE9000_M2, count);
+			else
+				size = readMem3(&ptx[inx], start - ADD_ADE9000_M2, count);
 		}
 		else if (start < 30000) {
+			if (readRangeBlocked(start, count))
+				return makeExceptFrame(prx[0], fc, 2, ptx);
 			if (longFrame) 
-				size = readMem4_m3(&ptx[inx], start-ADD_ADE9000_M3, count);
-			else {
-				if (start == (MBAD_SETTING+ADD_ADE9000_M3)) {
-					printf("read setting #3, s=%d, c=%d\n", start, count);
-				}
-				size = readMem3_m3(&ptx[inx], start-ADD_ADE9000_M3, count);		
-			}
+				size = readMem4_m3(&ptx[inx], start - ADD_ADE9000_M3, count);
+			else
+				size = readMem3_m3(&ptx[inx], start - ADD_ADE9000_M3, count);
 		}
+#else
+		else if (start < ADD_ADE9000_M3) {
+			if (readRangeBlocked(start, count))
+				return makeExceptFrame(prx[0], fc, 2, ptx);
+			if (longFrame) 
+				size = readMem4(&ptx[inx], start - ADD_ADE9000_M2, count);
+			else
+				size = readMem3(&ptx[inx], start - ADD_ADE9000_M2, count);
+		}
+#endif
 		else {
 			return makeExceptFrame(prx[0], fc, 2, ptx);
 		}
-#else
-		else {
-			if (start >= 20000)
-				return makeExceptFrame(prx[0], fc, 2, ptx);
-			if (longFrame) 
-				size = readMem4(&ptx[inx], start-10000, count);
-			else {
-				if (start == (MBAD_SETTING+ADD_ADE9000_M2)) {
-					printf("read setting #2, s=%d, c=%d\n", start, count);
-				}
-				size = readMem3(&ptx[inx], start-10000, count);		
-			}
-		}
-#endif
 		break; 
 	
-	// 제어 Command로 사용
+	// FC6: CH0 명령 또는 M1/M2 RW 포켓(16870~17219 / 26870~27219)
 	case 6:
-		{
-			int id;
-
-			if (start < 10000) {
-				id = 0;
-			}
-			else if (start < 20000) {
-				id = 1;
-				start -= ADD_ADE9000_M2;
-			}
-#if METER_CH_COUNT > 2
-			else if (start < 30000) {
-				id = 2;
-				start -= ADD_ADE9000_M3;
-			}
-#endif
-			else {
-				return makeExceptFrame(prx[0], fc, 2, ptx);
-			}
-			size = writeSingleMem(id, start, count);			
-			ptx[inx++] = start >> 8;
-			ptx[inx++] = start;
-			ptx[inx++] = count >> 8;
-			ptx[inx++] = count;
+		if (start < ADD_ADE9000_M2) {
+			size = writeSingleMem(start, count);
 		}
+		else if (start >= MBAD_M1_RW_START && start < MBAD_M1_RW_END) {
+			if (writeMeterHoldReg(1, start - ADD_ADE9000_M2, count) < 0)
+				return makeExceptFrame(prx[0], fc, 2, ptx);
+		}
+#if METER_CH_COUNT > 2
+		else if (start >= MBAD_M2_RW_START && start < MBAD_M2_RW_END) {
+			if (writeMeterHoldReg(2, start - ADD_ADE9000_M3, count) < 0)
+				return makeExceptFrame(prx[0], fc, 2, ptx);
+		}
+#endif
+		else {
+			return makeExceptFrame(prx[0], fc, 2, ptx);
+		}
+		ptx[inx++] = start >> 8;
+		ptx[inx++] = start;
+		ptx[inx++] = count >> 8;
+		ptx[inx++] = count;
 		break;
 		
-	// Setting 변경용으로 사용
+	// FC16: CH0 설정(7280~7625) 또는 M1/M2 RW 포켓
 	case 16:
-		if (start >= MBAD_SETTING && (start+count) <= MBAD_SET_CMD) {
-			size = writeMultiMem(start, count, &prx[7]);				
-			ptx[inx++] = start >> 8;
-			ptx[inx++] = start;
-			ptx[inx++] = count >> 8;
-			ptx[inx++] = count;
+		if (start >= MBAD_SETTING_M2)
+			return makeExceptFrame(prx[0], fc, 2, ptx);
+		if (start >= MBAD_SETTING && (start + count) <= MBAD_SET_CMD) {
+			size = writeMultiMem(start, count, &prx[7]);
 		}
-		else if (start >= (MBAD_SETTING + ADD_ADE9000_M2) && (start+count) <= (MBAD_SET_CMD + ADD_ADE9000_M2)) {
-			size = writeMultiMem(start, count, &prx[7]);				
-			ptx[inx++] = start >> 8;
-			ptx[inx++] = start;
-			ptx[inx++] = count >> 8;
-			ptx[inx++] = count;
+		else if (start >= MBAD_M1_RW_START && (start + count) <= MBAD_M1_RW_END) {
+			if (writeMeterHoldRegs(1, start - ADD_ADE9000_M2, count, &prx[7]) < 0)
+				return makeExceptFrame(prx[0], fc, 2, ptx);
 		}
 #if METER_CH_COUNT > 2
-		else if (start >= (MBAD_SETTING + ADD_ADE9000_M3) && (start+count) <= (MBAD_SET_CMD + ADD_ADE9000_M3)) {
-			size = writeMultiMem(start, count, &prx[7]);				
-			ptx[inx++] = start >> 8;
-			ptx[inx++] = start;
-			ptx[inx++] = count >> 8;
-			ptx[inx++] = count;
+		else if (start >= MBAD_M2_RW_START && (start + count) <= MBAD_M2_RW_END) {
+			if (writeMeterHoldRegs(2, start - ADD_ADE9000_M3, count, &prx[7]) < 0)
+				return makeExceptFrame(prx[0], fc, 2, ptx);
 		}
 #endif
+		else {
+			return makeExceptFrame(prx[0], fc, 2, ptx);
+		}
+		ptx[inx++] = start >> 8;
+		ptx[inx++] = start;
+		ptx[inx++] = count >> 8;
+		ptx[inx++] = count;
 		break;
 		
 	default:   
@@ -431,6 +417,68 @@ static uint16_t *getMeterRegBaseById(int id) {
 	return (uint16_t *)&meter[id].meter;
 }
 
+static int meterRwRangeValid(uint16_t offset, uint16_t count)
+{
+	if (offset < MBAD_RW_OFF_START)
+		return 0;
+	if ((uint32_t)offset + count > MBAD_RW_OFF_END)
+		return 0;
+	return 1;
+}
+
+static int writeMeterHoldReg(int id, uint16_t offset, uint16_t value)
+{
+	uint16_t *psmb = getMeterRegBaseById(id);
+
+	if (psmb == NULL || !meterRwRangeValid(offset, 1))
+		return -1;
+	psmb[offset] = value;
+	return 0;
+}
+
+static int writeMeterHoldRegs(int id, uint16_t offset, uint16_t count, uint8_t *pcmd)
+{
+	uint16_t *psmb = getMeterRegBaseById(id);
+	uint8_t *pbuf;
+	int i;
+
+	if (psmb == NULL || pcmd == NULL || !meterRwRangeValid(offset, count))
+		return -1;
+
+	pbuf = (uint8_t *)(psmb + offset);
+	for (i = 0; i < count; i++) {
+		*pbuf++ = *(pcmd + 1);
+		*pbuf++ = *pcmd;
+		pcmd += 2;
+	}
+	return 0;
+}
+
+/* M1/M2 read: ≥17220/27220 또는 그 구간을 침범하면 거부 */
+static int readRangeBlocked(uint16_t start, uint16_t count)
+{
+	uint32_t end = (uint32_t)start + count;
+
+	if (start >= ADD_ADE9000_M2 && start < ADD_ADE9000_M3) {
+		if (start >= MBAD_METER_END_M2 || end > MBAD_METER_END_M2)
+			return 1;
+	}
+#if METER_CH_COUNT > 2
+	if (start >= ADD_ADE9000_M3 && start < 30000) {
+		if (start >= MBAD_METER_END_M3 || end > MBAD_METER_END_M3)
+			return 1;
+	}
+#endif
+	return 0;
+}
+
+static int readMeterChOffsetBlocked(int id, uint16_t offset)
+{
+	if (id == 1 || id == 2)
+		return offset >= MBAD_RW_OFF_END;
+	return 0;
+}
+
 static int decodeMeterAddress(uint16_t address, int *id, uint16_t *offset) {
 	if (address < ADD_ADE9000_M2) {
 		*id = 0;
@@ -458,6 +506,27 @@ static int decodeMeterAddress(uint16_t address, int *id, uint16_t *offset) {
 	return -1;
 }
 
+/* fetch: MBAD_CMD_FETCH_* (+67/+77/+107/+110) 베이스+0/1/2 → id 0/1/2 */
+static int handleFetchCmd(uint16_t cmdAddr, uint16_t cmd)
+{
+	if (cmdAddr >= MBAD_CMD_FETCH_EVENT && cmdAddr < (MBAD_CMD_FETCH_EVENT + METER_CH_COUNT)) {
+		fetchEvent(cmdAddr - MBAD_CMD_FETCH_EVENT, cmd);
+		return 1;
+	}
+	if (cmdAddr >= MBAD_CMD_FETCH_ALARM && cmdAddr < (MBAD_CMD_FETCH_ALARM + METER_CH_COUNT)) {
+		fetchAlarm(cmdAddr - MBAD_CMD_FETCH_ALARM, cmd);
+		return 1;
+	}
+	if (cmdAddr >= MBAD_CMD_FETCH_ITIC && cmdAddr < (MBAD_CMD_FETCH_ITIC + METER_CH_COUNT)) {
+		fetchItic(cmdAddr - MBAD_CMD_FETCH_ITIC, cmd);
+		return 1;
+	}
+	if (cmdAddr >= MBAD_CMD_FETCH_ITIC2 && cmdAddr < (MBAD_CMD_FETCH_ITIC2 + METER_CH_COUNT)) {
+		fetchItic2(cmdAddr - MBAD_CMD_FETCH_ITIC2, cmd);
+		return 1;
+	}
+	return 0;
+}
 
 int readBioMem(uint8_t *ptx, uint16_t start, uint16_t count, uint8_t *psmb)
 {
@@ -789,8 +858,7 @@ void initCmdQ(OsTaskId tid)
 	cmdQ.tid = tid;
 }
 
-void putCmdQ(int id, int s, int c) {	
-	cmdQ.item[cmdQ.fr].id = id;
+void putCmdQ(int s, int c) {	
 	cmdQ.item[cmdQ.fr].s = s;
 	cmdQ.item[cmdQ.fr].c = c;
 	cmdQ.fr = (cmdQ.fr+1) % N_CMD_Q;
@@ -801,11 +869,10 @@ void putCmdQ(int id, int s, int c) {
 #endif	
 }
 
-int getCmdQ(int *id, int *s, int *c) {
+int getCmdQ(int *s, int *c) {
 	if (cmdQ.fr == cmdQ.re) 
 		return -1;
 	
-	*id = cmdQ.item[cmdQ.re].id;
 	*s = cmdQ.item[cmdQ.re].s;
 	*c = cmdQ.item[cmdQ.re].c;
 	cmdQ.re = (cmdQ.re+1) % N_CMD_Q;
@@ -814,29 +881,14 @@ int getCmdQ(int *id, int *s, int *c) {
 }
 
 // *prx : start of data (bc 다음 부터 )
-int	writeSingleMem(int id, uint16_t start, uint16_t cmd)
+int	writeSingleMem(uint16_t start, uint16_t cmd)
 {
-	uint16_t    i, inx = 0, six=0;
-	
 	if (start >= MBAD_SET_CMD && start < MBAD_SET_END)
 	{	
-		switch (start) {
-			case MBAD_CMD_FETCH_EVENT:
-				fetchEvent(id, cmd);
-				break;
-			case MBAD_CMD_FETCH_ALARM:
-				fetchAlarm(cmd);
-				break;
-			case MBAD_CMD_FETCH_ITIC:
-				fetchItic(id, cmd);
-				break;
-			case MBAD_CMD_FETCH_ITIC2:
-				fetchItic2(id, cmd);
-				break;
-			default:
-				putCmdQ(id, start, cmd);
-				break;
-		}
+		if (handleFetchCmd(start, cmd))
+			return 0;
+
+		putCmdQ(start, cmd);
 	}
 	return 0;
 }
@@ -844,19 +896,7 @@ int	writeSingleMem(int id, uint16_t start, uint16_t cmd)
 int	writeMultiMem(uint16_t start, uint16_t count, uint8_t *pcmd)
 {
 	// setting 영역에 바로 쓰면 어느부분이 변경되었는지 알수 없기때문에
-	// 영역별로 따로 처리한다.
-#if METER_CH_COUNT > 2
-	if (start >= (MBAD_SETTING + ADD_ADE9000_M3) && start < (MBAD_SET_CMD + ADD_ADE9000_M3)) {
-		printf("recv Settings(M3), s=%d, c=%d ...\n", start, count);
-		putSettings(start - (MBAD_SETTING + ADD_ADE9000_M3), count, pcmd, pmset3);
-		return 0;
-	}
-#endif
-	if (start >= (MBAD_SETTING + ADD_ADE9000_M2) && start < (MBAD_SET_CMD + ADD_ADE9000_M2)) {
-		printf("recv Settings(M2), s=%d, c=%d ...\n", start, count);
-		putSettings(start - (MBAD_SETTING + ADD_ADE9000_M2), count, pcmd, pmset2);
-		return 0;
-	}
+	// CH0 설정·시간만 처리한다.
 	if (start >= MBAD_SET_TS && count == 2 && start < MBAD_SET_CMD) {
 #if 1
 		uint32_t utc = pcmd[0]<<24 | pcmd[1]<<16 | pcmd[2]<<8 | pcmd[3];
@@ -887,6 +927,8 @@ int   readMemCb(uint16_t address, uint16_t *value)
 	//printf("MbusHeartBit = %d\n", pInfo->MbusHeartBit);
 
 	if (decodeMeterAddress(address, &id, &offset) == 0) {
+		if (readMeterChOffsetBlocked(id, offset))
+			return -1;
 		psmb = getMeterRegBaseById(id);
 		if (psmb == NULL) {
 			return -1;
@@ -922,55 +964,59 @@ int   readMemCb(uint16_t address, uint16_t *value)
 int writeMemCb(uint16_t address, uint16_t value) {
    	static uint32_t _utc;   
    	uint16_t *uptr = (uint16_t *)&_utc;
-   	uint16_t *psmb = pmset;
-   
+   	int id;
+   	uint16_t offset;
+   	uint16_t *psmb;
+
+	if (decodeMeterAddress(address, &id, &offset) != 0)
+		return -1;
+
 #if METER_CH_COUNT > 2
-	if (address >= ADD_ADE9000_M3 && address < 30000) {
+	if (id == 2)
 		psmb = pmset3;
-		psmb[address - ADD_ADE9000_M3] = value;
-	}
 	else
 #endif
-	if (address >= ADD_ADE9000_M2 && address < ADD_ADE9000_M3) {
+	if (id == 1)
 		psmb = pmset2;
-		psmb[address-ADD_ADE9000_M2] = value;
+	else
+		psmb = pmset;
+
+	if (id == 1 && offset >= MBAD_RW_OFF_START && offset < MBAD_RW_OFF_END) {
+		if (writeMeterHoldReg(1, offset, value) < 0)
+			return -1;
+		return 0;
 	}
-	else if (address < ADD_ADE9000_M2) {
-		if (address == MBAD_SET_TS) {
-			uptr[0] = value;
-		 }
-		 else if (address == MBAD_SET_TS+1) {
-			uptr[1] = value;
-			printf("recv UTC Time=%d ...\n", _utc);
-			tickSet(_utc, 0, 1);		
-			RTC_SetTimeUTC(_utc);
-		 }
-		 else if (address >= MBAD_SETTING && address < MBAD_SET_CMD) {
-		  //printf("writeMemCb Settings, s=%d, v=%d ...\n", address, value);
-			psmb[address-MBAD_SETTING] = value;
-	  	}
-	  	else if (address >= MBAD_SET_CMD && address < MBAD_SET_END) {
-		  printf("putCmdQ Settings, s=%d, v=%d ...\n", address, value);
-			  
-		  switch (address) {
-			  case MBAD_CMD_FETCH_EVENT:
-				  fetchEvent(0, value);
-				  break;
-			  case MBAD_CMD_FETCH_ALARM:
-				  fetchAlarm(value);
-				  break;
-			  case MBAD_CMD_FETCH_ITIC:
-				  fetchItic(0, value);
-				  break;
-			  case MBAD_CMD_FETCH_ITIC2:
-				  fetchItic2(0, value);
-				  break;
-			  default:
-				  putCmdQ(0, address, value);
-				  break;
-		  	}
-	  	}
+#if METER_CH_COUNT > 2
+	else if (id == 2 && offset >= MBAD_RW_OFF_START && offset < MBAD_RW_OFF_END) {
+		if (writeMeterHoldReg(2, offset, value) < 0)
+			return -1;
+		return 0;
 	}
+#endif
+	else if (offset == MBAD_SET_TS) {
+		uptr[0] = value;
+		return 0;
+	}
+	else if (offset == MBAD_SET_TS+1) {
+		uptr[1] = value;
+		printf("recv UTC Time=%d ...\n", _utc);
+		tickSet(_utc, 0, 1);		
+		RTC_SetTimeUTC(_utc);
+		return 0;
+	}
+	else if (offset >= MBAD_SETTING && offset < MBAD_SET_CMD) {
+		psmb[offset-MBAD_SETTING] = value;
+		return 0;
+	}
+	else if (id == 0 && offset >= MBAD_SET_CMD && offset < MBAD_SET_END) {
+		if (handleFetchCmd(offset, value))
+			return 0;
+
+		printf("putCmdQ, s=%d, v=%d ...\n", offset, value);
+		putCmdQ(offset, value);
+		return 0;
+	}
+	return -1;
 	// else if(address >= MBAD_SET_END1 && address < MBAD_SET_END2) {
 	// 	ackIOEvent(address, value);
 	// 	printf("INT DI Ack rcv = [%d][0x%x]\n", address, value);	

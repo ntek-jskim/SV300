@@ -2,6 +2,8 @@
 
 #define	_ALARM_H
 
+#include "meter.h"
+
 typedef struct {
 	char *nm;
 	float *src;
@@ -9,16 +11,16 @@ typedef struct {
 //	uint16_t	*sts;
 } COMP_TBL;
 
-extern COMP_TBL almTbl[];
+extern COMP_TBL almTbl[METER_CH_COUNT][MAX_ALARM_CH];
 
-void initAlarmTable(void);
-void buildAlarmSettings(void);
-int alarmProc(void);
-int loadAlarmLog(void);
-int storeAlarmStatus(void);
-int deleteAlarmLog(void);
+void initAlarmTable(int id);
+void buildAlarmSettings(int id);
+int alarmProc(int id);
+int loadAlarmLog(int id);
+int storeAlarmStatus(int id);
+int loadAlarmStatus(int id);
+int deleteAlarmLog(int id);
 void buildTrendSetting();
-int loadAlarmStatus(void);
 int loadEventLog(void);
 
 #endif

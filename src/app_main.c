@@ -5,7 +5,7 @@
 #include "proxy.h"
 #include "i2c_18xx_43xx.h"
 
-OsTaskId tid_fft, tid_wave[2], tid_meter[2], tid_fs;
+OsTaskId tid_fft, tid_wave[METER_CH_COUNT], tid_meter[METER_CH_COUNT], tid_fs;
 OsTaskId tid_rmslog, tid_post, tid_energy, tid_trend;
 OsTaskId tid_iom;
 OsTaskId tid_rtu, tid_mmb;
@@ -376,7 +376,8 @@ void db_init(void)
    	FS_Init();
 //   init_card ();	
    
-   	initAlarmTable();			
+	for (id = 0; id < METER_CH_COUNT; id++)
+   		initAlarmTable(id);
 	
 	// read Setting
 	loadHwSettings(pcal);	
@@ -395,8 +396,10 @@ void db_init(void)
 	loadEnergy();
 	loadDemand();
 	loadMaxMin();
-	loadAlarmStatus();
-	loadAlarmLog();
+	for (id = 0; id < METER_CH_COUNT; id++) {
+		loadAlarmStatus(id);
+		loadAlarmLog(id);
+	}
 	loadEventLog();
 	
 	loadEnergyLogFs();

@@ -54,3 +54,31 @@
 2026/06/02 : meter.h — MBAD_SET_END 7766(ITIC2=7765가 address<END에 포함되도록)
 2026/06/02 : meter.h — MBAD_CMD_FETCH_ITIC2 오프셋 +133 (7759)
 2026/06/02 : meter.h·modbus.c — Modbus CH2 베이스 ADD_ADE9000→ADD_ADE9000_M2(10000) 명칭 통일
+2026/06/05 : alarm.c·meter.c·modbus.c·smb_rtu.c — 알람 CH1~3 분리(alarmProc/fetchAlarm/storeAlarmLog·FIFO·astat), PostScan id별 처리
+2026/06/05 : modbus.c — fetch event/alarm/itic/itic2 베이스+0/1/2 → id 0/1/2 (handleFetchCmd)
+2026/06/05 : meter.h·modbus.c — MBAD_CMD_FETCH_* 오프셋 +67/+75/+89/+91 (7693/7701/7715/7717) memory map 반영
+2026/06/05 : meter.h·modbus.c — MBAD_CMD_FETCH_* 오프셋 +67/+76/+103/+106 (7693/7702/7729/7732) memory map 재반영
+2026/06/05 : smb_rtu.c — cmdProc case2 calibration(id)·case3~5 V-ref M0~M2, case6~12 예비
+2026/06/05 : meter.h·modbus.c — MBAD_CMD_FETCH_* +77/+107/+110, MBAD_SET_END 7743 정합
+2026/06/05 : smb_rtu.c — cmdProc 명령 offset 재배치(12~113), clearAlarm/Event/Itic id 인자 정합
+2026/06/05 : smb_rtu.c — V-ref/I-ref/In-ref·calibration 보정값 공통 pcntl 사용(CH1~CH3)
+2026/06/05 : smb_rtu.c — cmdProc case2 calibration 전CH, case3~5 CH0~CH2 개별
+2026/06/06 : smb_rtu.c — calibration case2~5 dispatchCalibrationCmd로 통합
+2026/06/06 : smb_rtu.c — clear/ack 명령 dispatchMeterChCmd 통합(base+0=전CH, +1~3=CH0~2), demand/minmax/energy meter[id].cntl 사용
+2026/06/06 : app_main.c — tid_wave/tid_meter 배열 METER_CH_COUNT 확장(CH3 OOB·tid_fs 오염 방지)
+2026/06/06 : modbus.c — putCmdQ/getCmdQ/writeSingleMem id 제거, FC6·writeMemCb 명령 CH0만
+2026/06/06 : alarm.c — fetchItic/fetchItic2 per-id FIFO 페이지(PQ·Transient 타입 분리)
+2026/06/06 : meter.c·alarm.c — putEnergyLog/loadEnergyLogFs/loadEventFifo per-id(CH0~2) 분리
+2026/06/06 : modbus.c·meter.h — FC3/FC16 17280/27280 이후 Illegal Address, FC16 CH0 설정만
+2026/06/06 : meter.h — M1/M2 측정 상한 17240/27240으로 조정(MBAD_METER_END_M2/M3)
+2026/06/06 : modbus.c — M1/M2 RW포켓 16870~17220·26870~27220 FC6/FC16/TCP write 허용
+2026/06/06 : meter.h — M1/M2 RW포켓 상한 17219/27219(포함)으로 조정
+2026/06/06 : modbus.c — M1/M2 갭구간 17220~17239·27220~27239 FC3/TCP read 차단
+2026/06/06 : meter.h·modbus.c — M1/M2 read 상한 ≥17220/27220으로 통합(RW 포켓 상한과 동일)
+
+--- TODO (다음 작업) ---
+2026/06/06 : [TODO] CH0 설정 read(meter.meter flat) vs write(pmset/pqevt) 경로 통일·offsetof 검증
+2026/06/06 : [TODO] writeMemCb TCP 설정쓰기 pmset2/3 → CH0 전용 정책과 정합
+2026/06/06 : [TODO] ade9000.c clearIticList/rstIticList per-CH 처리 보완
+2026/06/06 : [TODO] app_main tid_wave[1/2]·trend M0 고정 등 CH1/CH2 런타임 연결
+2026/06/06 : [TODO] Modbus FC3/6/16·명령 큐 실기(3CH) 통합 테스트

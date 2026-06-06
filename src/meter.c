@@ -27,7 +27,6 @@ METER_DEF	meter[2] __attribute__ ((section ("EXT_RAM"), zero_init));
 #endif
 METER_CAL	meterCal __attribute__ ((section ("EXT_RAM"), zero_init));
 SETTINGS	db __attribute__ ((section ("EXT_RAM"), zero_init));
-ALARM_LIST	alist __attribute__ ((section ("EXT_RAM"), zero_init));
 EVENT_LIST	elist __attribute__ ((section ("EXT_RAM"), zero_init));
 #ifdef CH3
 ADE9000_REG ade9000[3] __attribute__ ((section ("EXT_RAM"), zero_init));
@@ -68,7 +67,7 @@ ALARM_STATUS *palm = &meter[0].alarm;
 
 //ALARM_LIST	*palist=&meter[0].alist;
 //EVENT_LIST	*pelist=&meter[0].elist;
-ALARM_LIST	*palist=&alist;
+ALARM_LIST	*palist=&meter[0].alist;
 EVENT_LIST	*pelist=&elist;
 
 //ADE9000_REG _ade9000, *pchip=&_ade9000;
@@ -79,7 +78,6 @@ IO_CFG	*piocfg=&meter[0].setting.iom;
 ALARM_FIFO *pAlmFifo=&meter[0].alarmFifo;
 #endif
 LOG_DATA	*pld=&meter[0].log;
-ENERGY_LOG *pegylog=meter[0].elog;
 
 //WAVE8k_PGBUF	w8kQ  __attribute__ ((section ("EXT_RAM"), zero_init));
 WAVE_PGBUF	wQ[METER_CH_COUNT] __attribute__ ((section ("EXT_RAM"), zero_init));
@@ -1041,7 +1039,8 @@ int loadSettings(SETTINGS	*pdb)
 		buildSettings(id);
 
 #ifdef	METER_TEST_DATA
-	buildAlarmSettings();	
+	for (id = 0; id < METER_CH_COUNT; id++)
+		buildAlarmSettings(id);
 #endif	
 	for (id = 0; id < METER_CH_COUNT; id++)
 		buildExtSettings(id);
@@ -3226,16 +3225,36 @@ static int loadOrCreateFsBlob(const char *path, void *blob, size_t nbytes,
 	return 0;
 }
 
-static int loadOrCreateEnergyLog(int sel, const char *path)
+static void getEnergyLogFileName(int id, int sel, char *path)
 {
-	return loadOrCreateFsBlob(path, &pegylog[sel], sizeof(ENERGY_LOG), initEnergyLogBlob);
+	if (id == 0) {
+		strcpy(path, (sel == 0) ? ENERGY_LOG_FILE0 : ENERGY_LOG_FILE1);
+	} else {
+		sprintf(path, "%s\\egy_log%d_m%d.d", SYS_DIR, sel, id);
+	}
 }
 
-int loadEnergyLogFs() {
-	if (loadOrCreateEnergyLog(0, ENERGY_LOG_FILE0) < 0)
+static int loadOrCreateEnergyLog(int id, int sel)
+{
+	char path[64];
+
+	if (id < 0 || id >= METER_CH_COUNT)
 		return -1;
-	if (loadOrCreateEnergyLog(1, ENERGY_LOG_FILE1) < 0)
-		return -1;
+
+	getEnergyLogFileName(id, sel, path);
+	return loadOrCreateFsBlob(path, &meter[id].elog[sel], sizeof(ENERGY_LOG), initEnergyLogBlob);
+}
+
+int loadEnergyLogFs(void)
+{
+	int id;
+
+	for (id = 0; id < METER_CH_COUNT; id++) {
+		if (loadOrCreateEnergyLog(id, 0) < 0)
+			return -1;
+		if (loadOrCreateEnergyLog(id, 1) < 0)
+			return -1;
+	}
 	return 0;
 }
 
@@ -3294,22 +3313,19 @@ void storeEnergyFs(ENERGY_NVRAM *pEgyNvr) {
 }
 
 
-void storeEnergyLogFs(int sel, ENERGY_LOG *pEgyLog) {
+void storeEnergyLogFs(int id, int sel, ENERGY_LOG *pEgyLog)
+{
+	char path[64];
 	FILE *fp;
-	
-	if (sel == 0) {
-		fp = fopen(ENERGY_LOG_FILE0, "wb");	
-		if (fp != NULL) {		
-			fwrite(&pEgyLog[0], sizeof(ENERGY_LOG), 1, fp);
-			fclose(fp);
-		}			
-	}
-	else {
-		fp = fopen(ENERGY_LOG_FILE1, "wb");	
-		if (fp != NULL) {		
-			fwrite(&pEgyLog[1], sizeof(ENERGY_LOG), 1, fp);
-			fclose(fp);
-		}			
+
+	if (id < 0 || id >= METER_CH_COUNT || pEgyLog == NULL)
+		return;
+
+	getEnergyLogFileName(id, sel, path);
+	fp = fopen(path, "wb");
+	if (fp != NULL) {
+		fwrite(&pEgyLog[sel], sizeof(ENERGY_LOG), 1, fp);
+		fclose(fp);
 	}
 }
 
@@ -3429,42 +3445,47 @@ int storeMaxMin() {
 	return 0;	
 }
 
-int putEnergyLog(int id, int hix) {			
-	int wF=0;
+int putEnergyLog(int id, int hix)
+{
+	int wF = 0;
+	ENERGY_LOG *pegylog = meter[id].elog;
 	ENERGY_LOG *peLog = &pegylog[0];
-	
+
+	if (id < 0 || id >= METER_CH_COUNT)
+		return 0;
+
 	if (peLog->ts == 0) {
 		peLog->ts = meter[id].cntl.egyStartTs1D;
 	}
 
 	// delta = 현재값 - 한시간 전 값
-	peLog->egy[hix].kwh 	   = meter[id].egy.Ereg32[0].eh[0][0] - meter[id].cntl.egyBuf[0];
+	peLog->egy[hix].kwh      = meter[id].egy.Ereg32[0].eh[0][0] - meter[id].cntl.egyBuf[0];
 	peLog->egy[hix].kvarh[0] = meter[id].egy.Ereg32[0].eh[1][0] - meter[id].cntl.egyBuf[1];
 	peLog->egy[hix].kvarh[1] = meter[id].egy.Ereg32[0].eh[1][1] - meter[id].cntl.egyBuf[2];
 	peLog->egy[hix].kVAh     = meter[id].egy.Ereg32[0].eh[2][0] - meter[id].cntl.egyBuf[3];
-	
+
 	meter[id].cntl.egyBuf[0] = meter[id].egy.Ereg32[0].eh[0][0];
 	meter[id].cntl.egyBuf[1] = meter[id].egy.Ereg32[0].eh[1][0];
 	meter[id].cntl.egyBuf[2] = meter[id].egy.Ereg32[0].eh[1][1];
-	meter[id].cntl.egyBuf[3] = meter[id].egy.Ereg32[0].eh[2][0];	
-	
-	// 1일이 경과하면 금일 데이터를 전일 데이토로 복사한다 
+	meter[id].cntl.egyBuf[3] = meter[id].egy.Ereg32[0].eh[2][0];
+
+	// 1일이 경과하면 금일 데이터를 전일 데이터로 복사한다
 	if (meter[id].cntl.egyTs1D != meter[id].cntl.tod.tm_mday) {
 		meter[id].cntl.egyTs1D = meter[id].cntl.tod.tm_mday;
-				
+
 		memcpy(&pegylog[1], peLog, sizeof(ENERGY_LOG));
 		memset(peLog, 0, sizeof(ENERGY_LOG));
-		peLog->ts = meter[id].cntl.egyStartTs1D = sysTick1s; 
-		
+		peLog->ts = meter[id].cntl.egyStartTs1D = sysTick1s;
+
 		wF = 1;
-	}		
-		
-	storeEnergyLogFs(0, pegylog);
-	if (wF == 2) {
-		storeEnergyLogFs(1, pegylog);
 	}
-	
-	return wF;	// set write flag
+
+	storeEnergyLogFs(id, 0, pegylog);
+	if (wF == 1) {
+		storeEnergyLogFs(id, 1, pegylog);
+	}
+
+	return wF;
 }
 
 
@@ -3672,6 +3693,38 @@ static void getEventFifoFileName(int id, char *path) {
 	else {
 		strcpy(path, EVENT_FIFO_FILE);
 	}
+}
+
+int loadEventFifo(int id)
+{
+	FILE *fp;
+	char path[64];
+	EVENT_U elog;
+	EVENT_FIFO *pEvtFifo;
+	int i;
+
+	if (id < 0 || id >= METER_CH_COUNT)
+		return -1;
+
+	pEvtFifo = &meter[id].eventFifo;
+	memset(pEvtFifo, 0, sizeof(*pEvtFifo));
+
+	getEventFifoFileName(id, path);
+	fp = fopen(path, "rb");
+	if (fp != NULL) {
+		fread(&elog, sizeof(EVENT_U), 1, fp);
+		for (i = 0; i < elog.head.count; i++) {
+			fread(&pEvtFifo->elog[i], sizeof(EVENT_U), 1, fp);
+			pEvtFifo->fr++;
+			pEvtFifo->count++;
+		}
+		fclose(fp);
+	}
+
+	fetchEvent(id, 3);
+	fetchItic(id, 3);
+	fetchItic2(id, 3);
+	return 0;
 }
 //
 int pushEvent(int id, PQ_EVENT_INFO *pInf) {
@@ -3963,19 +4016,21 @@ int checkSwellCond(int id) {
 
 
 // alarm status, alarm list를 지운다 
-void resetAlarm(int c) {
+void resetAlarm(int id) {
 	int i;
+	ALARM_STATUS *palmId = &meter[id].alarm;
+	ALARM_LIST *plist = &meter[id].alist;
 	
 	// clear alarm status
 	// 2025-3-20, alarm count만 지운다 
 	for (i=0; i<32; i++) {
-		palm->st[i].count = 0;
+		palmId->st[i].count = 0;
 	}
-	palm->fr = palm->re = palm->almCount = 0;
-	palm->resetTs = palm->updateTs = sysTick1s;
+	palmId->fr = palmId->re = palmId->almCount = 0;
+	palmId->resetTs = palmId->updateTs = sysTick1s;
 	
 	// clear alarm list
-	memset(palist, 0, sizeof(ALARM_LIST));	
+	memset(plist, 0, sizeof(ALARM_LIST));	
 }
 
 
@@ -4033,7 +4088,7 @@ void PostScan_Task(void *arg)
 	_enableTaskMonitor(Tid_PostScan, 50);
 	
 	while(pcntl->runFlag) {
-		int alarmDue = 0;
+		int ledAlmCount = 0;
 
 #ifdef __FREERTOS		
 		xTaskNotifyWait(0, 0xFFFFFFFF, &notificationValue, pdMS_TO_TICKS(100));
@@ -4074,17 +4129,17 @@ void PostScan_Task(void *arg)
 				
 				if (meter[id].cntl.rstAlmList == 0x1234) {
 					meter[id].cntl.rstAlmList = 0;
-					resetAlarm(0);
-					storeAlarmStatus();		
-					// Alarm Fifo 지운다
-					deleteAlarmLog();				
+					resetAlarm(id);
+					storeAlarmStatus(id);
+					deleteAlarmLog(id);
 //					Board_LED_Off(1);				// alarm off
 				}
-				else {
-					alarmDue = 1;
+				else if (alarmProc(id) > 0) {
+					meter[id].alarm.updateTs = sysTick32;
+					storeAlarmStatus(id);
 				}
-				
-				Board_LED_Set(1, palm->almCount);
+
+				ledAlmCount += meter[id].alarm.almCount;
 			}
 			
 			// 1s
@@ -4110,10 +4165,7 @@ void PostScan_Task(void *arg)
 				storeMaxMin();
 			}
 		}
-		if (alarmDue && alarmProc() > 0) {
-			palm->updateTs = sysTick32;
-			storeAlarmStatus();
-		}
+		Board_LED_Set(1, ledAlmCount);
 #ifdef __FREERTOS		
 		if (notificationValue & 0x8) 
 #else

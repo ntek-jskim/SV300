@@ -27,7 +27,7 @@ extern void writeFwFile(void);
 extern void applyFwFile(void);
 //extern void usrLocalTime_r(const uint32_t *t, struct tm *ptm);
 extern void initSettings();
-extern int getCmdQ(int *id, int *s, int *c);
+extern int getCmdQ(int *s, int *c);
 extern void setDcOffset(int id);
 extern void clrDcOffset(int id);
 extern void selWire(int mode);
@@ -299,154 +299,155 @@ void sendExtIOMControl(int id, int s, int cmd)
 
 
 
-void calibration(int code) {
+void calibration(int id, int code) {
+	CNTL_DATA *pc = &meter[id].cntl;
+
+	if (id < 0 || id >= METER_CH_COUNT)
+		return;
+
 	switch (code) {
 		case 0:
-			pcntl->calEn = 1;
+			pc->calEn = 1;
 			break;
 		case 1: 
-			if (pcntl->calEn){
-				setGainU(0, pcntl->vref);
-				setGainU(1, pcntl->vref);
+			if (pc->calEn){
+				setGainU(id, pcntl->vref);
 			}
 			break;
 		case 2:
-			if (pcntl->calEn){
-				setGainI(0, pcntl->iref);
-				setGainI(1, pcntl->iref);
+			if (pc->calEn){
+				setGainI(id, pcntl->iref);
 			}
 			break;
 		case 3:
-			if (pcntl->calEn){
-				setGainW(0, pcntl->vref, pcntl->iref);
-				setGainW(1, pcntl->vref, pcntl->iref);
+			if (pc->calEn){
+				setGainW(id, pcntl->vref, pcntl->iref);
 			}
 			break;		
 		case 4:
-			if (pcntl->calEn){
-				setGainPh(0);		// Watt와 Var의 비율로 위상오차 보정한다 
-				setGainPh(1);
+			if (pc->calEn){
+				setGainPh(id);
 			}
 			break;		
 		case 5: 
-			if (pcntl->calEn) {
-				clrGainU(0);
-				clrGainU(1);
+			if (pc->calEn) {
+				clrGainU(id);
 			}
 			break;
 		case 6:
-			if (pcntl->calEn) {
-				clrGainI(0);
-				clrGainI(1);
+			if (pc->calEn) {
+				clrGainI(id);
 			}
 			break;
 		case 7:
-			if (pcntl->calEn) {
-				clrGainW(0);
-				clrGainW(1);
+			if (pc->calEn) {
+				clrGainW(id);
 			}
 			break;		
 		case 8:
-			if (pcntl->calEn) {
-				clrGainPh(0);
-				clrGainPh(1);
+			if (pc->calEn) {
+				clrGainPh(id);
 			}
 			break;				
 		case 9:
-			if (pcntl->calEn) {
-				setGainIn(0, pcntl->inref);	// 2020-3-13 
-				setGainIn(1, pcntl->inref);
+			if (pc->calEn) {
+				setGainIn(id, pcntl->inref);
 			}
 			break;
 		case 10:
-			if (pcntl->calEn) {
-				clrGainIn(0);
-				clrGainIn(1);
+			if (pc->calEn) {
+				clrGainIn(id);
 			}
 			break;
 		case 11: 
-			pcntl->calEn = 0;
+			pc->calEn = 0;
 			break;
 		case 12: 
-			{
-//			FS_MSG fsmsg;
-//			strcpy(fsmsg.fname, "HwSetting.bin");
-//			strcpy(fsmsg.mode, "wb");
-//			fsmsg.pbuf = pcal;
-//			fsmsg.size = sizeof(*pcal);
-//			putFsQ(&fsmsg);		
 			storeHwSettings(pcal);	
-			}
 			break;
 		case 13:
-			if (pcntl->calEn) {
-				setGainUpp(0, pcntl->vref*SQRT_3);
-				setGainUpp(1, pcntl->vref*SQRT_3);
+			if (pc->calEn) {
+				setGainUpp(id, pcntl->vref*SQRT_3);
 			}
 			break;
 		case 14:
-			if (pcntl->calEn) {
-				clrGainUpp(0);
-				clrGainUpp(1);
+			if (pc->calEn) {
+				clrGainUpp(id);
 			}
 			break;
 		case 15: 
-			if (pcntl->calEn) {
-				setDcOffset(0);
-				setDcOffset(1);
+			if (pc->calEn) {
+				setDcOffset(id);
 			}
 			break;
 		case 16:
-			if (pcntl->calEn) {
-				clrDcOffset(0);
-				clrDcOffset(1);
+			if (pc->calEn) {
+				clrDcOffset(id);
 			}
 			break;
 		case 17:	
-			//pdb->pt.fd[0].wiring = WM_3LN3CT;
-			//selWire(0);	// 3P4W
 			break;
 		case 18:
-			//pdb->pt.fd[0].wiring = WM_3LL3CT;
-			//selWire(1);	// 3P3W
 			break;		
 	}
 }
 
+static void dispatchMeterChCmd(int base, int addr, int cmd, void (*fn)(int, int))
+{
+	int ch;
+
+	if (addr == base) {
+		for (ch = 0; ch < METER_CH_COUNT; ch++)
+			fn(ch, cmd);
+		return;
+	}
+	ch = addr - base - 1;	/* base+1~3 → CH0~2 */
+	if (ch >= 0 && ch < METER_CH_COUNT)
+		fn(ch, cmd);
+}
+
 extern void resetDemand(int);
 
-void clearDemand(int cmd) {
-	printf("[Clear Demand]\n");
-	//resetDemand(0);
-	pcntl->rstDemand = cmd;
+void clearDemand(int id, int cmd) {
+	printf("[Clear Demand M%d]\n", id);
+	meter[id].cntl.rstDemand = cmd;
 }
 
-void clearMinMax(int cmd) {
-	printf("[Clear MaxMin]\n");
-	pcntl->rstMaxMin = cmd;
+void clearMinMax(int id, int cmd) {
+	printf("[Clear MaxMin M%d]\n", id);
+	meter[id].cntl.rstMaxMin = cmd;
 }
 
-void clearEnergy(int cmd) {
-	printf("[Clear Energy]\n");
-	meter[0].cntl.rstEgy = cmd;
-#ifndef CH1
-	meter[1].cntl.rstEgy = cmd;
-#endif
+void clearEnergy(int id, int cmd) {
+	printf("[Clear Energy M%d]\n", id);
+	meter[id].cntl.rstEgy = cmd;
 }
 
-void clearAlarm(int cmd) {
-	printf("[Clear Alarm]\n");
-	pcntl->rstAlmList = cmd;
+void clearAlarm(int id, int cmd) {
+	printf("[Clear Alarm M%d]\n", id);
+	meter[id].cntl.rstAlmList = cmd;
 }
 
-void clearEvent(int cmd) {
-	printf("[Clear Event]\n");
-	pcntl->rstEvtList = cmd;
+void clearEventListCmd(int id, int cmd) {
+	printf("[Clear Event M%d]\n", id);
+	meter[id].cntl.rstEvtList = cmd;
 }
 
-void clearIticList(int cmd) {
-	printf("[Clear ITIC list]\n");
-	pcntl->rstIticList = cmd;
+void clearIticList(int id, int cmd) {
+	printf("[Clear ITIC list M%d]\n", id);
+	meter[id].cntl.rstIticList = cmd;
+}
+
+static void ackAlarmCmd(int id, int cmd) {
+	(void)cmd;
+	printf("[Ack alarm M%d]\n", id);
+	negateAlarm();
+}
+
+static void ackEventCmd(int id, int cmd) {
+	(void)cmd;
+	printf("[Ack event M%d]\n", id);
+	negateEvent();
 }
 
 // smb, GUI로 부터 호출된다 
@@ -467,12 +468,11 @@ void reqSaveSettings(int cmd) {
 
 void cmdProc()
 {
-	int id, s, c, addr, i;
+	int s, c, addr;
 	
-	if (getCmdQ(&id, &s, &c) < 0) 
+	if (getCmdQ(&s, &c) < 0) 
 		return;
 
-	id = (s < 10000) ? 0 : 1;
 	printf("cmdProc, s=%d, c=%x\n", s, c);
 
 	addr = s - MBAD_SET_CMD;
@@ -491,76 +491,90 @@ void cmdProc()
 			//reqSaveSettings(c, pdbk);
 			reqSaveSettings(c);
 			break;		
-		// calibration
-		case 2:		
-			calibration(c);
+		// calibration: base+0=all, base+1~3=CH0~2
+		case 2:
+		case 3:
+		case 4:
+		case 5:
+			dispatchMeterChCmd(2, addr, c, calibration);
 			break;
-		// set vref
-		case 3:		
+		// set V-ref / I-ref / In-ref (공통 pcntl, CH1~CH3 동일)
+		case 12:
 			printf("[Set V-ref]\n");
 			pcntl->vref = c;
 			break;
-		// set iref
-		case 4:
+		case 13:
 			printf("[Set I-ref]\n");
 			pcntl->iref = c/10.;
 			break;
-		// clear demand
-		case 5:		
-			clearDemand(c);
-			break;
-		// clear minmax
-		case 6:		
-			clearMinMax(c);			
-			break;
-		// clear energy
-		case 7:		
-			clearEnergy(c);
-			break;		
-		// clear alarm
-		case 8:		
-			clearAlarm(c);
-			break;		
-		// init settings
-		case 9:		
-			reqFactoryReset(c);
-			break;	
-		// clear event
-		case 10:
-			clearEvent(c);		
-			break;
-		// set Inref
-		case 11:
-			printf("[Set In ref]\n");
+		case 14:
+			printf("[Set In-ref]\n");
 			pcntl->inref = c/10.;
 			break;
-		// reset alarm ack
-		case 12:
-			printf("[Ack alarm]\n");
-			negateAlarm();
-//			putCmdQ();
-			break;
-//		case 29:
-//			writeBooLog(cmdQ.cmdbuf[0]);
-//			break;			
-		// DAQ enable/disable
-		case 13:
-			pcntl->daqEnable = c;
-			break;
-		case 14:
-			clearIticList(c);
-			break;
-		// reset event ack
 		case 15:
-			printf("[Ack event]\n");
-			negateEvent();
-//			putCmdQ();
+			printf("[INIT SETTINGS]\n");
+			reqFactoryReset(c);
 			break;
-		// clear pi	
-		// case 16:
-		// 	// iom pi clear send
-		// 	sendIOCommand(IOM_COMMAND+1, 0x1234);
-		// 	break;
+		case 16:
+			printf("[CLEAR PI]\n");
+//			reqFactoryReset(c);
+			break;
+		// clear demand: base+0=all, base+1~3=CH0~2
+		case 17:
+		case 18:
+		case 19:
+		case 20:
+			dispatchMeterChCmd(17, addr, c, clearDemand);
+			break;
+		// clear minmax
+		case 27:
+		case 28:
+		case 29:
+		case 30:
+			dispatchMeterChCmd(27, addr, c, clearMinMax);
+			break;
+		// clear energy
+		case 37:
+		case 38:
+		case 39:
+		case 40:
+			dispatchMeterChCmd(37, addr, c, clearEnergy);
+			break;
+		// clear alarm
+		case 47:
+		case 48:
+		case 49:
+		case 50:
+			dispatchMeterChCmd(47, addr, c, clearAlarm);
+			break;
+		// clear event
+		case 57:
+		case 58:
+		case 59:
+		case 60:
+			dispatchMeterChCmd(57, addr, c, clearEventListCmd);
+			break;
+		// ack alarm
+		case 87:
+		case 88:
+		case 89:
+		case 90:
+			dispatchMeterChCmd(87, addr, c, ackAlarmCmd);
+			break;
+		// ack event
+		case 97:
+		case 98:
+		case 99:
+		case 100:
+			dispatchMeterChCmd(97, addr, c, ackEventCmd);
+			break;
+		// clear ITIC list
+		case 113:
+		case 114:
+		case 115:
+		case 116:
+			dispatchMeterChCmd(113, addr, c, clearIticList);
+			break;
 	}
 }
 

@@ -16,127 +16,149 @@ extern void assertAlarmOutput(int point, int state);
 	
 //int getYear_n_WoY(int *pYear, int *woY);
 
-COMP_TBL	almTbl[MAX_ALARM_CH] __attribute__ ((section ("EXT_RAM"), zero_init));
+COMP_TBL	almTbl[METER_CH_COUNT][MAX_ALARM_CH] __attribute__ ((section ("EXT_RAM"), zero_init));
 //COMP_TBL almTbl[100];
 
 TREND_INFO trdInf[4];
 TREND_RECORD	row[4];	// trend data
 //extern MGEM3600_DATA	gems3600[];
 
-void setAlarmChannel(int ix, char *pname, float norm, float *src) {
-	almTbl[ix].nm = pname; 	
-	almTbl[ix].norm = norm; 
-	almTbl[ix++].src = src;
+static void setAlarmChannel(int id, int ix, char *pname, float norm, float *src) {
+	almTbl[id][ix].nm = pname;
+	almTbl[id][ix].norm = norm;
+	almTbl[id][ix].src = src;
 }
 
-void initAlarmTable() {
+static void getAlarmFifoFileName(int id, char *path) {
+	if (id == 0) {
+		strcpy(path, ALARM_FIFO_FILE);
+	} else {
+		sprintf(path, "%s\\alog%s_fifo_m%d.d", ALARM_DIR, ALOG_VER, id);
+	}
+}
+
+static const char *getAlarmStatusFileName(int id) {
+	switch (id) {
+	case 0: return ALARM_ST_FILE;
+	case 1: return ALARM_ST_FILE1;
+	case 2: return ALARM_ST_FILE2;
+	default: return ALARM_ST_FILE;
+	}
+}
+
+void initAlarmTable(int id) {
 	int ix=0;
 	float temp;
-	
-	memset(almTbl, 0, sizeof(almTbl));
+	METERING *pm = &meter[id].meter;
+	DEMAND *pdmd = &meter[id].dm;
+
+	if (id < 0 || id >= METER_CH_COUNT)
+		return;
+
+	memset(almTbl[id], 0, sizeof(almTbl[id]));
 	// [0..2]
-	setAlarmChannel(ix++, "-", 0, NULL);
-	setAlarmChannel(ix++, "Temp.", 100, &pmeter->Temp);
-	setAlarmChannel(ix++, "Freq.", pdb->freq, &pmeter->Freq);
+	setAlarmChannel(id, ix++, "-", 0, NULL);
+	setAlarmChannel(id, ix++, "Temp.", 100, &pm->Temp);
+	setAlarmChannel(id, ix++, "Freq.", pdb->freq, &pm->Freq);
 	// [3..6]
-	temp = pdb->pt[0].vnorm;
-	setAlarmChannel(ix++, "U1",  temp, &pmeter->U[0]);
-	setAlarmChannel(ix++, "U2",  temp, &pmeter->U[1]);
-	setAlarmChannel(ix++, "U3",  temp, &pmeter->U[2]);
-	setAlarmChannel(ix++, "U~",  temp, &pmeter->U[3]);
+	temp = db.pt[id].vnorm;
+	setAlarmChannel(id, ix++, "U1",  temp, &pm->U[0]);
+	setAlarmChannel(id, ix++, "U2",  temp, &pm->U[1]);
+	setAlarmChannel(id, ix++, "U3",  temp, &pm->U[2]);
+	setAlarmChannel(id, ix++, "U~",  temp, &pm->U[3]);
 	// [7..10]
-	temp = (pdb->pt[0].wiring == WM_3LN3CT) ? pdb->pt[0].vnorm*sqrt(3) : pdb->pt[0].vnorm; 
-	setAlarmChannel(ix++, "U12", temp, &pmeter->Upp[0]);
-	setAlarmChannel(ix++, "U23", temp, &pmeter->Upp[1]);
-	setAlarmChannel(ix++, "U31", temp, &pmeter->Upp[2]);
-	setAlarmChannel(ix++, "Upp~", temp, &pmeter->Upp[3]);
+	temp = (db.pt[id].wiring == WM_3LN3CT) ? db.pt[id].vnorm*sqrt(3) : db.pt[id].vnorm; 
+	setAlarmChannel(id, ix++, "U12", temp, &pm->Upp[0]);
+	setAlarmChannel(id, ix++, "U23", temp, &pm->Upp[1]);
+	setAlarmChannel(id, ix++, "U31", temp, &pm->Upp[2]);
+	setAlarmChannel(id, ix++, "Upp~", temp, &pm->Upp[3]);
 	// [11..12]
 	temp = 100;
-	setAlarmChannel(ix++, "Uu", temp, &pmeter->Ubal[0]);
-	setAlarmChannel(ix++, "Uo", temp, &pmeter->Ubal[1]);
+	setAlarmChannel(id, ix++, "Uu", temp, &pm->Ubal[0]);
+	setAlarmChannel(id, ix++, "Uo", temp, &pm->Ubal[1]);
 	// [13..18]
-	temp = pdb->ct[0].inorm;
-	setAlarmChannel(ix++, "I1", temp, &pmeter->I[0]);
-	setAlarmChannel(ix++, "I2", temp, &pmeter->I[1]);
-	setAlarmChannel(ix++, "I3", temp, &pmeter->I[2]);
-	setAlarmChannel(ix++, "I~", temp, &pmeter->I[3]);
-	setAlarmChannel(ix++, "Itotal", temp*3, &pmeter->I[4]);
-	setAlarmChannel(ix++, "In", temp, &pmeter->In);
+	temp = db.ct[id].inorm;
+	setAlarmChannel(id, ix++, "I1", temp, &pm->I[0]);
+	setAlarmChannel(id, ix++, "I2", temp, &pm->I[1]);
+	setAlarmChannel(id, ix++, "I3", temp, &pm->I[2]);
+	setAlarmChannel(id, ix++, "I~", temp, &pm->I[3]);
+	setAlarmChannel(id, ix++, "Itotal", temp*3, &pm->I[4]);
+	setAlarmChannel(id, ix++, "In", temp, &pm->In);
 	// [19..22]
-	temp = pdb->pt[0].vnorm*pdb->ct[0].inorm;
-	setAlarmChannel(ix++, "P1", temp, &pmeter->P[0]);
-	setAlarmChannel(ix++, "P2", temp, &pmeter->P[1]);
-	setAlarmChannel(ix++, "P3", temp, &pmeter->P[2]);
-	setAlarmChannel(ix++, "Ptotal", temp*3, &pmeter->P[3]);
+	temp = db.pt[id].vnorm*db.ct[id].inorm;
+	setAlarmChannel(id, ix++, "P1", temp, &pm->P[0]);
+	setAlarmChannel(id, ix++, "P2", temp, &pm->P[1]);
+	setAlarmChannel(id, ix++, "P3", temp, &pm->P[2]);
+	setAlarmChannel(id, ix++, "Ptotal", temp*3, &pm->P[3]);
 	// [23..26]
-	temp = pdb->pt[0].vnorm*pdb->ct[0].inorm;
-	setAlarmChannel(ix++, "Q1", temp, &pmeter->Q[0]);
-	setAlarmChannel(ix++, "Q2", temp, &pmeter->Q[1]);
-	setAlarmChannel(ix++, "Q3", temp, &pmeter->Q[2]);
-	setAlarmChannel(ix++, "Q4", temp*3, &pmeter->Q[3]);
+	temp = db.pt[id].vnorm*db.ct[id].inorm;
+	setAlarmChannel(id, ix++, "Q1", temp, &pm->Q[0]);
+	setAlarmChannel(id, ix++, "Q2", temp, &pm->Q[1]);
+	setAlarmChannel(id, ix++, "Q3", temp, &pm->Q[2]);
+	setAlarmChannel(id, ix++, "Q4", temp*3, &pm->Q[3]);
 	// [27..30]
-	temp = pdb->pt[0].vnorm*pdb->ct[0].inorm;
-	setAlarmChannel(ix++, "D1", temp*3, &pmeter->D[0]);
-	setAlarmChannel(ix++, "D2", temp*3, &pmeter->D[1]);
-	setAlarmChannel(ix++, "D3", temp*3, &pmeter->D[2]);
-	setAlarmChannel(ix++, "Dtotal", temp, &pmeter->D[3]);
+	temp = db.pt[id].vnorm*db.ct[id].inorm;
+	setAlarmChannel(id, ix++, "D1", temp*3, &pm->D[0]);
+	setAlarmChannel(id, ix++, "D2", temp*3, &pm->D[1]);
+	setAlarmChannel(id, ix++, "D3", temp*3, &pm->D[2]);
+	setAlarmChannel(id, ix++, "Dtotal", temp, &pm->D[3]);
 	// [31..34]
-	temp = pdb->pt[0].vnorm*pdb->ct[0].inorm;
-	setAlarmChannel(ix++, "S1", temp, &pmeter->S[0]);
-	setAlarmChannel(ix++, "S2", temp, &pmeter->S[1]);
-	setAlarmChannel(ix++, "S3", temp, &pmeter->S[2]);
-	setAlarmChannel(ix++, "Stotal", temp*3, &pmeter->S[3]);
+	temp = db.pt[id].vnorm*db.ct[id].inorm;
+	setAlarmChannel(id, ix++, "S1", temp, &pm->S[0]);
+	setAlarmChannel(id, ix++, "S2", temp, &pm->S[1]);
+	setAlarmChannel(id, ix++, "S3", temp, &pm->S[2]);
+	setAlarmChannel(id, ix++, "Stotal", temp*3, &pm->S[3]);
 	// [35..38]
 	temp = 100;
-	setAlarmChannel(ix++, "PF1", temp, &pmeter->PF[0]);
-	setAlarmChannel(ix++, "PF2", temp, &pmeter->PF[1]);
-	setAlarmChannel(ix++, "PF3", temp, &pmeter->PF[2]);
-	setAlarmChannel(ix++, "PFtotal", temp, &pmeter->PF[3]);
+	setAlarmChannel(id, ix++, "PF1", temp, &pm->PF[0]);
+	setAlarmChannel(id, ix++, "PF2", temp, &pm->PF[1]);
+	setAlarmChannel(id, ix++, "PF3", temp, &pm->PF[2]);
+	setAlarmChannel(id, ix++, "PFtotal", temp, &pm->PF[3]);
 	// [39..41]
 	temp = 100;
-	setAlarmChannel(ix++, "THD U1", temp, &pmeter->THD_U[0]);
-	setAlarmChannel(ix++, "THD U2", temp, &pmeter->THD_U[1]);
-	setAlarmChannel(ix++, "THD U3", temp, &pmeter->THD_U[2]);
+	setAlarmChannel(id, ix++, "THD U1", temp, &pm->THD_U[0]);
+	setAlarmChannel(id, ix++, "THD U2", temp, &pm->THD_U[1]);
+	setAlarmChannel(id, ix++, "THD U3", temp, &pm->THD_U[2]);
 	// [42..44]
 	temp = 100;
-	setAlarmChannel(ix++, "THD U12", temp, &pmeter->THD_Upp[0]);
-	setAlarmChannel(ix++, "THD U23", temp, &pmeter->THD_Upp[1]);
-	setAlarmChannel(ix++, "THD U31", temp, &pmeter->THD_Upp[2]);
+	setAlarmChannel(id, ix++, "THD U12", temp, &pm->THD_Upp[0]);
+	setAlarmChannel(id, ix++, "THD U23", temp, &pm->THD_Upp[1]);
+	setAlarmChannel(id, ix++, "THD U31", temp, &pm->THD_Upp[2]);
 	// [45..47]
 	temp = 100;
-	setAlarmChannel(ix++, "THD I1", temp, &pmeter->THD_I[0]);
-	setAlarmChannel(ix++, "THD I2", temp, &pmeter->THD_I[1]);
-	setAlarmChannel(ix++, "THD I3", temp, &pmeter->THD_I[2]);
+	setAlarmChannel(id, ix++, "THD I1", temp, &pm->THD_I[0]);
+	setAlarmChannel(id, ix++, "THD I2", temp, &pm->THD_I[1]);
+	setAlarmChannel(id, ix++, "THD I3", temp, &pm->THD_I[2]);
 	// [49..52]
-	temp = pdb->pt[0].vnorm*pdb->ct[0].inorm;
-	setAlarmChannel(ix++, "DD P+", temp, &pdm->DD_P[0]);
-	setAlarmChannel(ix++, "DD P-", temp, &pdm->DD_P[1]);
-	setAlarmChannel(ix++, "DD Q-L", temp, &pdm->DD_Q[0]);
-	setAlarmChannel(ix++, "DD Q-C", temp, &pdm->DD_Q[1]);
-	setAlarmChannel(ix++, "DD S", temp, &pdm->DD_S);
+	temp = db.pt[id].vnorm*db.ct[id].inorm;
+	setAlarmChannel(id, ix++, "DD P+", temp, &pdmd->DD_P[0]);
+	setAlarmChannel(id, ix++, "DD P-", temp, &pdmd->DD_P[1]);
+	setAlarmChannel(id, ix++, "DD Q-L", temp, &pdmd->DD_Q[0]);
+	setAlarmChannel(id, ix++, "DD Q-C", temp, &pdmd->DD_Q[1]);
+	setAlarmChannel(id, ix++, "DD S", temp, &pdmd->DD_S);
 	// [53..55]
-	temp = pdb->ct[0].inorm;
-	setAlarmChannel(ix++, "DD I1", temp, &pdm->DD_I[0]);
-	setAlarmChannel(ix++, "DD I2", temp, &pdm->DD_I[1]);
-	setAlarmChannel(ix++, "DD I3", temp, &pdm->DD_I[2]);
+	temp = db.ct[id].inorm;
+	setAlarmChannel(id, ix++, "DD I1", temp, &pdmd->DD_I[0]);
+	setAlarmChannel(id, ix++, "DD I2", temp, &pdmd->DD_I[1]);
+	setAlarmChannel(id, ix++, "DD I3", temp, &pdmd->DD_I[2]);
 	// [56..60]
-	temp = pdb->pt[0].vnorm*pdb->ct[0].inorm;
-	setAlarmChannel(ix++, "MD P+", temp, &pdm->MD_P[0].value);
-	setAlarmChannel(ix++, "MD P-", temp, &pdm->MD_P[1].value);
-	setAlarmChannel(ix++, "MD Q-L", temp, &pdm->MD_Q[0].value);
-	setAlarmChannel(ix++, "MD Q-C", temp, &pdm->MD_Q[1].value);	
-	setAlarmChannel(ix++, "MD S", temp, &pdm->MD_S.value);
+	temp = db.pt[id].vnorm*db.ct[id].inorm;
+	setAlarmChannel(id, ix++, "MD P+", temp, &pdmd->MD_P[0].value);
+	setAlarmChannel(id, ix++, "MD P-", temp, &pdmd->MD_P[1].value);
+	setAlarmChannel(id, ix++, "MD Q-L", temp, &pdmd->MD_Q[0].value);
+	setAlarmChannel(id, ix++, "MD Q-C", temp, &pdmd->MD_Q[1].value);	
+	setAlarmChannel(id, ix++, "MD S", temp, &pdmd->MD_S.value);
 	// [61..63]
-	temp = pdb->ct[0].inorm;
-	setAlarmChannel(ix++, "MD I1", temp, &pdm->MD_I[0].value);
-	setAlarmChannel(ix++, "MD I2", temp, &pdm->MD_I[1].value);
-	setAlarmChannel(ix++, "MD I3", temp, &pdm->MD_I[2].value);
+	temp = db.ct[id].inorm;
+	setAlarmChannel(id, ix++, "MD I1", temp, &pdmd->MD_I[0].value);
+	setAlarmChannel(id, ix++, "MD I2", temp, &pdmd->MD_I[1].value);
+	setAlarmChannel(id, ix++, "MD I3", temp, &pdmd->MD_I[2].value);
 	// [64..65]
-	setAlarmChannel(ix++, "UN I2", temp, &pmeter->Ibal[0]);
-	setAlarmChannel(ix++, "UN I0", temp, &pmeter->Ibal[1]);
+	setAlarmChannel(id, ix++, "UN I2", temp, &pm->Ibal[0]);
+	setAlarmChannel(id, ix++, "UN I0", temp, &pm->Ibal[1]);
 	// [66]
 	temp = 0;
-	setAlarmChannel(ix++, "Summary", temp, &meter[0].almCnt);
+	setAlarmChannel(id, ix++, "Summary", temp, &meter[id].almCnt);
 	// [67..76]
 	// temp = 0;
 	// setAlarmChannel(ix++, "INT DI1", temp, &meter.dim[0]);
@@ -175,41 +197,41 @@ void initAlarmTable() {
 	// setAlarmChannel(ix++, "iPSM#2 T SAG", temp, NULL);	
 	// [97..99]
 	temp = 0;
-	setAlarmChannel(ix++, "UDEV_U1", temp, &pmeter->UUndev[0]);	
-	setAlarmChannel(ix++, "UDEV_U2", temp, &pmeter->UUndev[1]);	
-	setAlarmChannel(ix++, "UDEV_U3", temp, &pmeter->UUndev[2]);	
+	setAlarmChannel(id, ix++, "UDEV_U1", temp, &pm->UUndev[0]);	
+	setAlarmChannel(id, ix++, "UDEV_U2", temp, &pm->UUndev[1]);	
+	setAlarmChannel(id, ix++, "UDEV_U3", temp, &pm->UUndev[2]);	
 	// [100..102]
-	setAlarmChannel(ix++, "ODEV_U1", temp, &pmeter->UOvdev[0]);	
-	setAlarmChannel(ix++, "ODEV_U2", temp, &pmeter->UOvdev[1]);	
-	setAlarmChannel(ix++, "ODEV_U3", temp, &pmeter->UOvdev[2]);	
+	setAlarmChannel(id, ix++, "ODEV_U1", temp, &pm->UOvdev[0]);	
+	setAlarmChannel(id, ix++, "ODEV_U2", temp, &pm->UOvdev[1]);	
+	setAlarmChannel(id, ix++, "ODEV_U3", temp, &pm->UOvdev[2]);	
 	// [103..105]
-	setAlarmChannel(ix++, "CF_U1", temp, &pmeter->CF_U[0]);	
-	setAlarmChannel(ix++, "CF_U2", temp, &pmeter->CF_U[1]);	
-	setAlarmChannel(ix++, "CF_U3", temp, &pmeter->CF_U[2]);	
+	setAlarmChannel(id, ix++, "CF_U1", temp, &pm->CF_U[0]);	
+	setAlarmChannel(id, ix++, "CF_U2", temp, &pm->CF_U[1]);	
+	setAlarmChannel(id, ix++, "CF_U3", temp, &pm->CF_U[2]);	
 	// [106..108]
-	setAlarmChannel(ix++, "CF_U12", temp, &pmeter->CF_Upp[0]);	
-	setAlarmChannel(ix++, "CF_U23", temp, &pmeter->CF_Upp[1]);	
-	setAlarmChannel(ix++, "CF_U31", temp, &pmeter->CF_Upp[2]);	
+	setAlarmChannel(id, ix++, "CF_U12", temp, &pm->CF_Upp[0]);	
+	setAlarmChannel(id, ix++, "CF_U23", temp, &pm->CF_Upp[1]);	
+	setAlarmChannel(id, ix++, "CF_U31", temp, &pm->CF_Upp[2]);	
 	// [109..111]
-	setAlarmChannel(ix++, "CF_I1", temp, &pmeter->CF_I[0]);	
-	setAlarmChannel(ix++, "CF_I2", temp, &pmeter->CF_I[1]);	
-	setAlarmChannel(ix++, "CF_I3", temp, &pmeter->CF_I[2]);	
+	setAlarmChannel(id, ix++, "CF_I1", temp, &pm->CF_I[0]);	
+	setAlarmChannel(id, ix++, "CF_I2", temp, &pm->CF_I[1]);	
+	setAlarmChannel(id, ix++, "CF_I3", temp, &pm->CF_I[2]);	
 	// [112..114]
-	setAlarmChannel(ix++, "KF_I1", temp, &pmeter->KF_I[0]);	
-	setAlarmChannel(ix++, "KF_I2", temp, &pmeter->KF_I[1]);	
-	setAlarmChannel(ix++, "KF_I3", temp, &pmeter->KF_I[2]);	
+	setAlarmChannel(id, ix++, "KF_I1", temp, &pm->KF_I[0]);	
+	setAlarmChannel(id, ix++, "KF_I2", temp, &pm->KF_I[1]);	
+	setAlarmChannel(id, ix++, "KF_I3", temp, &pm->KF_I[2]);	
 	// [115..117]
-	setAlarmChannel(ix++, "Pst 1", temp, NULL);	
-	setAlarmChannel(ix++, "Pst 2", temp, NULL);	
-	setAlarmChannel(ix++, "Pst 3", temp, NULL);	
+	setAlarmChannel(id, ix++, "Pst 1", temp, NULL);	
+	setAlarmChannel(id, ix++, "Pst 2", temp, NULL);	
+	setAlarmChannel(id, ix++, "Pst 3", temp, NULL);	
 	// [118..120]
-	setAlarmChannel(ix++, "Plt 1", temp, NULL);	
-	setAlarmChannel(ix++, "Plt 2", temp, NULL);	
-	setAlarmChannel(ix++, "Plt 3", temp, NULL);	
+	setAlarmChannel(id, ix++, "Plt 1", temp, NULL);	
+	setAlarmChannel(id, ix++, "Plt 2", temp, NULL);	
+	setAlarmChannel(id, ix++, "Plt 3", temp, NULL);	
 	// [121..123]
-	setAlarmChannel(ix++, "Sig. Volt 1", temp, NULL);	
-	setAlarmChannel(ix++, "Sig. Volt 2", temp, NULL);	
-	setAlarmChannel(ix++, "Sig. Volt 3", temp, NULL);
+	setAlarmChannel(id, ix++, "Sig. Volt 1", temp, NULL);	
+	setAlarmChannel(id, ix++, "Sig. Volt 2", temp, NULL);	
+	setAlarmChannel(id, ix++, "Sig. Volt 3", temp, NULL);
 }
 
 
@@ -253,18 +275,21 @@ __inline int _almCompFnc(float val, float limit, int cond, int dband, float norm
 //}
 
 
-void resetAlarmList() {
+void resetAlarmList(int id) {
+	ALARM_STATUS *palm = &meter[id].alarm;
+	ALARM_LIST *plist = &meter[id].alist;
+
 	palm->resetTs = palm->updateTs = sysTick1s;
-	palist->fr = palist->re = palist->count = 0;
+	plist->fr = plist->re = plist->count = 0;
 }
 
-int loadAlarmStatus(void) {
+int loadAlarmStatus(int id) {
 	FILE *fp;
-	char path[64];
 	int i;
-	ALARM_DEF *paset = &meter[0].almSet;
-	
-	sprintf(path, "%s", ALARM_ST_FILE);
+	ALARM_DEF *paset = &meter[id].almSet;
+	ALARM_STATUS *palm = &meter[id].alarm;
+	const char *path = getAlarmStatusFileName(id);
+
 	fp = fopen(path, "rb");
 	if (fp != NULL) {
 		fread(palm, sizeof(ALARM_STATUS), 1, fp);
@@ -282,19 +307,18 @@ int loadAlarmStatus(void) {
 		palm->st[i].status = 0;
 		
 		if (palm->st[i].chan) {
-			printf("++ almset(%d) -> stat(%d), chan(%d), cond(%d), level(%f), count(%d)\n", i, 
+			printf("++ almset(M%d,%d) -> stat(%d), chan(%d), cond(%d), level(%f), count(%d)\n", id, i, 
 				palm->st[i].status, palm->st[i].chan, palm->st[i].cond, palm->st[i].level, palm->st[i].count);		
 		}
 	}	
 	return 0;
 }
 
-int storeAlarmStatus() {
+int storeAlarmStatus(int id) {
 	FILE *fp;
-	int year, woY;
-	char path[64];
-	
-	sprintf(path, "%s", ALARM_ST_FILE);
+	const char *path = getAlarmStatusFileName(id);
+	ALARM_STATUS *palm = &meter[id].alarm;
+
 	fp = fopen(path, "wb");
 	if (fp == NULL) {
 		return -1;
@@ -304,20 +328,21 @@ int storeAlarmStatus() {
 	return 0;
 }
 
-int deleteAlarmLog(void) {
-	char path[64];	
+int deleteAlarmLog(int id) {
+	char path[64];
 	int res;
-	//sprintf(path, "%s%04d%02d.d", ALARM_LIST_FILE, pcntl->tod.tm_year, pcntl->tod.tm_mon);
-	strcpy(path, ALARM_FIFO_FILE);
+	ALARM_FIFO *pFifo = &meter[id].alarmFifo;
+
+	getAlarmFifoFileName(id, path);
 #ifdef USE_CMSIS_RTOS2	
    res = fdelete(path, NULL);	
 #else
 	res = fdelete(path);
 #endif	
 	
-	// 2025-3-20, alarm Fifo 지운다 
-	memset(pAlmFifo, 0, sizeof(*pAlmFifo));
-	printf("---> deleteAlarmLog, result=%d\n", res);
+	memset(pFifo, 0, sizeof(*pFifo));
+	printf("---> deleteAlarmLog(M%d), result=%d\n", id, res);
+	return res;
 }
 
 void reverseSortAlarmBuffer(ALARM_LIST* rb) {
@@ -352,7 +377,7 @@ void reverseSortAlarmBuffer(ALARM_LIST* rb) {
 }
 
 
-int loadAlarmLog(void) {
+int loadAlarmLog(int id) {
 	FILE *fp;
 	int year, woY, nlog, i, n=0;
 #ifdef USE_CMSIS_RTOS2	
@@ -361,45 +386,51 @@ int loadAlarmLog(void) {
 	FINFO info;
 #endif
 	char path[64];
+	ALARM_FIFO *pFifo = &meter[id].alarmFifo;
+	CNTL_DATA *pcntlId = &meter[id].cntl;
+	ALARM_LIST *plist = &meter[id].alist;
 #if 1
 	ALARM_U	alog;
 	int fr, re;
 
-	/* 이번 배포 1회: 손상 가능한 알람 FIFO 삭제(센티넬 있으면 스킵) */
-	fp = fopen(ALARM_FIFO_PURGE_SENTINEL, "rb");
-	if (fp == NULL) {
+	if (id == 0) {
+		/* 이번 배포 1회: 손상 가능한 알람 FIFO 삭제(센티넬 있으면 스킵) */
+		fp = fopen(ALARM_FIFO_PURGE_SENTINEL, "rb");
+		if (fp == NULL) {
 #ifdef USE_CMSIS_RTOS2
-		(void)fdelete(ALARM_FIFO_FILE, NULL);
+			(void)fdelete(ALARM_FIFO_FILE, NULL);
 #else
-		(void)fdelete(ALARM_FIFO_FILE);
+			(void)fdelete(ALARM_FIFO_FILE);
 #endif
-		memset(pAlmFifo, 0, sizeof(*pAlmFifo));
-		fp = fopen(ALARM_FIFO_PURGE_SENTINEL, "wb");
-		if (fp != NULL) {
-			const char mark = '1';
-			fwrite(&mark, 1, 1, fp);
+			memset(pFifo, 0, sizeof(*pFifo));
+			fp = fopen(ALARM_FIFO_PURGE_SENTINEL, "wb");
+			if (fp != NULL) {
+				const char mark = '1';
+				fwrite(&mark, 1, 1, fp);
+				fclose(fp);
+			}
+			printf("---> one-shot purge: removed %s (sentinel %s)\n", ALARM_FIFO_FILE, ALARM_FIFO_PURGE_SENTINEL);
+		} else {
 			fclose(fp);
 		}
-		printf("---> one-shot purge: removed %s (sentinel %s)\n", ALARM_FIFO_FILE, ALARM_FIFO_PURGE_SENTINEL);
-	} else {
-		fclose(fp);
 	}
 
+	getAlarmFifoFileName(id, path);
 	// 시간순으로 읽는다
-	fp = fopen(ALARM_FIFO_FILE, "rb");
+	fp = fopen(path, "rb");
 	if (fp != NULL) {
 		fread(&alog, sizeof(alog), 1, fp);
 		
 		for (i=0; i<alog.head.count; i++) {			
-			fread(&pAlmFifo->alog[i], sizeof(alog), 1, fp);			
+			fread(&pFifo->alog[i], sizeof(alog), 1, fp);			
 
-			pAlmFifo->fr++;
-			pAlmFifo->count++;
+			pFifo->fr++;
+			pFifo->count++;
 		}
 		fclose(fp);
 	}
 	
-	fetchAlarm(3);
+	fetchAlarm(id, 3);
 		
 //		re = pAlmFifo->re;
 //		for (i=0; i<pAlmFifo->count; i++) {
@@ -416,8 +447,8 @@ int loadAlarmLog(void) {
 //			}	
 // 	}
 #else	
-	//woY = getYear_n_WoY(pcntl->tod.tm_yday, pcntl->tod.tm_wday);
-	sprintf(path, "%s%04d%02d.d", ALARM_LIST_FILE, pcntl->tod.tm_year, pcntl->tod.tm_mon);
+	//woY = getYear_n_WoY(pcntlId->tod.tm_yday, pcntlId->tod.tm_wday);
+	sprintf(path, "%s%04d%02d.d", ALARM_LIST_FILE, pcntlId->tod.tm_year, pcntlId->tod.tm_mon);
 
 	info.fileID = 0;      
 	if (ffind (path, &info)) {
@@ -432,16 +463,16 @@ int loadAlarmLog(void) {
 		return -1;
 	}
 	
-	palist->re = 0;
+	plist->re = 0;
 	n = (nlog <= (N_ALARM_LIST)) ? nlog : (N_ALARM_LIST);
-	palist->count = n;
+	plist->count = n;
 	fseek(fp, sizeof(ALARM_LOG)*(nlog-n), SEEK_SET);
 	
 	for (i=0; i<n; i++) {
-		fread(&palist->alog[i], sizeof(ALARM_LOG), 1, fp);
+		fread(&plist->alog[i], sizeof(ALARM_LOG), 1, fp);
 	}
 
-	reverseSortAlarmBuffer(palist);
+	reverseSortAlarmBuffer(plist);
 	fclose(fp);
 #endif
 	return 0;
@@ -512,114 +543,45 @@ void reverseSortITICBuffer(EVENT_FIFO* rb) {
 }
 #endif
 
-int loadEventLog(void) {
-	FILE *fp;
-	int year, woY, nlog, i, n=0;
-#ifdef USE_CMSIS_RTOS2	
-   fsFileInfo info;	
-#else
-	FINFO info;
-#endif
-	char path[64];
-#if 1
-	EVENT_LOG	_itic;
-#endif
-	
-#if 1	// 2025-3-13, cskang, FIFO로 변경
-	EVENT_U	elog;
-	EVENT_FIFO *pEvtFifo = &meter[0].eventFifo;
-	int fr, re;
-	
-	// 시간순으로 읽는다 (최신 알람이 끝에 저장된다)
-	fp = fopen(EVENT_FIFO_FILE, "rb");
-	if (fp != NULL) {
-		fread(&elog, sizeof(EVENT_U), 1, fp);
-		for (i=0; i<elog.head.count; i++) {
-			fread(&pEvtFifo->elog[i], sizeof(EVENT_U), 1, fp);
-			pEvtFifo->fr++;
-			pEvtFifo->count++;
-		}
-		fclose(fp);
-	}
-	
-	// 읽은 내용을 이벤트, ITIC 리스트 갱신한다
-	fetchEvent(0, 3);	// top, M0
-	fetchItic(0, 3);
-	fetchItic2(0, 3);	
-	
-#else	
+int loadEventLog(void)
+{
+	int id;
 
-	//woY = getYear_n_WoY(pcntl->tod.tm_yday, pcntl->tod.tm_wday);
-	//sprintf(path, "%s%04d%02d.d", EVENT_LIST_FILE, pcntl->tod.tm_year, pcntl->tod.tm_mon);
-	sprintf(path, "%s%04d.d", EVENT_LIST_FILE, pcntl->tod.tm_year);
-
-	info.fileID = 0;      
-	if (ffind (path, &info)) {
-		return -1;
-	}
-	
-	nlog = info.size/sizeof(EVENT_LOG);
-	printf("[[Event List File(%s) Size = %d, #event=%d\n", path, info.size, nlog);
-	fp = fopen(path, "rb"); 
-	if (fp == NULL) {
-		return -1;
-	}
-	
-	pelist->re = 0;
-	n = (nlog <= (N_EVENT_LIST)) ? nlog : (N_EVENT_LIST);
-	pelist->count = n;
-#if 1
-	fseek(fp, sizeof(ITIC_LOG)*(nlog-n), SEEK_SET);	
-	for (i=0; i<n; i++) {
-		fread(&_itic, sizeof(ITIC_LOG), 1, fp);
-		memcpy(&pitic->elog[i], &_itic, sizeof(ITIC_LOG));
-		memcpy(&pelist->elog[i], &_itic, sizeof(EVENT_LOG));
-		printf("%d -> %d, %d.%d\n", i, pelist->elog[i].type, pelist->elog[i].startTs, pelist->elog[i].msec);
-	}
-	reverseSortEventBuffer(pelist);
-	reverseSortITICBuffer(pitic);
-
-#else	
-	fseek(fp, sizeof(EVENT_LOG)*(nlog-n), SEEK_SET);	
-	for (i=0; i<n; i++) {
-		fread(&pelist->elog[i], sizeof(EVENT_LOG), 1, fp);
-		printf("%d -> %d, %d.%d\n", i, pelist->elog[i].type, pelist->elog[i].startTs, pelist->elog[i].msec);
-	}
-#endif	
-	n = (nlog <= (N_ITIC_BUF)) ? nlog : (N_ITIC_BUF);
-	pitic->count = n;
-	printf("--> loadITICevent, size=%d, count=%d\n", n, pitic->count);
-
-	fclose(fp);
-#endif		
+	for (id = 0; id < METER_CH_COUNT; id++)
+		loadEventFifo(id);
 	return 0;
 }
 
 
-int storeAlarmLog(int ix, int status, float value, int doSel) {
+int storeAlarmLog(int id, int ix, int status, float value, int doSel) {
 	FILE *fp;
 	char path[64];
+	char fifoPath[64];
 	uint16_t	do_action;
 	int		i;
 	ALARM_U	alog;
+	CNTL_DATA *pcntlId = &meter[id].cntl;
+	ALARM_STATUS *palm = &meter[id].alarm;
+	ALARM_FIFO *pFifo = &meter[id].alarmFifo;
 		
-	pcntl->alog.ts = sysTick1s;
-	pcntl->alog.chan = palm->st[ix].chan;
-	pcntl->alog.cond = palm->st[ix].cond;
-	pcntl->alog.level = palm->st[ix].level;
-	pcntl->alog.value = value;
-	pcntl->alog.status = status;
+	pcntlId->alog.ts = sysTick1s;
+	pcntlId->alog.chan = palm->st[ix].chan;
+	pcntlId->alog.cond = palm->st[ix].cond;
+	pcntlId->alog.level = palm->st[ix].level;
+	pcntlId->alog.value = value;
+	pcntlId->alog.status = status;
 
-	//woY = getYear_n_WoY(pcntl->tod.tm_yday, pcntl->tod.tm_wday);
-	sprintf(path, "%s%04d%02d.d", ALARM_LIST_FILE, pcntl->tod.tm_year, pcntl->tod.tm_mon);
+	//woY = getYear_n_WoY(pcntlId->tod.tm_yday, pcntlId->tod.tm_wday);
+	sprintf(path, "%s%04d%02d.d", ALARM_LIST_FILE, pcntlId->tod.tm_year, pcntlId->tod.tm_mon);
 	fp = fopen(path, "ab"); 
 	if (fp != NULL) {
-		fwrite(&pcntl->alog, sizeof(ALARM_LOG), 1, fp);
+		fwrite(&pcntlId->alog, sizeof(ALARM_LOG), 1, fp);
 		fclose(fp);
 	}
 #if 1	// 2025-3-13, alarm Fifo
-	printf("ALARM_FIFO_FILE:%s\n", ALARM_FIFO_FILE);
-	fp = fopen(ALARM_FIFO_FILE, "r+b");
+	getAlarmFifoFileName(id, fifoPath);
+	printf("ALARM_FIFO_FILE(M%d):%s\n", id, fifoPath);
+	fp = fopen(fifoPath, "r+b");
 	if (fp == NULL) {
 		// create header
 		memset(&alog, 0, sizeof(alog));
@@ -627,9 +589,9 @@ int storeAlarmLog(int ix, int status, float value, int doSel) {
 		alog.head.fr = 1;		
 		alog.head.count = 1;
 		alog.head.ts = sysTick1s;
-		fp = fopen(ALARM_FIFO_FILE, "wb");
+		fp = fopen(fifoPath, "wb");
 		fwrite(&alog, sizeof(alog), 1, fp);
-		fwrite(&pcntl->alog, sizeof(ALARM_LOG), 1, fp);
+		fwrite(&pcntlId->alog, sizeof(ALARM_LOG), 1, fp);
 		fclose(fp);
 	}
 	else {
@@ -646,36 +608,36 @@ int storeAlarmLog(int ix, int status, float value, int doSel) {
 		fwrite(&alog, sizeof(alog), 1, fp);						
 		// append or update data
 		fseek(fp, sizeof(alog)*alog.head.fr, SEEK_SET);
-		fwrite(&pcntl->alog, sizeof(ALARM_LOG), 1, fp);
+		fwrite(&pcntlId->alog, sizeof(ALARM_LOG), 1, fp);
 		fclose(fp);
 	}
 	
 	// 2025-3-20, Alarm FiFo에 추가한다
-	memcpy(&pAlmFifo->alog[pAlmFifo->fr], &pcntl->alog, sizeof(pcntl->alog));	
-	if (pAlmFifo->count < N_ALARM_FIFO) {
-		pAlmFifo->count++;
-		if (++pAlmFifo->fr >= N_ALARM_FIFO) pAlmFifo->fr = 0;
+	memcpy(&pFifo->alog[pFifo->fr], &pcntlId->alog, sizeof(pcntlId->alog));	
+	if (pFifo->count < N_ALARM_FIFO) {
+		pFifo->count++;
+		if (++pFifo->fr >= N_ALARM_FIFO) pFifo->fr = 0;
 	}
 	else {
 		// Full 발생하면, fr, re 모두 이동한다
-		if (++pAlmFifo->re >= N_ALARM_FIFO) pAlmFifo->re = 0;
-		if (++pAlmFifo->fr >= N_ALARM_FIFO) pAlmFifo->fr = 0;
+		if (++pFifo->re >= N_ALARM_FIFO) pFifo->re = 0;
+		if (++pFifo->fr >= N_ALARM_FIFO) pFifo->fr = 0;
 	}
 	
-	// 현재 알람 페이지 갱신
-	fetchAlarm(0);
+	fetchAlarm(id, 0);
 #else
+	ALARM_LIST *plist = &meter[id].alist;
 	for(i=N_ALARM_LIST-1; i>0; --i) {
-		palist->alog[i] = palist->alog[i-1];
+		plist->alog[i] = plist->alog[i-1];
 	}
-	memcpy(&palist->alog[0], &pcntl->alog, sizeof(ALARM_LOG));
-	if (palist->count < (N_ALARM_LIST+1)) {
-		palist->count++;
+	memcpy(&plist->alog[0], &pcntlId->alog, sizeof(ALARM_LOG));
+	if (plist->count < (N_ALARM_LIST+1)) {
+		plist->count++;
 	}
 #endif	
 	
-	printf("alarm log [Ts=%d, st=%d, value=%f, chan=%d, cond=%d, doPnt = %d]\n", 
-		pcntl->alog.ts, pcntl->alog.status, pcntl->alog.value, pcntl->alog.chan, pcntl->alog.cond, doSel);	
+	printf("alarm log(M%d) [Ts=%d, st=%d, value=%f, chan=%d, cond=%d, doPnt = %d]\n", id,
+		pcntlId->alog.ts, pcntlId->alog.status, pcntlId->alog.value, pcntlId->alog.chan, pcntlId->alog.cond, doSel);	
 
 #if 1
 	// doSel과 관계없이 호출한다(cskang)
@@ -703,10 +665,10 @@ int storeEventLog(EVENT_LOG *pelog) {
 
 
 #if 1
-void fetchAlarm(int cmd) {
+void fetchAlarm(int id, int cmd) {
 	int i, n, ix;
-	ALARM_FIFO *pFifo = pAlmFifo;
-	ALARM_LIST *plist = palist;
+	ALARM_FIFO *pFifo = &meter[id].alarmFifo;
+	ALARM_LIST *plist = &meter[id].alist;
 
 	plist->count = pFifo->count;
 	
@@ -729,7 +691,7 @@ void fetchAlarm(int cmd) {
 	}
 	// bottom
 	else if (cmd == 4) {
-		plist->re = (plist->count-1)/N_EVENT_LIST * N_EVENT_LIST;
+		plist->re = (plist->count-1)/N_ALARM_LIST * N_ALARM_LIST;
 	}
 	
 	// src
@@ -799,70 +761,99 @@ void fetchEvent(int id, int cmd) {
 }
 
 
-void _fetchItic(int mode, int cmd) {
-	// int i, n, ix;
-	// EVENT_FIFO *pFifo = pEvtFifo;
-	// ITIC_EVT_LIST *plist = (mode == 0) ? piticlist : piticlist2;
-	
-	// plist->count = pFifo->count;
-	
-	// // update
-	// if (cmd == 0) {
-	// }
-	// // page down
-	// else if (cmd == 1) {
-	// 	if (plist->re + N_ITIC_LIST < pFifo->count) 
-	// 		plist->re += N_ITIC_LIST;	
-	// }
-	// // page up
-	// else if (cmd == 2) {
-	// 	if (plist->re - N_ITIC_LIST >= 0) 
-	// 		plist->re -= N_ITIC_LIST;
-	// }
-	// // top
-	// else if (cmd == 3) {
-	// 	plist->re = 0;
-	// }
-	
-	// // src
-	// ix = (pFifo->fr - plist->re) >= 0 ? (pFifo->fr - plist->re) : (pFifo->fr - plist->re) + N_EVENT_FIFO;
-	// // dst
-	// plist->fr = plist->re;
-	// for (i=0; i<N_ITIC_LIST; i++) {
-	// 	if (plist->fr < pFifo->count) {
-	// 		if (--ix < 0) ix = N_EVENT_FIFO-1;
-	// 		memcpy(&plist->elog[i], &pFifo->elog[ix], sizeof(ITIC_LOG));			
-	// 		// dst
-	// 		plist->fr++;
-	// 	}
-	// 	else {
-	// 		// fill zero
-	// 		memset(&plist->elog[i], 0, sizeof(ITIC_LOG));
-	// 	}
-	// }
+static int iticTypeMatches(int mode, uint16_t type)
+{
+	if (mode == 0)
+		return type >= E_SAG && type <= E_RVC;
+	return type == E_TrV || type == E_TrC;
 }
 
-void fetchItic(int id, int cmd) {
-	(void)id;
-	(void)cmd;
-//	_fetchItic(0, cmd);
+static void fetchIticCommon(int id, int mode, int cmd)
+{
+	int i, n, ix, slot, seen, dst, matchTotal;
+	EVENT_FIFO *pFifo;
+	ITIC_EVT_LIST *plist;
+
+	if (id < 0 || id >= METER_CH_COUNT)
+		return;
+
+	pFifo = &meter[id].eventFifo;
+	plist = (mode == 0) ? &meter[id].itic : &meter[id].itic2;
+
+	matchTotal = 0;
+	for (i = 0; i < pFifo->count; i++) {
+		if (pFifo->count < EVENT_LOG_CAP)
+			slot = i;
+		else
+			slot = (pFifo->re + i) % EVENT_LOG_CAP;
+		if (iticTypeMatches(mode, pFifo->elog[slot].type))
+			matchTotal++;
+	}
+	plist->count = matchTotal;
+
+	if (cmd == 1) {
+		if (plist->re + N_ITIC_LIST < matchTotal)
+			plist->re += N_ITIC_LIST;
+	}
+	else if (cmd == 2) {
+		if (plist->re >= N_ITIC_LIST)
+			plist->re -= N_ITIC_LIST;
+		else
+			plist->re = 0;
+	}
+	else if (cmd == 3) {
+		plist->re = 0;
+	}
+	else if (cmd == 4) {
+		if (matchTotal > 0)
+			plist->re = (matchTotal - 1) / N_ITIC_LIST * N_ITIC_LIST;
+		else
+			plist->re = 0;
+	}
+
+	for (i = 0; i < N_ITIC_LIST; i++)
+		memset(&plist->elog[i], 0, sizeof(ITIC_LOG));
+
+	ix = pFifo->fr;
+	seen = 0;
+	dst = 0;
+	for (n = 0; n < pFifo->count && dst < N_ITIC_LIST; n++) {
+		if (--ix < 0)
+			ix = EVENT_LOG_CAP - 1;
+		if (!iticTypeMatches(mode, pFifo->elog[ix].type))
+			continue;
+		if (seen < plist->re) {
+			seen++;
+			continue;
+		}
+		memcpy(&plist->elog[dst], &pFifo->elog[ix], sizeof(ITIC_LOG));
+		dst++;
+		seen++;
+	}
+	plist->fr = plist->re + dst;
 }
 
-void fetchItic2(int id, int cmd) {
-	(void)id;
-	(void)cmd;
-//	_fetchItic(1, cmd);
+void fetchItic(int id, int cmd)
+{
+	fetchIticCommon(id, 0, cmd);
+}
+
+void fetchItic2(int id, int cmd)
+{
+	fetchIticCommon(id, 1, cmd);
 }
 #endif
 
 // 매 1초 마다 호출되어야 한다 
-int alarmProc() {
+int alarmProc(int id) {
 	int i, chan, cond, change=0, result, almCount=0, doPoint=0;
 	float level, *src;
-	ALARM_DEF *paset = &meter[0].almSet;
+	ALARM_DEF *paset = &meter[id].almSet;
+	ALARM_STATUS *palm = &meter[id].alarm;
+	CNTL_DATA *pcntlId = &meter[id].cntl;
 	
 	// 시작 후 모든 값이 안정화 될때 까지 기다린다(5s)
-	if (pcntl->online2++ < 5) return 0;
+	if (pcntlId->online2++ < 5) return 0;
 		
 	for (i=0; i<32; i++) {		
 		if (paset->set[i].chan == 0) continue;
@@ -871,14 +862,14 @@ int alarmProc() {
 		cond = paset->set[i].cond & 1;
 		chan = paset->set[i].chan;
 //		doPoint = paset->set[i].do_action;
-		src  = almTbl[chan].src;
+		src  = almTbl[id][chan].src;
 		if (src == 0) {
-			printf("@@@ Bad src, channel = %d\n", chan);
+			printf("@@@ Bad src(M%d), channel = %d\n", id, chan);
 			continue;
 		}
 
 		if (palm->st[i].status == 0) {					
-			//level = almTbl[chan].norm*paset->set[i].level/100.;				
+			//level = almTbl[id][chan].norm*paset->set[i].level/100.;				
 			level = palm->st[i].level;
 			if(cond !=2)
 				result = (cond == 0) ? (*src < level) : (*src > level);
@@ -887,18 +878,18 @@ int alarmProc() {
 			}
 				
 			if (result) {
-				if (pcntl->almTimer[i]++ >= paset->delay) {	
+				if (pcntlId->almTimer[i]++ >= paset->delay) {	
 					// alarm 상태 
 					palm->st[i].status = 1;	
 					// alarm count 증가
 					palm->st[i].count++;
 					// alarm log 기록
-					storeAlarmLog(i, palm->st[i].status, *src, doPoint);					
+					storeAlarmLog(id, i, palm->st[i].status, *src, doPoint);					
 					change++;
 				}
 			}
 			else {
-				pcntl->almTimer[i] = 0;
+				pcntlId->almTimer[i] = 0;
 			}
 		}
 		else {	
@@ -908,7 +899,7 @@ int alarmProc() {
 #if 1	// 2025-3-18, 정격을 알수 없으므로 % of level로 처리한다				
 					level = palm->st[i].level + palm->st[i].level*paset->set[i].dband/100.;
 #else				
-					level = palm->st[i].level + almTbl[chan].norm*paset->set[i].dband/100.;
+					level = palm->st[i].level + almTbl[id][chan].norm*paset->set[i].dband/100.;
 #endif					
 					if(*src >= level)
 						result = 1;
@@ -921,7 +912,7 @@ int alarmProc() {
 #if 1	// 2025-3-18, 정격을 알수 없으므로 % of level로 처리한다	
 					level = palm->st[i].level - palm->st[i].level*paset->set[i].dband/100.;
 #else					
-					level = palm->st[i].level - almTbl[chan].norm*paset->set[i].dband/100.;
+					level = palm->st[i].level - almTbl[id][chan].norm*paset->set[i].dband/100.;
 #endif					
 					if(*src <= level)
 						result = 1;
@@ -938,16 +929,16 @@ int alarmProc() {
 					result = 1;	
 			}									
 			if (result) {
-				if (pcntl->almTimer[i]++ >= paset->delay) {
+				if (pcntlId->almTimer[i]++ >= paset->delay) {
 					// normal 상태 
 					palm->st[i].status = 0;	
 					// alarm이 복귀될때 리스트에 추가된다 
-					storeAlarmLog(i, 0, *src,doPoint);
+					storeAlarmLog(id, i, 0, *src, doPoint);
 					change++;
 				}
 			}
 			else {
-				pcntl->almTimer[i] = 0;
+				pcntlId->almTimer[i] = 0;
 			}
 		}	
 
@@ -957,7 +948,7 @@ int alarmProc() {
 	}
 	
 	palm->almCount = almCount;	
-	meter[0].almCnt = almCount;
+	meter[id].almCnt = almCount;
 	return change;
 }
 
@@ -968,11 +959,12 @@ int alarmProc() {
 //		uint16_t chan, cond, dband, action;
 //		float level;
 
-void buildAlarmSettings() {
+void buildAlarmSettings(int id) {
 	int i=0, chan;
 	float pcent;
 	
-	ALARM_DEF *paset = &meter[0].almSet;
+	ALARM_DEF *paset = &meter[id].almSet;
+	ALARM_STATUS *palm = &meter[id].alarm;
 	
 	paset->delay = 1;
 
@@ -1011,10 +1003,10 @@ void buildAlarmSettings() {
 			palm->st[i].chan = chan;
 			palm->st[i].cond = paset->set[i].cond;			
 			palm->st[i].level = paset->set[i].level;
-			printf(">> almset(%d) -> chan(%d), cond(%d), level(%f)\n", i, palm->st[i].chan, palm->st[i].cond, palm->st[i].level);
+			printf(">> almset(M%d,%d) -> chan(%d), cond(%d), level(%f)\n", id, i, palm->st[i].chan, palm->st[i].cond, palm->st[i].level);
 		}
 		else if(chan > MAX_ALARM_CH)
-			printf(">> almset(%d) -> chan(%d) Error!!!!\n", i, palm->st[i].chan);
+			printf(">> almset(M%d,%d) -> chan(%d) Error!!!!\n", id, i, palm->st[i].chan);
 	}
 #endif
 }
@@ -1049,8 +1041,8 @@ void getTrendData(int gid,  uint16_t *chan) {
 		if (chan[i] == 0) {
 			row[gid].pen[i] = 0;
 		}
-		else {
-			row[gid].pen[i] = *almTbl[chan[i]].src;
+		else if (chan[i] < MAX_ALARM_CH && almTbl[0][chan[i]].src != NULL) {
+			row[gid].pen[i] = *almTbl[0][chan[i]].src;
 		}
 	}	
 }

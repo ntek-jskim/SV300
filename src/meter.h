@@ -104,16 +104,29 @@
 #define	MBAD_SETTING 7280
 #define	MBAD_SET_TS  7616
 #define	MBAD_SET_CMD 7626
-#define	MBAD_SET_END 7766	/* exclusive: last holding reg 7765 */
-/* 명령 영역 fetch (memory map: +85/+94/+130/+133 → 7711/7720/7756/7759) */
-#define	MBAD_CMD_FETCH_EVENT	(MBAD_SET_CMD + 85)
-#define	MBAD_CMD_FETCH_ALARM	(MBAD_SET_CMD + 94)
-#define	MBAD_CMD_FETCH_ITIC		(MBAD_SET_CMD + 130)
-#define	MBAD_CMD_FETCH_ITIC2	(MBAD_SET_CMD + 133)
+#define	MBAD_SET_END 7743	/* exclusive: last holding reg 7742 */
+/* 명령 영역 fetch (memory map: +67/+77/+107/+110 → 7693/7703/7733/7736)
+ * 각 베이스+0/1/2 → meter id 0/1/2 (event 7693~7695, alarm 7703~7705, itic 7733~7735, itic2 7736~7738) */
+#define	MBAD_CMD_FETCH_EVENT	(MBAD_SET_CMD + 67)
+#define	MBAD_CMD_FETCH_ALARM	(MBAD_SET_CMD + 77)
+#define	MBAD_CMD_FETCH_ITIC		(MBAD_SET_CMD + 107)
+#define	MBAD_CMD_FETCH_ITIC2	(MBAD_SET_CMD + 110)
 
 #define	ADD_ADE9000_M2 10000
 /* Modbus 20000번대: 3번 미터(METER index 2) 데이터/설정 베이스 오프셋 */
 #define	ADD_ADE9000_M3 20000
+/* M1/M2 RW 포켓(절대 16870~17219 / 26870~27219) — 채널 내 offset 6870~7219 */
+#define	MBAD_RW_OFF_START	6870
+#define	MBAD_RW_OFF_END		7220	/* exclusive: last reg 7219 */
+#define	MBAD_M1_RW_START	(ADD_ADE9000_M2 + MBAD_RW_OFF_START)
+#define	MBAD_M1_RW_END		(ADD_ADE9000_M2 + MBAD_RW_OFF_END)
+#define	MBAD_M2_RW_START	(ADD_ADE9000_M3 + MBAD_RW_OFF_START)
+#define	MBAD_M2_RW_END		(ADD_ADE9000_M3 + MBAD_RW_OFF_END)
+/* M1/M2 read 상한(exclusive) — 17220/27220 이상 거부 (= RW 포켓 직후) */
+#define	MBAD_METER_END_M2	MBAD_M1_RW_END
+#define	MBAD_METER_END_M3	MBAD_M2_RW_END
+#define	MBAD_SETTING_M2	MBAD_METER_END_M2
+#define	MBAD_SETTING_M3	MBAD_METER_END_M3
 
 /* Modbus MBAD_SETTING — METER_DEF.pqevt 선두(P2~), FC16 설정 쓰기는 pmset 오프셋 */
 #define METER_MB_SETTING_REGS(m)	((uint16_t *)&(m).pqevt)
@@ -1971,7 +1984,7 @@ typedef struct {
 	int fr, re;
 	uint32_t tid;
 	struct {
-		uint16_t id, s, c;
+		uint16_t s, c;
 	} item[N_CMD_Q];
 } CMD_Q;
 
@@ -2094,9 +2107,10 @@ extern uint32_t sysTick32, sysTick1s, sysTick10s, sysTick10m, sysTick15m, sysTic
 extern uint64_t sysTick64;
 
 extern void fetchEvent(int id, int cmd);
-extern void fetchAlarm(int);
+extern void fetchAlarm(int id, int cmd);
 extern void fetchItic(int id, int cmd);
 extern void fetchItic2(int id, int cmd);
+extern int loadEventFifo(int id);
 // 2025-3-25
 extern void setMeterIpAddr(uint32_t);
 extern void getMeterIpAddr(uint8_t *);
