@@ -438,15 +438,16 @@ void clearIticList(int id, int cmd) {
 	meter[id].cntl.rstIticList = cmd;
 }
 
-static void ackAlarmCmd(int id, int cmd) {
+/* METER_INFO(Alarm_sts/Event_sts)는 CH0 pInfo 공통 — +0~+3 주소 모두 동일 ACK */
+static void ackAlarmCmd(int cmd) {
 	(void)cmd;
-	printf("[Ack alarm M%d]\n", id);
+	printf("[Ack alarm — METER_INFO common]\n");
 	negateAlarm();
 }
 
-static void ackEventCmd(int id, int cmd) {
+static void ackEventCmd(int cmd) {
 	(void)cmd;
-	printf("[Ack event M%d]\n", id);
+	printf("[Ack event — METER_INFO common]\n");
 	negateEvent();
 }
 
@@ -464,6 +465,37 @@ void reqReboot(int cmd) {
 void reqSaveSettings(int cmd) {
 	printf("[save settings]\n");
 	pcntl->saveSetting = cmd;
+}
+
+/* Modbus 명령 큐 전용 — PostScan과 분리(캘리브레이션·clear 등 장시간 처리) */
+void CmdProc_Task(void *arg)
+{
+#ifdef __FREERTOS
+	initCmdQ(xTaskGetCurrentTaskHandle());
+#else
+	initCmdQ(os_tsk_self());
+#endif
+	_enableTaskMonitor(Tid_CmdProc, 50);
+
+	while (pcntl->runFlag) {
+#ifdef __FREERTOS
+		uint32_t nv;
+		if (xTaskNotifyWait(0, 0x08, &nv, portMAX_DELAY) != pdPASS)
+			continue;
+#else
+		os_evt_wait_and(0x8, 0xffff);
+#endif
+		meter[0].cntl.wdtTbl[Tid_CmdProc].count++;
+		do {
+			cmdProc();
+		} while (cmdQ.fr != cmdQ.re);
+	}
+
+#ifdef __FREERTOS
+	vTaskSuspend(NULL);
+#else
+	os_evt_wait_and(0xffff, 0xffff);
+#endif
 }
 
 void cmdProc()
@@ -554,19 +586,19 @@ void cmdProc()
 		case 60:
 			dispatchMeterChCmd(57, addr, c, clearEventListCmd);
 			break;
-		// ack alarm
+		// ack alarm (+0~+3 → 공통 METER_INFO, per-CH 분기 없음)
 		case 87:
 		case 88:
 		case 89:
 		case 90:
-			dispatchMeterChCmd(87, addr, c, ackAlarmCmd);
+			ackAlarmCmd(c);
 			break;
-		// ack event
+		// ack event (+0~+3 → 공통 METER_INFO)
 		case 97:
 		case 98:
 		case 99:
 		case 100:
-			dispatchMeterChCmd(97, addr, c, ackEventCmd);
+			ackEventCmd(c);
 			break;
 		// clear ITIC list
 		case 113:

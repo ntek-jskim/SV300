@@ -75,10 +75,16 @@
 2026/06/06 : meter.h — M1/M2 RW포켓 상한 17219/27219(포함)으로 조정
 2026/06/06 : modbus.c — M1/M2 갭구간 17220~17239·27220~27239 FC3/TCP read 차단
 2026/06/06 : meter.h·modbus.c — M1/M2 read 상한 ≥17220/27220으로 통합(RW 포켓 상한과 동일)
+2026/06/06 : ade9000.c — CH3 M2 PIN_INT2_IRQHandler 추가(Meter2_Task IRQ wake)
+2026/06/06 : fft_radix2_czt.c — FFT_Task CH 순환 ACTIVE_METER_CH_COUNT(3CH M2 포함)
+2026/06/06 : os_port_freertos.h — OS_TASK_PRIORITY_REALTIME(+6) 정의(M0 Meter 우선순위)
+2026/06/06 : smb_rtu.c·app_main.c — CmdProc_Task 분리(PostScan stall 완화)
+2026/06/06 : ade9000.c — meter_scan_2 ZX 타임아웃 20ms→50ms(M1/M2 RR·SPI 여유)
 
 --- TODO (다음 작업) ---
+2026/06/06 : meter.c·ade9000.c — rstIticList(0x1234) per-CH clearIticListData(itic/itic2) 복구
+2026/06/06 : modbus.c — writeMemCb M1/M2 설정·시간 쓰기 차단(CH0 전용, RTU FC16과 동일)
+2026/06/06 : smb_rtu.c·iom.c — ACK alarm/event METER_INFO(CH0 pInfo) 공통 처리 명시
 2026/06/06 : [TODO] CH0 설정 read(meter.meter flat) vs write(pmset/pqevt) 경로 통일·offsetof 검증
-2026/06/06 : [TODO] writeMemCb TCP 설정쓰기 pmset2/3 → CH0 전용 정책과 정합
-2026/06/06 : [TODO] ade9000.c clearIticList/rstIticList per-CH 처리 보완
 2026/06/06 : [TODO] app_main tid_wave[1/2]·trend M0 고정 등 CH1/CH2 런타임 연결
 2026/06/06 : [TODO] Modbus FC3/6/16·명령 큐 실기(3CH) 통합 테스트

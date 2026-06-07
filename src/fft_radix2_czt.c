@@ -523,7 +523,7 @@ void FFT_Task(void)
 			//printf("VTHD:%f, ITHD:%f, elap = %d\n", pmeter->THD_U[0], pmeter->THD_I[0], (int)(t2-t1));
 			wbFFT8k[id].re = wbFFT8k[id].fr;
 		}
-		if (++id >= 2) {
+		if (++id >= ACTIVE_METER_CH_COUNT) {
 			id = 0;
 		}
 		//et1 = et2;

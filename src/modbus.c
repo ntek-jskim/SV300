@@ -966,20 +966,9 @@ int writeMemCb(uint16_t address, uint16_t value) {
    	uint16_t *uptr = (uint16_t *)&_utc;
    	int id;
    	uint16_t offset;
-   	uint16_t *psmb;
 
 	if (decodeMeterAddress(address, &id, &offset) != 0)
 		return -1;
-
-#if METER_CH_COUNT > 2
-	if (id == 2)
-		psmb = pmset3;
-	else
-#endif
-	if (id == 1)
-		psmb = pmset2;
-	else
-		psmb = pmset;
 
 	if (id == 1 && offset >= MBAD_RW_OFF_START && offset < MBAD_RW_OFF_END) {
 		if (writeMeterHoldReg(1, offset, value) < 0)
@@ -993,19 +982,19 @@ int writeMemCb(uint16_t address, uint16_t value) {
 		return 0;
 	}
 #endif
-	else if (offset == MBAD_SET_TS) {
+	else if (id == 0 && offset == MBAD_SET_TS) {
 		uptr[0] = value;
 		return 0;
 	}
-	else if (offset == MBAD_SET_TS+1) {
+	else if (id == 0 && offset == MBAD_SET_TS+1) {
 		uptr[1] = value;
 		printf("recv UTC Time=%d ...\n", _utc);
 		tickSet(_utc, 0, 1);		
 		RTC_SetTimeUTC(_utc);
 		return 0;
 	}
-	else if (offset >= MBAD_SETTING && offset < MBAD_SET_CMD) {
-		psmb[offset-MBAD_SETTING] = value;
+	else if (id == 0 && offset >= MBAD_SETTING && offset < MBAD_SET_CMD) {
+		pmset[offset-MBAD_SETTING] = value;
 		return 0;
 	}
 	else if (id == 0 && offset >= MBAD_SET_CMD && offset < MBAD_SET_END) {

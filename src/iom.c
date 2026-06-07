@@ -387,6 +387,7 @@ void assertAlarmOutput(int point, int state) {
 }
 
 
+/* pInfo = meter[0].info — Alarm_sts/Event_sts는 장치 공통(추후 Alarm_sts[3] 등 확장 가능) */
 void negateAlarm() {
 	// int i;	
 	

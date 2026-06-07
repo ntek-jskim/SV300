@@ -6,7 +6,7 @@
 #include "i2c_18xx_43xx.h"
 
 OsTaskId tid_fft, tid_wave[METER_CH_COUNT], tid_meter[METER_CH_COUNT], tid_fs;
-OsTaskId tid_rmslog, tid_post, tid_energy, tid_trend;
+OsTaskId tid_rmslog, tid_post, tid_energy, tid_trend, tid_cmd;
 OsTaskId tid_iom;
 OsTaskId tid_rtu, tid_mmb;
 OsTaskId tid_shell;
@@ -32,6 +32,7 @@ extern void FS_task(void *);
 extern void Test_task(void *);
 extern void RMSLog_Task(void *);
 extern void PostScan_Task(void *);
+extern void CmdProc_Task(void *);
 extern void Energy_Task(void *);
 extern void SMB_rtu_Task(void *);
 extern void SMB_rtu_Task2(void *);
@@ -547,6 +548,13 @@ void app_init(void *params) {
 		{
 			TRACE_ERROR("Failed to create task(PostScan)\r\n");
 		}
+		taskParams.priority = OS_TASK_PRIORITY_NORMAL;
+		taskParams.stackSize = 256;
+		tid_cmd = osCreateTask("cmd", CmdProc_Task, NULL, &taskParams);
+		if (tid_cmd == OS_INVALID_TASK_ID)
+		{
+			TRACE_ERROR("Failed to create task(CmdProc)\r\n");
+		}
 
 	}
    	else {
@@ -580,6 +588,13 @@ void app_init(void *params) {
 		if(tid_post == OS_INVALID_TASK_ID)
 		{
 			TRACE_ERROR("Failed to create task(PostScan)\r\n");
+		}
+		taskParams.priority = OS_TASK_PRIORITY_NORMAL;
+		taskParams.stackSize = 256;
+		tid_cmd = osCreateTask("cmd", CmdProc_Task, NULL, &taskParams);
+		if (tid_cmd == OS_INVALID_TASK_ID)
+		{
+			TRACE_ERROR("Failed to create task(CmdProc)\r\n");
 		}
 		
 		// Energy

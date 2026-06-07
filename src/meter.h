@@ -1527,7 +1527,7 @@ typedef struct {
 	uint16_t fwBuildDay;
 	uint16_t HeartBit;
 	uint16_t mBusRxCnt;
-	uint16_t Alarm_sts;
+	uint16_t Alarm_sts;	/* CH0 METER_INFO 공통 — ACK는 pInfo 경유, 추후 [3] 확장 가능 */
 	uint16_t Event_sts;
 //	uint16_t r1[41];
 	uint16_t RSTP_sts[2];
@@ -2013,6 +2013,7 @@ typedef struct {
 #define Tid_Trend		10
 #define Tid_Iom			11
 #define	Tid_SMB			12
+#define	Tid_CmdProc		13
 #define	Tid_Led			14
 #define	Tid_GW			15
 
@@ -2094,6 +2095,7 @@ extern int loadHwSettings(METER_CAL *pcal);
 extern void storeHwSettings(METER_CAL *pcal);
 extern int pushEvent(int id, PQ_EVENT_INFO *pInf);
 extern void clearEventList(int id);
+extern void clearIticListData(int id);
 extern void updateEventCount(int mask, uint32_t *ec);
 
 //extern void tickSet(uint32_t time, int mode);
@@ -2102,7 +2104,6 @@ extern void _enableTaskMonitor(int id, int limit);
 extern void setMeterInfo(void);
 extern int loadMaxMin(void);
 extern void copyEreg64(ENERGY_REG64 *, ENERGY_REG64 *);
-extern void clearIticFile();
 extern uint32_t sysTick32, sysTick1s, sysTick10s, sysTick10m, sysTick15m, sysTickDemand, WM_tick32;
 extern uint64_t sysTick64;
 

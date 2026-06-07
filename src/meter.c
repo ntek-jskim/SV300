@@ -105,7 +105,6 @@ ENERGY_NVRAM 	egyNvr;
 //extern volatile uint64_t sysTick64;
 //extern uint32_t sysTickDemand, sysTick15m, sysTick1s, sysTick32;
 extern int getPQBinIndex(void);
-extern void cmdProc(void);
 extern void assertEventOutput(int, int);
 
 const uint16_t def_ip[] = {192,168,8,172};
@@ -3895,6 +3894,16 @@ void clearEventList(int id) {
 	putFsQ(&fsmsg);
 }
 
+/* Modbus ITIC 목록(itic/itic2) RAM 초기화 — clear ITIC 명령(0x1234) per-CH */
+void clearIticListData(int id)
+{
+	if (id < 0 || id >= METER_CH_COUNT)
+		return;
+
+	memset(&meter[id].itic, 0, sizeof(meter[id].itic));
+	memset(&meter[id].itic2, 0, sizeof(meter[id].itic2));
+}
+
 //
 //
 //
@@ -4078,12 +4087,6 @@ void PostScan_Task(void *arg)
 {
 	int id=0;
    	uint32_t notificationValue;
-   
-#ifdef __FREERTOS	
-	initCmdQ(xTaskGetCurrentTaskHandle());
-#else
-	initCmdQ(os_tsk_self());
-#endif
 	
 	_enableTaskMonitor(Tid_PostScan, 50);
 	
@@ -4166,14 +4169,6 @@ void PostScan_Task(void *arg)
 			}
 		}
 		Board_LED_Set(1, ledAlmCount);
-#ifdef __FREERTOS		
-		if (notificationValue & 0x8) 
-#else
-		if (os_evt_get() & 0x8)
-#endif		
-		{
-			cmdProc();
-		}
 	}
 	
 	// reboot가 set되면 

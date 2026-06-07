@@ -2356,6 +2356,13 @@ void PIN_INT1_IRQHandler()
 	meterIrqSvc(1);
 }
 
+#if defined(CH3) && !defined(CH1)
+void PIN_INT2_IRQHandler()
+{
+	Chip_PININT_ClearIntStatus(LPC_GPIO_PIN_INT, PININTCH(2));
+	meterIrqSvc(2);
+}
+#endif
 
 int min_n(uint32_t *val, int n) {
 	int min = val[0], i;
@@ -2643,6 +2650,8 @@ uint64_t ts_irq[2], ts_delta[2];
 /* meter_scan_2(M1/M2): CH3 시 M1↔M2 RR + PQM 비트 17/19/21 슬라이스.
  * W1C는 stat0_snap 전체로 클리어 — 미처리 비트를 W1C에서 빼면 ZX/IRQ 연쇄 타임아웃. */
 #define AD9X_PQM_STAT0_SLICED  ((1u << 17) | (1u << 19) | (1u << 21))
+/* M1/M2 ZX notify 대기(ms): RR·슬라이스·SSP1 mutex 여유 (M0는 20ms 유지) */
+#define METER_SCAN2_ZX_TMO_MS  50
 static uint8_t m12_pq_slice[METER_CH_COUNT];
 #ifdef CH3
 static uint8_t m12_pq_rr_owner = 1;
@@ -2661,9 +2670,9 @@ void meter_scan_2(uint8_t id)
 
 #ifdef __FREERTOS		
 	uint32_t ulNotificationValue;
-	if (xTaskNotifyWait(0, 0xFFFFFFFF, &ulNotificationValue, pdMS_TO_TICKS(20)) == 0)
+	if (xTaskNotifyWait(0, 0xFFFFFFFF, &ulNotificationValue, pdMS_TO_TICKS(METER_SCAN2_ZX_TMO_MS)) == 0)
 #else
-	if (os_evt_wait_and(0x1, 200) == OS_R_TMO) 
+	if (os_evt_wait_and(0x1, METER_SCAN2_ZX_TMO_MS) == OS_R_TMO) 
 #endif	
 	{
 		printf(">>> ZX timeout [%d]...\n", id);
@@ -2751,6 +2760,10 @@ void meter_scan_2(uint8_t id)
 	if (meter[id].cntl.rstEvtList == 0x1234) {
 		meter[id].cntl.rstEvtList = 0;
 		clearEventList(id);		
+	}
+	if (meter[id].cntl.rstIticList == 0x1234) {
+		meter[id].cntl.rstIticList = 0;
+		clearIticListData(id);
 	}
 	
 	// clear status0 & status1	
@@ -2887,12 +2900,10 @@ void meter_scan(uint8_t id)
 		meter[id].cntl.rstEvtList = 0;
 		clearEventList(id);		
 	}
-	// if(id==0) {
-	// 	if (meter[id].cntl.rstIticList == 0x1234) {
-	// 		meter[id].cntl.rstIticList = 0;
-	// 		memset(piticlist, 0, sizeof(*piticlist));
-	// 	}
-	// }
+	if (meter[id].cntl.rstIticList == 0x1234) {
+		meter[id].cntl.rstIticList = 0;
+		clearIticListData(id);
+	}
 	
 	// clear status0 & status1	
 	write_reg32(id, AD9X_STATUS1, &stat1);	

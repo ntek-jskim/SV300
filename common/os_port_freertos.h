@@ -92,6 +92,10 @@
 #endif   
 #endif
 
+//Task priority (realtime — M0 Meter0_Task, RTX와 동등 +6)
+#ifndef OS_TASK_PRIORITY_REALTIME
+   #define OS_TASK_PRIORITY_REALTIME (tskIDLE_PRIORITY + 6)
+#endif
 
 //Milliseconds to system ticks
 #ifndef OS_MS_TO_SYSTICKS
