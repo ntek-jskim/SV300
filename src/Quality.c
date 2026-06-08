@@ -875,10 +875,13 @@ void initPQHeader(int id) {
 #endif
 		printf("delete report file(%s) ...\n", pqLog->qwfn);
 		
-		flag = 0;
-		fp = fopen("initqual.d", "wb");
-		fwrite(&flag, sizeof(flag), 1, fp);
-		fclose(fp);
+		/* M0만 삭제 후 플래그를 지우지 않음 — M1/M2 initPQHeader에서도 동일 삭제 */
+		if (id == ACTIVE_METER_CH_COUNT - 1) {
+			flag = 0;
+			fp = fopen("initqual.d", "wb");
+			fwrite(&flag, sizeof(flag), 1, fp);
+			fclose(fp);
+		}
 	}
 	
 	

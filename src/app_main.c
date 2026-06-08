@@ -207,6 +207,14 @@ void Sntp_Set(int v)
 	pInfo->SNTP_sts = v;
 }
 
+/* M0(pcntl) tod만 RTC/SNTP로 갱신되므로 M1/M2 cntl.tod에 복사 */
+static void syncMeterTodFromM0(void)
+{
+	int id;
+
+	for (id = 1; id < METER_CH_COUNT; id++)
+		meter[id].cntl.tod = meter[0].cntl.tod;
+}
 
 void tickSet(uint32_t sec,  uint32_t msec, uint32_t mode) {
 	int diff = abs(sysTick1s - sec);
@@ -225,6 +233,7 @@ void tickSet(uint32_t sec,  uint32_t msec, uint32_t mode) {
 		sysTick64  = (uint64_t)sec*1000 + msec;
 		sysTick32  = sysTick64;	
 		uLocalTime(&sysTick1s, &pcntl->tod);
+		syncMeterTodFromM0();
 	
 		if (mode && diff > 1) {
 			timeStampChanged();
@@ -884,6 +893,7 @@ void tickHandler() {
 		tick = 0;
 		
 		uLocalTime(&sysTick1s, &pcntl->tod);
+		syncMeterTodFromM0();
 		//pcntl->tod.tm_year += 1900;
 		//pcntl->tod.tm_mon  += 1;
 	}	

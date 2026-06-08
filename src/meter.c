@@ -3433,7 +3433,6 @@ int loadMaxMin() {
 		}
 	}
 	
-	//	fread(&meter.lastmaxmin, sizeof(MAXMIN), 1, fp);	// 과거 max,min
 	fclose(fp);	
 	return 0;
 }

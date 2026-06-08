@@ -96,3 +96,6 @@
 2026/06/06 : meter.c·meter.h — 미사용 전역(elist/pqrpt/pEgy/pRPT/pVQ/pqLog/palm/palist/pelist/pAlmFifo/pld/pmset2·3/mutWF/def_ip 등) 및 extern 정리
 2026/06/06 : meter.c 전역 pHD 제거, makeRandomData 고조파 루프 CH별 meter[id].hd 로컬 사용
 2026/06/06 : makeRandomData for(id) 닫는 중괄호 누락 수정(Keil C89 빌드 오류)
+2026/06/06 : meter.h METER_DEF — 미사용 lastmaxmin 제거(sizeof·오프셋 변경)
+2026/06/06 : app_main tickSet/tickHandler — M1/M2 meter[id].cntl.tod를 M0 tod와 동기화
+2026/06/08 : Quality initPQHeader — INITQUAL 시 initqual.d 플래그를 마지막 CH까지 유지, M1/M2 ql/qw 금주 파일도 삭제

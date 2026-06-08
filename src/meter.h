@@ -99,25 +99,25 @@
 #define DEMAND_PQ_DIR_COUNT  2   /* P/Q 방향 (예: imp/exp 또는 lag/lead) */
 
 /* Modbus holding map (gems7000) — memorymap/SV300 memory map_*.xlsx 참고
- * 0 meter … 3550 soe | 7280 settings, 7616 time(2), 7626 cmd … 7765 last
+ * 0 meter … 3550 soe | 6930 settings, 7266 time(2), 7276 cmd … 7393 last
  */
-#define	MBAD_SETTING 7280
-#define	MBAD_SET_TS  7616
-#define	MBAD_SET_CMD 7626
-#define	MBAD_SET_END 7743	/* exclusive: last holding reg 7742 */
-/* 명령 영역 fetch (memory map: +67/+77/+107/+110 → 7693/7703/7733/7736)
- * 각 베이스+0/1/2 → meter id 0/1/2 (event 7693~7695, alarm 7703~7705, itic 7733~7735, itic2 7736~7738) */
+#define	MBAD_SETTING 6930
+#define	MBAD_SET_TS  7266
+#define	MBAD_SET_CMD 7276
+#define	MBAD_SET_END 7393	/* exclusive: last holding reg 7392 */
+/* 명령 영역 fetch (memory map: +67/+77/+107/+110 → 7233/7243/7273/7276)
+ * 각 베이스+0/1/2 → meter id 0/1/2 (event 7233~7235, alarm 7243~7245, itic 7273~7275, itic2 7276~7278) */
 #define	MBAD_CMD_FETCH_EVENT	(MBAD_SET_CMD + 67)
-#define	MBAD_CMD_FETCH_ALARM	(MBAD_SET_CMD + 77)
-#define	MBAD_CMD_FETCH_ITIC		(MBAD_SET_CMD + 107)
-#define	MBAD_CMD_FETCH_ITIC2	(MBAD_SET_CMD + 110)
+#define	MBAD_CMD_FETCH_ALARM	(MBAD_SET_CMD + 73)
+#define	MBAD_CMD_FETCH_ITIC		(MBAD_SET_CMD + 103)
+#define	MBAD_CMD_FETCH_ITIC2	(MBAD_SET_CMD + 106)
 
 #define	ADD_ADE9000_M2 10000
 /* Modbus 20000번대: 3번 미터(METER index 2) 데이터/설정 베이스 오프셋 */
 #define	ADD_ADE9000_M3 20000
-/* M1/M2 RW 포켓(절대 16870~17219 / 26870~27219) — 채널 내 offset 6870~7219 */
-#define	MBAD_RW_OFF_START	6870
-#define	MBAD_RW_OFF_END		7220	/* exclusive: last reg 7219 */
+/* M1/M2 RW 포켓(절대 16520~16869 / 26520~26869) — 채널 내 offset 6520~6869 */
+#define	MBAD_RW_OFF_START	6520
+#define	MBAD_RW_OFF_END		6870	/* exclusive: last reg 6869 */
 #define	MBAD_M1_RW_START	(ADD_ADE9000_M2 + MBAD_RW_OFF_START)
 #define	MBAD_M1_RW_END		(ADD_ADE9000_M2 + MBAD_RW_OFF_END)
 #define	MBAD_M2_RW_START	(ADD_ADE9000_M3 + MBAD_RW_OFF_START)
@@ -1884,11 +1884,9 @@ typedef struct {
 	LOG_DATA	 log;			// 4700
 	ENERGY_LOG	elog[2];// 5000
 	DEMAND_LOG	dlog;		// 5400 - last da demand log
-	//SAMPLE_BUF sample;	// 5800	- reserved area
-	MAXMIN	lastmaxmin;	// 5600
 
-	ITIC_EVT_LIST	itic;	// 5950
-	ITIC_EVT_LIST	itic2;// 6410
+	ITIC_EVT_LIST	itic;	// 5600
+	ITIC_EVT_LIST	itic2;// 6060
 
 	/* PQE/Trend/Alarm 설정 — METER_DEF에서 IOM_DATA(iom) 직전 영역( Modbus P2~P4 ) */
 	PQEVENT pqevt[4];		/* 0: OC, 1: sag, 2:swell, 3: Interruption */
