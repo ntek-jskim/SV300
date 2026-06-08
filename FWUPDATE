@@ -88,3 +88,11 @@
 2026/06/06 : [TODO] CH0 설정 read(meter.meter flat) vs write(pmset/pqevt) 경로 통일·offsetof 검증
 2026/06/06 : [TODO] app_main tid_wave[1/2]·trend M0 고정 등 CH1/CH2 런타임 연결
 2026/06/06 : [TODO] Modbus FC3/6/16·명령 큐 실기(3CH) 통합 테스트
+2026/06/06 : meter.c maxMinRmsFreq/Power/THD — 전역 pmm 제거, meter[id].maxmin CH별 저장
+2026/06/06 : meter.c 수요전력 — 전역 pdm/pdmlog 제거, energy_scan·수요갱신 meter[id].dm CH별 저장
+2026/06/06 : rmsWin CH별 버퍼·RMSLog 전 CH 스캔, readPhaseFastRMS/RMSCapture id 연동
+2026/06/06 : rmsCap[METER_CH_COUNT] — PQ RMS 캡처 CH별 분리, FS 큐 포인터 per-id
+2026/06/06 : Trend_Task meter[mid].trend·almTbl[mid], wbCap/wbCapLF CH별 버퍼
+2026/06/06 : meter.c·meter.h — 미사용 전역(elist/pqrpt/pEgy/pRPT/pVQ/pqLog/palm/palist/pelist/pAlmFifo/pld/pmset2·3/mutWF/def_ip 등) 및 extern 정리
+2026/06/06 : meter.c 전역 pHD 제거, makeRandomData 고조파 루프 CH별 meter[id].hd 로컬 사용
+2026/06/06 : makeRandomData for(id) 닫는 중괄호 누락 수정(Keil C89 빌드 오류)

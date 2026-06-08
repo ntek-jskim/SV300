@@ -2029,33 +2029,19 @@ extern SIMPLE_DATA	*psmap;
 extern METER_DEF	meter[];
 extern ENERGY_NVRAM egyNvr;
 
-extern MAXMIN 	*pmm;
 extern METER_CAL	*pcal;
 extern SETTINGS		db;
 extern SETTINGS		setting[];
 extern METERING 	*pmeter;
 extern SETTINGS		*pdb, *pdbk;
-extern uint16_t		*pmset, *pmset2;
-#if METER_CH_COUNT > 2
-extern uint16_t		*pmset3;
-#endif
+extern uint16_t		*pmset;
 extern METER_INFO *pInfo;
 //extern CMD_AREA 	*pcmd;
 //extern UTIL_AREA	*putil;
-extern HARMONICS  *pHD;
 //extern WV16_DATA	*pwv;
 //extern WV16_BUF	  *pwbuf;
-extern DEMAND			*pdm;
-extern DEMAND_LOG	*pdmlog;
-
-extern ALARM_FIFO *pAlmFifo;
-
-extern VQDATA     *pVQ;
 extern WAVEFORM_L16	*pWFL16;
 //extern ENERGY_NVRAM egyNvr;
-extern ALARM_STATUS *palm;
-extern ALARM_LIST	*palist;
-extern EVENT_LIST	*pelist;
 //extern ALARM_LOG  *palog;
 //extern ALARM_LOG  *pevt;
 //extern ALARM_SET  *paset;
@@ -2067,21 +2053,16 @@ extern COMM_CFG *pComm;
 extern IO_CFG	*piocfg;
 //extern EXT_MOD_CFG *piocfg, *piobk;
 //extern METER_DEF	meter;
-extern ENERGY *pEgy;
 extern CNTL_DATA	*pcntl;
-extern EN50160 *pRPT;
-extern LOG_DATA	*pld;
-
 
 extern WAVE_8K_BUF wbFFT8k[METER_CH_COUNT];
 extern WAVE_PGBUF	wQ[METER_CH_COUNT];
 //extern WAVE8k_PGBUF	 w8kQ;
 extern WAVE_32K_BUF wbCap32k[];
 //extern WAVE32k_PGBUF w32kQ;
-extern QualLogData	*pqLog;
 //extern VarDataSet *pVds;
 extern SAMPLE_BUF *pSp;
-extern FAST_RMS_BUF rmsWin;
+extern FAST_RMS_BUF rmsWin[METER_CH_COUNT];
 
 extern DAQ_BUF	daq;
 

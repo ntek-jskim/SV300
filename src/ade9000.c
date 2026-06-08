@@ -568,7 +568,7 @@ void calcAbsAngle(int id)
 		meter[id].meter.Uangle[2] = meter[id].cntl.Uangle[2];				// V1-V3
 		
 		meter[id].meter.Iangle[0] = _toAngle(meter[id].meter.Uangle[0] + meter[id].cntl.UIangle[0]);	// V1-I1
-		pmeter->Iangle[1] = 0;
+		meter[id].meter.Iangle[1] = 0;
 		meter[id].meter.Iangle[2] = _toAngle(meter[id].meter.Uangle[2] + meter[id].cntl.UIangle[2]);	// V1-I3
 		
 		meter[id].meter.Pangle[0] = (meter[id].meter.I[0] == 0) ? 0 : 360 - meter[id].cntl.UIangle[0];
@@ -1544,13 +1544,16 @@ void readPhaseFastRMS(uint8_t id) {
 	uint32_t rms;
 	FAST_RMS *pFast;
 	
+	if (id >= METER_CH_COUNT)
+		return;
+
 	for (addr = 0x219, i=0; i<3; i++, addr+=0x20) {
 		read_reg32(id, addr+0, &ade9000[id].irmsFast[i]);
 		read_reg32(id, addr+1, &ade9000[id].urmsFast[i]);
 	}		
 		
-	pFast = &rmsWin.buf[rmsWin.fr];
-	ix = rmsWin.ix;
+	pFast = &rmsWin[id].buf[rmsWin[id].fr];
+	ix = rmsWin[id].ix;
 	for (i=0; i<3; i++) {
 		pFast->I[i][ix] = ade9000[id].irmsFast[i];
 		pFast->U[i][ix] = ade9000[id].urmsFast[i];	
@@ -1563,14 +1566,14 @@ void readPhaseFastRMS(uint8_t id) {
 	
 	if (++ix >= meter[id].cntl.nFastRMS) {
 		ix =0;
-		if (++rmsWin.fr >= N_FASTRMS_BUF) rmsWin.fr = 0;
+		if (++rmsWin[id].fr >= N_FASTRMS_BUF) rmsWin[id].fr = 0;
 #ifdef __FREERTOS		
 		if (tid_rmslog != 0) xTaskNotify(tid_rmslog, 0x1, eSetBits);
 #else
 		if (tid_rmslog != 0) os_evt_set(0x1, tid_rmslog);
 #endif		
 	}
-	rmsWin.ix = ix;
+	rmsWin[id].ix = ix;
 }
 
 // 10/12 cycle 단위로 호출된다(200ms) 

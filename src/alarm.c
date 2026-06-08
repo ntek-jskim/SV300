@@ -19,8 +19,8 @@ extern void assertAlarmOutput(int point, int state);
 COMP_TBL	almTbl[METER_CH_COUNT][MAX_ALARM_CH] __attribute__ ((section ("EXT_RAM"), zero_init));
 //COMP_TBL almTbl[100];
 
-TREND_INFO trdInf[4];
-TREND_RECORD	row[4];	// trend data
+TREND_INFO trdInf[METER_CH_COUNT][4];
+TREND_RECORD	row[METER_CH_COUNT][4];	// trend data per meter CH
 //extern MGEM3600_DATA	gems3600[];
 
 static void setAlarmChannel(int id, int ix, char *pname, float norm, float *src) {
@@ -1031,33 +1031,42 @@ void buildTrendSetting() {
 
 uint16_t trdTime[] = {1,2,3,5,10,15,20,30,60};
 
-void getTrendData(int gid,  uint16_t *chan) {
+void getTrendData(int mid, int gid, uint16_t *chan) {
 	int i;
-	
-	row[gid].ts = sysTick1s;
-	row[gid].valid = 1;
+
+	if (mid < 0 || mid >= METER_CH_COUNT)
+		return;
+
+	row[mid][gid].ts = sysTick1s;
+	row[mid][gid].valid = 1;
 	
 	for (i=0; i<16; i++) {
 		if (chan[i] == 0) {
-			row[gid].pen[i] = 0;
+			row[mid][gid].pen[i] = 0;
 		}
-		else if (chan[i] < MAX_ALARM_CH && almTbl[0][chan[i]].src != NULL) {
-			row[gid].pen[i] = *almTbl[0][chan[i]].src;
+		else if (chan[i] < MAX_ALARM_CH && almTbl[mid][chan[i]].src != NULL) {
+			row[mid][gid].pen[i] = *almTbl[mid][chan[i]].src;
 		}
 	}	
 }
 
-// 그룹-년-월로 구성된다. 즉 월마다 파일이 생성된다.
-void getTrendFile(char *str, int g) {
-	sprintf(str, "%s%d_%04d%02dV%d.d", TREND_FILE, g, pcntl->tod.tm_year, pcntl->tod.tm_mon, 0);
+// 그룹-년-월(·CH)로 구성된다. 즉 월마다 파일이 생성된다.
+void getTrendFile(char *str, int mid, int g) {
+	if (mid == 0)
+		sprintf(str, "%s%d_%04d%02dV%d.d", TREND_FILE, g, pcntl->tod.tm_year, pcntl->tod.tm_mon, 0);
+	else
+		sprintf(str, "%s%d_%04d%02dM%d.d", TREND_FILE, g, pcntl->tod.tm_year, pcntl->tod.tm_mon, mid);
 }
 
-void getTrendBackupFile(char *str, int g) {
-	sprintf(str, "trd%d_%04d%02dV%d_%02d.d", g, pcntl->tod.tm_year, pcntl->tod.tm_mon, 0, pcntl->tod.tm_mday);
+void getTrendBackupFile(char *str, int mid, int g) {
+	if (mid == 0)
+		sprintf(str, "trd%d_%04d%02dV%d_%02d.d", g, pcntl->tod.tm_year, pcntl->tod.tm_mon, 0, pcntl->tod.tm_mday);
+	else
+		sprintf(str, "trd%d_%04d%02dM%d_%02d.d", g, pcntl->tod.tm_year, pcntl->tod.tm_mon, mid, pcntl->tod.tm_mday);
 }
 
 // 2020-4-8, Trend Header와 현재 Trend 설정을 비교하여 다르면 기존파일 이름에 수정날짜 이름 추가하여 변경한다 
-int appendTrendRcrd(int g) {
+int appendTrendRcrd(int mid, int g) {
 	FILE *fp;
 #ifdef USE_CMSIS_RTOS2	
    fsFileInfo fi;	
@@ -1066,62 +1075,69 @@ int appendTrendRcrd(int g) {
 #endif
 	int j;
 	char fn[64];
+
+	if (mid < 0 || mid >= METER_CH_COUNT)
+		return 0;
 	
-	getTrendFile(fn, g);
+	getTrendFile(fn, mid, g);
 	
 	fi.fileID = 0;      
 	if (ffind (fn, &fi)) {
 		printf("createTrendFile(%s) ...\n", fn);
 		fp = fopen(fn, "wb");
 		if (fp) {
-			trdInf[g].ts = sysTick1s;;
-			trdInf[g].type = 1;
-			trdInf[g].version = meter[0].trend[g].version;
+			trdInf[mid][g].ts = sysTick1s;;
+			trdInf[mid][g].type = 1;
+			trdInf[mid][g].version = meter[mid].trend[g].version;
 			for (j=0; j<16; j++) {
-				trdInf[g].channel[j] = meter[0].trend[g].chan[j];
+				trdInf[mid][g].channel[j] = meter[mid].trend[g].chan[j];
 			}								
-			fwrite(&trdInf[g], sizeof(trdInf[0]), 1, fp);	// 마지막에 새 record 기록한다 
-			fwrite(&row[g], sizeof(row[0]), 1, fp);			
+			fwrite(&trdInf[mid][g], sizeof(trdInf[0][0]), 1, fp);
+			fwrite(&row[mid][g], sizeof(row[0][0]), 1, fp);			
 			fclose(fp);				
 		}		
 	}
 	else {	
-		printf("appendTrendFile(%s), g=%d, ts=%d, size = %d\n", fn, g, row[g].ts, fi.size);
+		printf("appendTrendFile(%s), m=%d, g=%d, ts=%d, size = %d\n", fn, mid, g, row[mid][g].ts, fi.size);
 		fp = fopen(fn, "ab");
 		if (fp) {
-			fwrite(&row[g], sizeof(TREND_INFO), 1, fp);			
+			fwrite(&row[mid][g], sizeof(TREND_RECORD), 1, fp);			
 			fclose(fp);				
 		}
 	}
+	return 0;
 }
 
 // trend file header와 trend 설정을 비교한다 
 void checkTrendHeader() {
-	int i, j, err=0;
+	int mid, i, j, err=0;
 	char fn[64], fnew[64];
 	FILE *fp;
 	
-	for (i=0; i<4; i++) {
-		if (meter[0].trend[i].active == 0) 
-			continue;
-		
-		getTrendFile(fn, i);
-		fp = fopen(fn, "rb");
-		if (fp) {
-			fread(&trdInf[i], sizeof(trdInf), 1, fp);			
-			fclose(fp);	
-
-			for (err=0, j=0; j<16; j++) {
-				if (trdInf[i].channel[j] != meter[0].trend[i].chan[j]) {
-					printf("### Trend info changed, trdInf[%d][%d] = %d, %d\n", i, j, trdInf[i].channel[j], meter[0].trend[i].chan[j]);
-					err++;
-				}
-			}
+	for (mid = 0; mid < ACTIVE_METER_CH_COUNT; mid++) {
+		for (i=0; i<4; i++) {
+			if (meter[mid].trend[i].active == 0) 
+				continue;
 			
-			if (err) {
-				getTrendBackupFile(fnew, i);	// 경로는 제거하고 파일이름만 넣는다 
-				frename(fn, fnew);
-				printf("### rename %s to %s\n", fn, fnew);
+			getTrendFile(fn, mid, i);
+			fp = fopen(fn, "rb");
+			if (fp) {
+				fread(&trdInf[mid][i], sizeof(trdInf[mid][i]), 1, fp);			
+				fclose(fp);	
+
+				for (err=0, j=0; j<16; j++) {
+					if (trdInf[mid][i].channel[j] != meter[mid].trend[i].chan[j]) {
+						printf("### Trend info changed M%d trdInf[%d][%d] = %d, %d\n",
+							mid, i, j, trdInf[mid][i].channel[j], meter[mid].trend[i].chan[j]);
+						err++;
+					}
+				}
+				
+				if (err) {
+					getTrendBackupFile(fnew, mid, i);
+					frename(fn, fnew);
+					printf("### rename %s to %s\n", fn, fnew);
+				}
 			}
 		}
 	}
@@ -1129,7 +1145,7 @@ void checkTrendHeader() {
 
 void Trend_Task(void *arg)		
 {
-	int i, j, itv;	
+	int mid, i, itv;	
 	int lastsec=pcntl->tod.tm_sec;
 	int lastmin=pcntl->tod.tm_min;
 //	FINFO info;
@@ -1148,23 +1164,27 @@ void Trend_Task(void *arg)
 		
 		lastmin  = pcntl->tod.tm_min;
 		
-		// trend data 생성
-		for (i=0; i<4; i++) {			
-			if (meter[0].trend[i].active == 0) {
-				continue;
-			}
-				
-			itv = (meter[0].trend[i].interval >= 8) ? 10 : trdTime[meter[0].trend[i].interval];
-			if ((pcntl->tod.tm_min % itv) == 0) {				
-				getTrendData(i, meter[0].trend[i].chan);
+		// trend data 생성 (meter CH × trend group)
+		for (mid = 0; mid < ACTIVE_METER_CH_COUNT; mid++) {
+			for (i=0; i<4; i++) {			
+				if (meter[mid].trend[i].active == 0) {
+					continue;
+				}
+					
+				itv = (meter[mid].trend[i].interval >= 8) ? 10 : trdTime[meter[mid].trend[i].interval];
+				if ((pcntl->tod.tm_min % itv) == 0) {				
+					getTrendData(mid, i, meter[mid].trend[i].chan);
+				}
 			}
 		}
 			
 		// 저장 기간 최대 1년
-		for (i=0; i<4; i++) {
-			if (row[i].valid) {
-				appendTrendRcrd(i);
-				row[i].valid = 0;
+		for (mid = 0; mid < ACTIVE_METER_CH_COUNT; mid++) {
+			for (i=0; i<4; i++) {
+				if (row[mid][i].valid) {
+					appendTrendRcrd(mid, i);
+					row[mid][i].valid = 0;
+				}
 			}
 		}
 	}

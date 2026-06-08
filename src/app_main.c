@@ -384,7 +384,7 @@ void db_init(void)
 	loadHwSettings(pcal);	
 	setMeterInfo();
 
-#if 1
+#if 0
 	for (id = 0; id < METER_CH_COUNT; id++) {
 			initSettings(id);
 			initExtSettings(id);

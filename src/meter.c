@@ -15,11 +15,10 @@
 #define	FW_VER	0001
 #define	FW_BUILD_YEAR 26
 #define	FW_BUILD_MON  6
-#define	FW_BUILD_DAY  4
+#define	FW_BUILD_DAY  8
 
 #define	SQRT_2	 1.414213562 
 
-//METER_DEF	meter __attribute__ ((section ("EXT_RAM"), zero_init));
 #ifdef CH3
 METER_DEF	meter[3] __attribute__ ((section ("EXT_RAM"), zero_init));
 #else
@@ -27,68 +26,36 @@ METER_DEF	meter[2] __attribute__ ((section ("EXT_RAM"), zero_init));
 #endif
 METER_CAL	meterCal __attribute__ ((section ("EXT_RAM"), zero_init));
 SETTINGS	db __attribute__ ((section ("EXT_RAM"), zero_init));
-EVENT_LIST	elist __attribute__ ((section ("EXT_RAM"), zero_init));
 #ifdef CH3
 ADE9000_REG ade9000[3] __attribute__ ((section ("EXT_RAM"), zero_init));
 #else
 ADE9000_REG ade9000[2] __attribute__ ((section ("EXT_RAM"), zero_init));
 #endif
-EN50160 pqrpt __attribute__ ((section ("EXT_RAM"), zero_init));;
 
 SIMPLE_DATA	smap __attribute__ ((section ("EXT_RAM"), zero_init));
 SIMPLE_DATA	*psmap=&smap;
 
-//METER_CAL	*pcal=&meter[0].cal;
 METER_CAL	*pcal=&meterCal;
 
 SETTINGS	*pdb=&db;
 SETTINGS	*pdbk=&meter[0].setting;
 uint16_t	*pmset=METER_MB_SETTING_REGS(meter[0]);
-uint16_t	*pmset2=METER_MB_SETTING_REGS(meter[1]);
-#if METER_CH_COUNT > 2
-uint16_t	*pmset3=METER_MB_SETTING_REGS(meter[2]);
-#endif
 
 METERING 	*pmeter=&meter[0].meter;
 CNTL_DATA	*pcntl=&meter[0].cntl;
-HARMONICS *pHD=&meter[0].hd;
 METER_INFO *pInfo=&meter[0].info;
-ENERGY *pEgy=&meter[0].egy;
-EN50160 *pRPT=meter[0].rpt;
-VQDATA *pVQ=&meter[0].vq;
-DEMAND *pdm=&meter[0].dm;
-DEMAND_LOG *pdmlog=&meter[0].dlog;	// demand last day log
-MAXMIN *pmm=&meter[0].maxmin; 
 IOM_DATA *piom=&meter[0].iom;
-//QualDataSet *pQds = &meter.qds;
-//VarDataSet *pVds = &meter.vds;
-QualLogData	*pqLog=&meter[0].qdLog;
-ALARM_STATUS *palm = &meter[0].alarm;
 
-//ALARM_LIST	*palist=&meter[0].alist;
-//EVENT_LIST	*pelist=&meter[0].elist;
-ALARM_LIST	*palist=&meter[0].alist;
-EVENT_LIST	*pelist=&elist;
-
-//ADE9000_REG _ade9000, *pchip=&_ade9000;
 TIME_STAMP freezeTod;
-//COMM_CFG *pComm=&meter.db.comm;
 IO_CFG	*piocfg=&meter[0].setting.iom;
-#if 1	// 2023-9
-ALARM_FIFO *pAlmFifo=&meter[0].alarmFifo;
-#endif
-LOG_DATA	*pld=&meter[0].log;
 
-//WAVE8k_PGBUF	w8kQ  __attribute__ ((section ("EXT_RAM"), zero_init));
 WAVE_PGBUF	wQ[METER_CH_COUNT] __attribute__ ((section ("EXT_RAM"), zero_init));
 WAVE_8K_BUF wbFFT8k[METER_CH_COUNT] __attribute__ ((section ("EXT_RAM"), zero_init)); 
 WAVE_WINDOW_BLK wvblk[METER_CH_COUNT] __attribute__ ((section ("EXT_RAM"), zero_init)); 
-WAVE_HF_CAP wbCap  __attribute__ ((section ("EXT_RAM"), zero_init)); 
-WAVE_LF_CAP wbCapLF __attribute__ ((section ("EXT_RAM"), zero_init)); 
-//WAVE_LF_CAP wbLF  __attribute__ ((section ("EXT_RAM"), zero_init)); 
-//int32_t TrstBuf[3][1280];	// Transient Buffer
-RMS_CAP	rmsCap __attribute__ ((section ("EXT_RAM"), zero_init)); 
-FAST_RMS_BUF rmsWin __attribute__ ((section ("EXT_RAM"), zero_init)); 
+WAVE_HF_CAP wbCap[METER_CH_COUNT] __attribute__ ((section ("EXT_RAM"), zero_init)); 
+WAVE_LF_CAP wbCapLF[METER_CH_COUNT] __attribute__ ((section ("EXT_RAM"), zero_init)); 
+RMS_CAP	rmsCap[METER_CH_COUNT] __attribute__ ((section ("EXT_RAM"), zero_init)); 
+FAST_RMS_BUF rmsWin[METER_CH_COUNT] __attribute__ ((section ("EXT_RAM"), zero_init)); 
 FFT_CZT fftMem  __attribute__ ((section ("EXT_RAM"), zero_init)); 
 
 #ifdef	DAQ
@@ -98,20 +65,10 @@ DAQ_BUF	daq	__attribute__ ((section ("EXT_RAM"), zero_init));
 FS_Q	fsQ;
 FFT_CZT *pFFT = &fftMem;
 
-OsMutex	mutWF;
 extern OsTaskId  tid_fft;
 ENERGY_NVRAM 	egyNvr;
 
-//extern volatile uint64_t sysTick64;
-//extern uint32_t sysTickDemand, sysTick15m, sysTick1s, sysTick32;
-extern int getPQBinIndex(void);
 extern void assertEventOutput(int, int);
-
-const uint16_t def_ip[] = {192,168,8,172};
-const uint16_t def_sm[] = {255,255,255,0};
-const uint16_t def_gw[] = {192,168,8,1};
-const uint16_t def_dn[] = {168,126,63,1};
-
 
 int		saveLockEnergy=0;
 
@@ -1141,9 +1098,13 @@ int updateMaxMin(MAXMIN_DATA *pmm, float comp) {
 
 int maxMinRmsFreq(int id)
 {
-	int i, ix=0, changeF=0;
-	//MAXMIN_DATA *comp;
-	
+	int i, changeF=0;
+	MAXMIN *pmm;
+
+	if (id < 0 || id >= METER_CH_COUNT)
+		return 0;
+	pmm = &meter[id].maxmin;
+
 	if (meter[id].cntl.online3++ < 5) return 0;
 	
 	pmm->fr += updateMaxMin(&pmm->Freq, meter[id].meter.Freq);
@@ -1168,9 +1129,13 @@ int maxMinRmsFreq(int id)
 }
 
 int maxMinPower(int id) {
-	int i, ix=0, changeF=0;
-	//MAXMIN_DATA *comp;
-	
+	int i, changeF=0;
+	MAXMIN *pmm;
+
+	if (id < 0 || id >= METER_CH_COUNT)
+		return 0;
+	pmm = &meter[id].maxmin;
+
 	if (meter[id].cntl.online3 < 5) return 0;
 	
 	for (i=0; i<4; i++) {
@@ -1183,8 +1148,13 @@ int maxMinPower(int id) {
 }
 
 int maxMinTHD(int id) {
-	int i, ix=0, changeF=0;
-	
+	int i, changeF=0;
+	MAXMIN *pmm;
+
+	if (id < 0 || id >= METER_CH_COUNT)
+		return 0;
+	pmm = &meter[id].maxmin;
+
 	if (meter[id].cntl.online3 < 5) return 0;
 
 #ifdef	VFRMS
@@ -1596,7 +1566,7 @@ int TransientEvent(int id, WAVE_WINDOW *pww, int bx, TS_CNTL *ptrg, int mode) {
 			etype = 0;
 			if (ptrg->absval[ph] > ptrg->peakLevel) {
 				// 25-08-13 jskim : rms 값이 peak값보다 클경우(transient가 아닌 고전압 또는 설정오류)
-				if((mode == 0 && meter[0].meter.U[ph] < ptrg->peakLevel) ||(mode == 1 && meter[id].meter.I[ph] < ptrg->peakLevel))
+				if((mode == 0 && meter[id].meter.U[ph] < ptrg->peakLevel) ||(mode == 1 && meter[id].meter.I[ph] < ptrg->peakLevel))
 					etype = 1;
 			}
 			else if (abs(wph->w[ph][i]-ptrg->lastVal[ph]) > ptrg->rocLevel) {				
@@ -1651,8 +1621,8 @@ int TransientEvent(int id, WAVE_WINDOW *pww, int bx, TS_CNTL *ptrg, int mode) {
 								
 				// wave capture
 				if (ptrg->action == 2) {
-					wbCap.ts = sysTick64;
-					waveCaptureHF(id, i, pcur, pprev, pnext, &wbCap, mode);				
+					wbCap[id].ts = sysTick64;
+					waveCaptureHF(id, i, pcur, pprev, pnext, &wbCap[id], mode);				
 					res = ptrg->capF = 1;				
 				}			
 			}
@@ -1698,15 +1668,17 @@ int TransientEvent(int id, WAVE_WINDOW *pww, int bx, TS_CNTL *ptrg, int mode) {
 		i++;
 	}
 	
-	if (ptrg->capF) {		
+	if (ptrg->capF) {
+		if (id < 0 || id >= METER_CH_COUNT)
+			return res;
 		if (mode == 0) 
 			strcpy(path, "\\Trg_TVC\\WTV_");		
 		else
 			strcpy(path, "\\Trg_TVC\\WTC_");		
 		getTrgFileName(path, ptrg->ts1, fsmsg.fname);		
 		strcpy(fsmsg.mode, "wb");
-		fsmsg.pbuf = &wbCap;
-		fsmsg.size = sizeof(wbCap);
+		fsmsg.pbuf = &wbCap[id];
+		fsmsg.size = sizeof(WAVE_HF_CAP);
 		putFsQ(&fsmsg);
 		
 		ptrg->capF = 0;
@@ -2391,66 +2363,69 @@ void makeRandomData(void) {
 			meter[id].meter.Ins[i] = makeRdData(56, i,8);
 			meter[id].meter.Ibal[i] = makeRdData(63, i,9);
 		}
-	
-	}
 
-	for(i=0; i<3; i++) {
-		for(j=0; j<64; j++) {
-			if(j < 15) {
-				if(j%2==0) {
-					pHD->U[i][j] = makeRdData(2+i, i, 3);
-					pHD->Upp[i][j] = makeRdData(1+i, i, 3);
-					pHD->I[i][j] = makeRdData(5+i, i, 3);
-				}
-				else {
-					pHD->U[i][j] = makeRdData(11+i, i, 5);
-					pHD->Upp[i][j] = makeRdData(21+i, i, 5);
-					pHD->I[i][j] = makeRdData(15+i, i, 5);
-				}
-			}
-			else {
-				if(j%2==0) {
-					pHD->U[i][j] = makeRdData(1+i, i, 5);
-					pHD->Upp[i][j] = makeRdData(2.5+i, i,5);
-					pHD->I[i][j] = makeRdData(1.6+i, i, 5);
-				}
-				else {
-					pHD->U[i][j] = makeRdData(5+i, i, 4);
-					pHD->Upp[i][j] = makeRdData(7.5+i, i, 4);
-					pHD->I[i][j] = makeRdData(10+i, i, 4);
+		{
+			HARMONICS *pHD = &meter[id].hd;
+
+			for(i=0; i<3; i++) {
+				for(j=0; j<64; j++) {
+					if(j < 15) {
+						if(j%2==0) {
+							pHD->U[i][j] = makeRdData(2+i, i, 3);
+							pHD->Upp[i][j] = makeRdData(1+i, i, 3);
+							pHD->I[i][j] = makeRdData(5+i, i, 3);
+						}
+						else {
+							pHD->U[i][j] = makeRdData(11+i, i, 5);
+							pHD->Upp[i][j] = makeRdData(21+i, i, 5);
+							pHD->I[i][j] = makeRdData(15+i, i, 5);
+						}
+					}
+					else {
+						if(j%2==0) {
+							pHD->U[i][j] = makeRdData(1+i, i, 5);
+							pHD->Upp[i][j] = makeRdData(2.5+i, i,5);
+							pHD->I[i][j] = makeRdData(1.6+i, i, 5);
+						}
+						else {
+							pHD->U[i][j] = makeRdData(5+i, i, 4);
+							pHD->Upp[i][j] = makeRdData(7.5+i, i, 4);
+							pHD->I[i][j] = makeRdData(10+i, i, 4);
+						}
+					}
 				}
 			}
 		}
+
+		// total kwh
+		meter[id].egy.Ereg32[0].eh[0][0] = 123456;
+		meter[id].egy.Ereg32[0].eh[0][1] = 654;
+		// this kwh
+		meter[id].egy.Ereg32[1].eh[0][0] = 7890;
+		meter[id].egy.Ereg32[1].eh[0][1] = 543;
+		// last kwh
+		meter[id].egy.Ereg32[2].eh[0][0] = 123;
+		meter[id].egy.Ereg32[2].eh[0][1] = 456;
+
+		// total kvarh
+		meter[id].egy.Ereg32[0].eh[1][0] = 11234;
+		meter[id].egy.Ereg32[0].eh[1][1] = 654321;
+		// this kvarh
+		meter[id].egy.Ereg32[1].eh[1][0] = 1356;
+		meter[id].egy.Ereg32[1].eh[1][1] = 785;
+		// last kvarh
+		meter[id].egy.Ereg32[2].eh[1][0] = 548;
+		meter[id].egy.Ereg32[2].eh[1][1] = 145;
+
+		// total kvah
+		meter[id].egy.Ereg32[0].eh[2][0] = meter[id].egy.Ereg32[0].eh[0][0]+ meter[id].egy.Ereg32[0].eh[0][1] + meter[id].egy.Ereg32[0].eh[1][0]+ meter[id].egy.Ereg32[0].eh[1][1];
+		// this kvah
+		meter[id].egy.Ereg32[1].eh[2][0] = meter[id].egy.Ereg32[1].eh[0][0]+ meter[id].egy.Ereg32[1].eh[0][1] + meter[id].egy.Ereg32[1].eh[1][0]+ meter[id].egy.Ereg32[1].eh[1][1];
+		// last kvah
+		meter[id].egy.Ereg32[2].eh[2][0] = meter[id].egy.Ereg32[2].eh[0][0]+ meter[id].egy.Ereg32[2].eh[0][1] + meter[id].egy.Ereg32[2].eh[1][0]+ meter[id].egy.Ereg32[2].eh[1][1];
+
+		//	srand(time(NULL));
 	}
-
-	// total kwh
-	meter[id].egy.Ereg32[0].eh[0][0] = 123456;
-	meter[id].egy.Ereg32[0].eh[0][1] = 654;
-	// this kwh
-	meter[id].egy.Ereg32[1].eh[0][0] = 7890;
-	meter[id].egy.Ereg32[1].eh[0][1] = 543;
-	// last kwh
-	meter[id].egy.Ereg32[2].eh[0][0] = 123;
-	meter[id].egy.Ereg32[2].eh[0][1] = 456;
-
-	// total kvarh
-	meter[id].egy.Ereg32[0].eh[1][0] = 11234;
-	meter[id].egy.Ereg32[0].eh[1][1] = 654321;
-	// this kvarh
-	meter[id].egy.Ereg32[1].eh[1][0] = 1356;
-	meter[id].egy.Ereg32[1].eh[1][1] = 785;
-	// last kvarh
-	meter[id].egy.Ereg32[2].eh[1][0] = 548;
-	meter[id].egy.Ereg32[2].eh[1][1] = 145;
-
-	// total kvah
-	meter[id].egy.Ereg32[0].eh[2][0] = meter[id].egy.Ereg32[0].eh[0][0]+ meter[id].egy.Ereg32[0].eh[0][1] + meter[id].egy.Ereg32[0].eh[1][0]+ meter[id].egy.Ereg32[0].eh[1][1];
-	// this kvah
-	meter[id].egy.Ereg32[1].eh[2][0] = meter[id].egy.Ereg32[1].eh[0][0]+ meter[id].egy.Ereg32[1].eh[0][1] + meter[id].egy.Ereg32[1].eh[1][0]+ meter[id].egy.Ereg32[1].eh[1][1];
-	// last kvah
-	meter[id].egy.Ereg32[2].eh[2][0] = meter[id].egy.Ereg32[2].eh[0][0]+ meter[id].egy.Ereg32[2].eh[0][1] + meter[id].egy.Ereg32[2].eh[1][0]+ meter[id].egy.Ereg32[2].eh[1][1];
-
-	//	srand(time(NULL));
 }
 
 
@@ -2668,14 +2643,16 @@ void FS_task(void *arg)
 }
 
 
-FAST_RMS *_getFastRMSBuf(int ix) 
+FAST_RMS *_getFastRMSBuf(int id, int ix) 
 {
+	if (id < 0 || id >= METER_CH_COUNT)
+		id = 0;
 	if (ix < 0) 
-		return &rmsWin.buf[N_FASTRMS_BUF-1];
+		return &rmsWin[id].buf[N_FASTRMS_BUF-1];
 	else if (ix == N_FASTRMS_BUF) 
-		return &rmsWin.buf[0];
+		return &rmsWin[id].buf[0];
 	else 
-		return &rmsWin.buf[ix];
+		return &rmsWin[id].buf[ix];
 }
 
 
@@ -2685,11 +2662,17 @@ void RMSCapture(int id, int ix) {
 	int i, pos, n, sx, eType;
 	FILE *fp;
 	FS_MSG fsmsg;
-	PQ_EVENT *pqE = &meter[id].cntl.pqe;
+	PQ_EVENT *pqE;
+	RMS_CAP *pCap;
 	char path[64];
+
+	if (id < 0 || id >= METER_CH_COUNT)
+		return;
+	pCap = &rmsCap[id];
+	pqE = &meter[id].cntl.pqe;
 	
-	pCur  = _getFastRMSBuf(ix);
-	pNext = _getFastRMSBuf(ix+1);
+	pCur  = _getFastRMSBuf(id, ix);
+	pNext = _getFastRMSBuf(id, ix+1);
 	
 	if (pqE->rQ.fr == pqE->rQ.re) 
 		return;
@@ -2698,9 +2681,9 @@ void RMSCapture(int id, int ix) {
 	
 	if (pCur->ts <= Ts && Ts < pNext->ts) {				
 		i = 1000./db.freq;	// 시간간격		
-		rmsCap.pos  = pos = (Ts-pCur->ts)/i;	// sag 시작위치 검색
-		rmsCap.ts   = Ts;
-		rmsCap.mask = pqE->rQ.Q[pqE->rQ.re].mask;
+		pCap->pos  = pos = (Ts-pCur->ts)/i;	// sag 시작위치 검색
+		pCap->ts   = Ts;
+		pCap->mask = pqE->rQ.Q[pqE->rQ.re].mask;
 		eType       = pqE->rQ.Q[pqE->rQ.re].eType;
 		
 		pqE->rQ.re = (pqE->rQ.re+1)%8;
@@ -2708,31 +2691,31 @@ void RMSCapture(int id, int ix) {
 		printf("===> PQ EVENT(%d): %d, %lld, %lld, %d\n", eType, ix, pCur->ts, Ts, pos);
 		
 		// 현 위치를 기준으로 1초 전 데이터 부터, 10초간 데이터 복사
-		pWin = _getFastRMSBuf(ix-1);				
+		pWin = _getFastRMSBuf(id, ix-1);				
 		
 		if (eType == E_OC) {
 			for (i=0; i<1200; i++) {
-				rmsCap.rms[0][i] = scaleIrms(id, pWin->I[0][pos]);
-				rmsCap.rms[1][i] = scaleIrms(id, pWin->I[1][pos]);
-				rmsCap.rms[2][i] = scaleIrms(id, pWin->I[2][pos]);
+				pCap->rms[0][i] = scaleIrms(id, pWin->I[0][pos]);
+				pCap->rms[1][i] = scaleIrms(id, pWin->I[1][pos]);
+				pCap->rms[2][i] = scaleIrms(id, pWin->I[2][pos]);
 				
 				if (++pos >= meter[id].cntl.nFastRMS) {
 					pos = 0;
 					if (++ix >= N_FASTRMS_BUF) ix = 0;
-					pWin = _getFastRMSBuf(ix-1);
+					pWin = _getFastRMSBuf(id, ix-1);
 				}
 			}			
 		}
 		else {
 			for (i=0; i<1200; i++) {
-				rmsCap.rms[0][i] = scaleVrms(id, pWin->U[0][pos]);
-				rmsCap.rms[1][i] = scaleVrms(id, pWin->U[1][pos]);
-				rmsCap.rms[2][i] = scaleVrms(id, pWin->U[2][pos]);
+				pCap->rms[0][i] = scaleVrms(id, pWin->U[0][pos]);
+				pCap->rms[1][i] = scaleVrms(id, pWin->U[1][pos]);
+				pCap->rms[2][i] = scaleVrms(id, pWin->U[2][pos]);
 				
 				if (++pos >= meter[id].cntl.nFastRMS) {
 					pos = 0;
 					if (++ix >= N_FASTRMS_BUF) ix = 0;
-					pWin = _getFastRMSBuf(ix-1);
+					pWin = _getFastRMSBuf(id, ix-1);
 				}
 			}
 		}
@@ -2763,8 +2746,8 @@ void RMSCapture(int id, int ix) {
 		
 		getTrgFileName(path, Ts, fsmsg.fname);
 		strcpy(fsmsg.mode, "wb");
-		fsmsg.pbuf = &rmsCap;
-		fsmsg.size = sizeof(rmsCap);
+		fsmsg.pbuf = pCap;
+		fsmsg.size = sizeof(RMS_CAP);
 		putFsQ(&fsmsg);				
 #endif			
 	}
@@ -2774,7 +2757,12 @@ void RMSCapture(int id, int ix) {
 void updatePresentDemand(int id) {
 	int i, dInterval;
 	float mult;
-	
+	DEMAND *pdm;
+
+	if (id < 0 || id >= METER_CH_COUNT)
+		return;
+	pdm = &meter[id].dm;
+
 	//dInterval = sysTick1s - meter[id].cntl.dmdStartTs;
 	dInterval = meter[id].cntl.mInterval;
 	mult = 3600./dInterval;
@@ -2788,9 +2776,16 @@ void updatePresentDemand(int id) {
 
 // 예측전력(Q) = 현재누적전력량 + 단위시간당 전력변화량 × 남은수요시간(분)
 void updatePredictDemand(int id,float delta) {
-	int i;
-	int mInterval = meter[id].cntl.mInterval; //sysTick1s - meter[id].cntl.dmdStartTs;
-	float mult = 60/(mInterval/60);
+	int mInterval;
+	float mult;
+	DEMAND *pdm;
+
+	if (id < 0 || id >= METER_CH_COUNT)
+		return;
+	pdm = &meter[id].dm;
+
+	mInterval = meter[id].cntl.mInterval; //sysTick1s - meter[id].cntl.dmdStartTs;
+	mult = 60/(mInterval/60);
 		
 	if (delta < 0) delta = 0;
 	pdm->PD_P = (meter[id].cntl.dmdP[0] + delta*(meter[id].cntl.dInterval-mInterval+1))*mult;
@@ -2799,7 +2794,12 @@ void updatePredictDemand(int id,float delta) {
 int updateMaxDemand(int id) {
 	int i, mInterval, mult, wF=1;
 	float dt;
-	
+	DEMAND *pdm;
+
+	if (id < 0 || id >= METER_CH_COUNT)
+		return 0;
+	pdm = &meter[id].dm;
+
 	meter[id].cntl.dmdEndTs = sysTick1s;
 	//dInterval = meter[id].cntl.dmdEndTs - meter[id].cntl.dmdStartTs;	// 중간에 시간이 변경되면 Interval에 오류 발생
 	mInterval = meter[id].cntl.mInterval;
@@ -2871,10 +2871,12 @@ void updateDemandI(int id)
 
 void copyDemandBin() {
 	int i, id;
-	
-	for(id=0; id<METER_CH_COUNT; id++) {
-		meter[id].dlog.ts = pdm->dmdLogTs;	
-		for (i=0; i<96; i++) {
+	DEMAND *pdm;
+
+	for (id = 0; id < METER_CH_COUNT; id++) {
+		pdm = &meter[id].dm;
+		meter[id].dlog.ts = pdm->dmdLogTs;
+		for (i = 0; i < 96; i++) {
 			meter[id].dlog.DP_P_Log[i] = pdm->DP_P_Log[i];
 		}
 	}
@@ -2884,7 +2886,12 @@ void putDemandBin(int id, float dd, uint32_t utc) {
 	int sod = utc % 86400;
 	int bin = sod/900;
 	int i;
-	
+	DEMAND *pdm;
+
+	if (id < 0 || id >= METER_CH_COUNT)
+		return;
+	pdm = &meter[id].dm;
+
 	// 날이 변경되면 금일데이터를 전일데이터에 복사
 	if (bin == 0) {
 		for (i=0; i<96; i++) {
@@ -2915,7 +2922,12 @@ void initEnergyLog(int id) {
 void resetDemand(int id, int mode) {
 	int i;
 	uint32_t ts = sysTick1s;
-	
+	DEMAND *pdm;
+
+	if (id < 0 || id >= METER_CH_COUNT)
+		return;
+	pdm = &meter[id].dm;
+
 	// clear MD
 	for (i=0; i<DEMAND_PHASE_COUNT; i++) {
 		pdm->MD_I[i].mdTime = sysTick1s;
@@ -3020,8 +3032,6 @@ void loadDemand() {
 		fclose(fp);
 		printf("[[Create Demand File(%s)]]\n", path);
 	}
-	pdm = &meter[0].dm;
-	pdmlog = &meter[0].dlog;
 }
 
 
@@ -3496,6 +3506,11 @@ void energy_scan(int id, METER_EH_REGS *ereg, ENERGY_NVRAM *pEgyNvr) {
 	int		i, ewF=0, wF=0;
 	uint16_t phnoload;
 	struct tm lto;//, ltn;
+	DEMAND *pdm;
+
+	if (id < 0 || id >= METER_CH_COUNT)
+		return;
+	pdm = &meter[id].dm;
 	
 	//최초 읽는 energy register는 쓰레기 값이 들어있으므로 버린다.
 	if (meter[id].cntl.energyInit==0){
@@ -3956,10 +3971,10 @@ void Energy_Task(void *arg)
 
 void RMSLog_Task(void *arg)
 {
-	FAST_RMS *pFast;
-	int i, j, id=0, bF=0;
-   uint32_t ulNotificationValue;
-	
+	int id, bF[METER_CH_COUNT];
+	uint32_t ulNotificationValue;
+
+	memset(bF, 0, sizeof(bF));
 	_enableTaskMonitor(Tid_Rmslog, 50);
 	
 	while (1) {
@@ -3970,16 +3985,19 @@ void RMSLog_Task(void *arg)
 #endif		
 		meter[0].cntl.wdtTbl[Tid_Rmslog].count++;
 		
-		if (rmsWin.fr != rmsWin.re) {
-			if (bF) {
-				RMSCapture(id, rmsWin.re);
-				if (++rmsWin.re >= 60) rmsWin.re = 0;
-			}
-			else {
-				// 10 데이터가 채워지면 rms Capture 시작한다 
-				if (rmsWin.fr > 10) {
-					bF = 1;
-					printf("[Buffer Ready]\n");
+		for (id = 0; id < ACTIVE_METER_CH_COUNT; id++) {
+			if (rmsWin[id].fr != rmsWin[id].re) {
+				if (bF[id]) {
+					RMSCapture(id, rmsWin[id].re);
+					if (++rmsWin[id].re >= N_FASTRMS_BUF)
+						rmsWin[id].re = 0;
+				}
+				else {
+					/* 10 프레임 이상 쌓이면 해당 CH 캡처 시작 */
+					if (rmsWin[id].fr > 10) {
+						bF[id] = 1;
+						printf("[Buffer Ready M%d]\n", id);
+					}
 				}
 			}
 		}
@@ -4110,13 +4128,13 @@ void PostScan_Task(void *arg)
 
 	#ifdef _CHIP_SAG_SWELL			
 				if (!meter[id].cntl.sagEn) {
-					if (checkSagCond()) {
+					if (checkSagCond(id)) {
 						printf("Enable Sag ...\n");
 						meter[id].cntl.sagEn = 1;
 					}
 				}
 				if (!meter[id].cntl.swellEn) {
-					if (checkSwellCond()) {
+					if (checkSwellCond(id)) {
 						printf("Enable Swell ...\n");
 						meter[id].cntl.swellEn = 1;
 					}
@@ -4155,7 +4173,6 @@ void PostScan_Task(void *arg)
 			if (meter[id].cntl.rstMaxMin == 0x1234) {
 				meter[id].cntl.rstMaxMin = 0;
 				
-				/* pmm은 meter[0] 전용 전역이었음 — CH3에서 M1/M2 rstMaxMin 시 M0 메모리 오염·HardFault 유발 */
 				memset(pmmId, 0, sizeof(MAXMIN));
 				pmmId->rstTime = sysTick1s;
 				storeMaxMin();
