@@ -627,8 +627,8 @@ int buildSettings(int id)
 
 #ifdef METER_TEST_DATA
 	// trend
-	meter[id].trend[0].active = 1;
-	meter[id].trend[0].interval = 0;
+	meter[id].trend[0].active = 0;
+	meter[id].trend[0].interval = 1;
 	
 	i=0;
 	meter[id].trend[0].chan[i++] = 2;	// Freq
@@ -4227,7 +4227,6 @@ void Meter0_Task(void *param)
 	printf("log:  %d, %d\n", ((uint32_t)&_pmeter->log - (uint32_t)_pmeter)/2, sizeof(_pmeter->log)/2);
 	printf("elog: %d, %d\n", ((uint32_t)&_pmeter->elog - (uint32_t)_pmeter)/2, sizeof(_pmeter->elog)/2);
 	printf("dlog: %d, %d\n", ((uint32_t)&_pmeter->dlog - (uint32_t)_pmeter)/2, sizeof(_pmeter->dlog)/2);
-	printf("lmm:  %d, %d\n", ((uint32_t)&_pmeter->lastmaxmin - (uint32_t)_pmeter)/2, sizeof(_pmeter->lastmaxmin)/2);
 	printf("itic: %d, %d\n", ((uint32_t)&_pmeter->itic - (uint32_t)_pmeter)/2, sizeof(_pmeter->itic)/2);
 	printf("itic2:%d, %d\n", ((uint32_t)&_pmeter->itic2 - (uint32_t)_pmeter)/2, sizeof(_pmeter->itic2)/2);
 //	printf("pqevt:%d, %d\n", ((uint32_t)&_pmeter->pqevt - (uint32_t)_pmeter)/2, sizeof(_pmeter->pqevt)/2);

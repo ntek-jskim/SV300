@@ -99,3 +99,5 @@
 2026/06/06 : meter.h METER_DEF — 미사용 lastmaxmin 제거(sizeof·오프셋 변경)
 2026/06/06 : app_main tickSet/tickHandler — M1/M2 meter[id].cntl.tod를 M0 tod와 동기화
 2026/06/08 : Quality initPQHeader — INITQUAL 시 initqual.d 플래그를 마지막 CH까지 유지, M1/M2 ql/qw 금주 파일도 삭제
+2026/06/15 : meter.c Meter0_Task — lastmaxmin 제거 후 남은 lmm 덤프 printf 삭제(Keil 빌드 오류)
+2026/06/15 : meter.c METER_TEST_DATA — trend[0] 기본 active=0·interval=1(Flash 부담 완화)
