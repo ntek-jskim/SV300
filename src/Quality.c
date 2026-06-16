@@ -9,6 +9,9 @@
 #include "time.h"
 #include "string.h"
 
+void getQualStartDate(char *str);
+void getQualLastStartDate(char *str);
+
 // 2nd ~ 25th, 10000 -> 100%
 float harmLimit[] = {	
 	2,   5,   1,   6,   0.5, 5,   0.5, 1.5, 0.5,	// 2 ~ 10
@@ -34,24 +37,56 @@ static int parseDateKey8(const char *name) {
 }
 
 static int findOldestQualLog(char *oldestName, uint32_t *oldestSize, uint32_t *totalSize) {
+	char dstr[16];
+	int currentKey, lastWeekKey;
 #ifdef USE_CMSIS_RTOS2
 	fsFileInfo info;
 #else
 	FINFO info;
 #endif
-	char mask[] = CONCAT(LOG_PQ_DIR, "\\ql*.d");
+	char maskQl[] = CONCAT(LOG_PQ_DIR, "\\ql*.d");
+	char maskQw[] = CONCAT(LOG_PQ_DIR, "\\qw*.d");
 	int found = 0, oldestKey = 99999999;
+
+	getQualStartDate(dstr);
+	currentKey = parseDateKey8(dstr);
+	getQualLastStartDate(dstr);
+	lastWeekKey = parseDateKey8(dstr);
 
 	*totalSize = 0;
 	oldestName[0] = 0;
 	*oldestSize = 0;
 
 	info.fileID = 0;
-	while (ffind(mask, &info) == 0) {
+	while (ffind(maskQl, &info) == 0) {
 		const char *name = (const char *)info.name;
 		int key = parseDateKey8(name);
 
 		*totalSize += info.size;
+		// PQ 통합 예산에서 금주(현재 주 시작일) ql*는 보호
+		if (key >= currentKey) {
+			continue;
+		}
+
+		if (!found || key < oldestKey) {
+			oldestKey = key;
+			strcpy(oldestName, name);
+			*oldestSize = info.size;
+			found = 1;
+		}
+	}
+
+	// qw* 파일도 PQ 통합 예산에 포함하되, 금주·전주 파일은 보호
+	info.fileID = 0;
+	while (ffind(maskQw, &info) == 0) {
+		const char *name = (const char *)info.name;
+		int key = parseDateKey8(name);
+
+		*totalSize += info.size;
+		if (key >= lastWeekKey) {
+			continue;
+		}
+
 		if (!found || key < oldestKey) {
 			oldestKey = key;
 			strcpy(oldestName, name);
@@ -330,34 +365,56 @@ int createQualWeekData(char *path, QualWeek *pqw) {
 int updateQualWeekData(int id, char *path, QualWeek *pqw) {
 	FILE *fp;
 	EVENT_Q *pevQ = &meter[id].eventQ;
-	
-	// event count 갱신
-	if (pevQ->count > 0) {
-		pqw->evtCount += pevQ->count;
+	QualWeek weekSnap;
+#ifdef USE_CMSIS_RTOS2
+	fsFileInfo fi;
+#else
+	FINFO fi;
+#endif
+	int evCount = pevQ->count;
+
+	weekSnap = *pqw;
+	if (evCount > 0) {
+		weekSnap.evtCount += evCount;
 	}
-	printf("updateQualWeekData[m%d] (%s), event count=%d ...\n", id, path, pevQ->count);
-	fp = fopen(path, "r+");
+	printf("updateQualWeekData[m%d] (%s), event count=%d ...\n", id, path, evCount);
+
+	fi.fileID = 0;
+	if (ffind(path, &fi)) {
+		fp = fopen(path, "wb");
+	} else {
+		/* 기존 파일 갱신은 r+ 모드 사용(기존 동작 유지) */
+		fp = fopen(path, "r+");
+	}
+
 	if (fp == NULL) {
-		printf("updateQualWeekData, Can't open file(r+:%s), create file(w)\n", path);		
-		fp = fopen(path, "w");
+		printf("updateQualWeekData, Can't open file(%s)\n", path);
+		return -1;
+	}
+
+	if (fwrite(&weekSnap, sizeof(QualWeek), 1, fp) != 1) {
+		printf("updateQualWeekData, fwrite failed(%s)\n", path);
+		fclose(fp);
+		return -1;
+	}
+	fclose(fp);
+
+	if (evCount > 0) {
+		fp = fopen(path, "ab");
 		if (fp == NULL) {
+			printf("updateQualWeekData, Can't append events(%s)\n", path);
 			return -1;
 		}
-	}	
-
-	fwrite(pqw, sizeof(QualWeek), 1, fp);	
-	fclose(fp);	
-
-	
-	// 이벤트 로그를 QualWeek 뒷 부분에 추가 한다 
-	if (pevQ->count > 0) {		
-		fp = fopen(path, "a");
-		fwrite(pevQ->eq, sizeof(EVENT_LOG), pevQ->count, fp);
-		fclose(fp);		
-		pevQ->count = 0;
+		if (fwrite(pevQ->eq, sizeof(EVENT_LOG), evCount, fp) != (size_t)evCount) {
+			printf("updateQualWeekData, event fwrite failed(%s)\n", path);
+			fclose(fp);
+			return -1;
+		}
+		fclose(fp);
 	}
 
-	
+	*pqw = weekSnap;
+	pevQ->count = 0;
 	return 0;
 }
 

@@ -101,3 +101,8 @@
 2026/06/08 : Quality initPQHeader — INITQUAL 시 initqual.d 플래그를 마지막 CH까지 유지, M1/M2 ql/qw 금주 파일도 삭제
 2026/06/15 : meter.c Meter0_Task — lastmaxmin 제거 후 남은 lmm 덤프 printf 삭제(Keil 빌드 오류)
 2026/06/15 : meter.c METER_TEST_DATA — trend[0] 기본 active=0·interval=1(Flash 부담 완화)
+2026/06/16 : Quality trimQualLogBudget — PQ 통합 예산에 qw* 포함, qw* 금주·전주 보호
+2026/06/16 : alarm trimTrendLogBudget — trd* 320KB 예산·금월·전월 보호, 부팅·기록 후 trim
+2026/06/16 : Quality updateQualWeekData — Flash full 시 rb+/wb 분리, 실패 시 덮어쓰기 방지
+2026/06/16 : Quality updateQualWeekData — 기존 파일 open 모드 rb+→r+b 수정(Keil RL-FlashFS 호환)
+2026/06/16 : Quality updateQualWeekData — 기존 파일 갱신 open을 r+로 복원(r+b 호환 이슈 회피)

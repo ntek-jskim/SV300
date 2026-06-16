@@ -1031,6 +1031,99 @@ void buildTrendSetting() {
 
 uint16_t trdTime[] = {1,2,3,5,10,15,20,30,60};
 
+static int parseTrendMonthKey(const char *name) {
+	int i;
+
+	for (i = 0; name[i] != 0; i++) {
+		if (name[i] == '_' && name[i + 1] >= '0' && name[i + 1] <= '9') {
+			int y, m;
+
+			y = (name[i + 1] - '0') * 1000 + (name[i + 2] - '0') * 100 +
+				(name[i + 3] - '0') * 10 + (name[i + 4] - '0');
+			m = (name[i + 5] - '0') * 10 + (name[i + 6] - '0');
+			return y * 100 + m;
+		}
+	}
+	return 999999;
+}
+
+static int getTrendMonthKeys(int *currentKey, int *lastMonthKey) {
+	struct tm ltm;
+
+	memcpy(&ltm, &pcntl->tod, sizeof(ltm));
+	*currentKey = ltm.tm_year * 100 + ltm.tm_mon;
+	ltm.tm_mon--;
+	if (ltm.tm_mon < 1) {
+		ltm.tm_mon = 12;
+		ltm.tm_year--;
+	}
+	*lastMonthKey = ltm.tm_year * 100 + ltm.tm_mon;
+	return 0;
+}
+
+static int findOldestTrendLog(char *oldestName, uint32_t *oldestSize, uint32_t *totalSize) {
+#ifdef USE_CMSIS_RTOS2
+	fsFileInfo info;
+#else
+	FINFO info;
+#endif
+	char mask[] = CONCAT(LOG_TREND_DIR, "\\trd*.d");
+	int currentKey, lastMonthKey;
+	int found = 0, oldestKey = 999999;
+
+	getTrendMonthKeys(&currentKey, &lastMonthKey);
+
+	*totalSize = 0;
+	oldestName[0] = 0;
+	*oldestSize = 0;
+
+	info.fileID = 0;
+	while (ffind(mask, &info) == 0) {
+		const char *name = (const char *)info.name;
+		int key = parseTrendMonthKey(name);
+
+		*totalSize += info.size;
+		/* 금월·전월 trd*는 보호 */
+		if (key >= lastMonthKey) {
+			continue;
+		}
+
+		if (!found || key < oldestKey) {
+			oldestKey = key;
+			strcpy(oldestName, name);
+			*oldestSize = info.size;
+			found = 1;
+		}
+	}
+
+	return found;
+}
+
+static void trimTrendLogBudget(void) {
+	char oldestName[64], path[96];
+	uint32_t oldestSize = 0, totalSize = 0;
+	int res;
+
+	while (findOldestTrendLog(oldestName, &oldestSize, &totalSize)) {
+		if (totalSize <= FLASH_LOG_BUDGET_TREND) {
+			break;
+		}
+
+		sprintf(path, "%s\\%s", LOG_TREND_DIR, oldestName);
+#ifdef USE_CMSIS_RTOS2
+		res = fdelete(path, NULL);
+#else
+		res = fdelete(path);
+#endif
+		printf("trimTrendLogBudget: delete %s (size=%u, total=%u, res=%d)\n",
+			path, oldestSize, totalSize, res);
+
+		if (res != 0) {
+			break;
+		}
+	}
+}
+
 void getTrendData(int mid, int gid, uint16_t *chan) {
 	int i;
 
@@ -1092,8 +1185,10 @@ int appendTrendRcrd(int mid, int g) {
 			for (j=0; j<16; j++) {
 				trdInf[mid][g].channel[j] = meter[mid].trend[g].chan[j];
 			}								
-			fwrite(&trdInf[mid][g], sizeof(trdInf[0][0]), 1, fp);
-			fwrite(&row[mid][g], sizeof(row[0][0]), 1, fp);			
+			if (fwrite(&trdInf[mid][g], sizeof(trdInf[0][0]), 1, fp) == 1 &&
+				fwrite(&row[mid][g], sizeof(row[0][0]), 1, fp) == 1) {
+				trimTrendLogBudget();
+			}
 			fclose(fp);				
 		}		
 	}
@@ -1101,7 +1196,9 @@ int appendTrendRcrd(int mid, int g) {
 		printf("appendTrendFile(%s), m=%d, g=%d, ts=%d, size = %d\n", fn, mid, g, row[mid][g].ts, fi.size);
 		fp = fopen(fn, "ab");
 		if (fp) {
-			fwrite(&row[mid][g], sizeof(TREND_RECORD), 1, fp);			
+			if (fwrite(&row[mid][g], sizeof(TREND_RECORD), 1, fp) == 1) {
+				trimTrendLogBudget();
+			}
 			fclose(fp);				
 		}
 	}
@@ -1114,6 +1211,8 @@ void checkTrendHeader() {
 	char fn[64], fnew[64];
 	FILE *fp;
 	
+	trimTrendLogBudget();
+
 	for (mid = 0; mid < ACTIVE_METER_CH_COUNT; mid++) {
 		for (i=0; i<4; i++) {
 			if (meter[mid].trend[i].active == 0) 
