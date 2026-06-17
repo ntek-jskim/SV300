@@ -518,7 +518,7 @@ extern ADE9000_REG ade9000[];
 
 
 // ADC range가 0.5 에서 1.0으로 두배 증가함.
-#define	V_FULL				(848.88*4)	// @VGAIN=2
+#define	V_FULL				(848.88*2)	// @VGAIN=2
 #define	V_NORM				(220.00)
 
 // JN10, burden=66.6, PF=0.5 조건에서 전류크기별 위상오차 부호가 반전된다, 5A(-), 0.25A(+), 0.5 Class를 벗어난다 

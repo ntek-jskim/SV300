@@ -1,6 +1,8 @@
 #ifdef __FREERTOS
    #include "RTL.h"  // for File IO
    #include "os_port.h"
+   #include "FreeRTOS.h"
+   #include "task.h"
 #endif
 #include "board.h"
 #include "meter.h"
@@ -22,6 +24,64 @@ float harmLimit[] = {
 // 10초에 하나 증가
 extern uint32_t sysTick1s, sysTick10s, sysTick10m;
 extern int readQualWeekData(char *path, QualWeek *pqw);
+
+#define QW_TAIL_MAX	4096
+
+static uint8_t qw_tail_buf[QW_TAIL_MAX];
+
+static void pqFsLock(void) {
+#ifdef __FREERTOS
+	vTaskSuspendAll();
+#endif
+}
+
+static void pqFsUnlock(void) {
+#ifdef __FREERTOS
+	(void)xTaskResumeAll();
+#endif
+}
+
+static int qualWeekReadTail(const char *path, uint32_t *ptailSize) {
+#ifdef USE_CMSIS_RTOS2
+	fsFileInfo fi;
+#else
+	FINFO fi;
+#endif
+	FILE *fp;
+	uint32_t tailSize, n, total = 0;
+
+	*ptailSize = 0;
+	fi.fileID = 0;
+	if (ffind(path, &fi) != 0 || fi.size <= sizeof(QualWeek)) {
+		return 0;
+	}
+
+	tailSize = fi.size - (uint32_t)sizeof(QualWeek);
+	if (tailSize > sizeof(qw_tail_buf)) {
+		printf("updateQualWeekData, tail too large (%u)\n", tailSize);
+		return -1;
+	}
+
+	fp = fopen(path, "rb");
+	if (fp == NULL) {
+		return -1;
+	}
+	fseek(fp, (long)sizeof(QualWeek), SEEK_SET);
+	while (total < tailSize) {
+		n = tailSize - total;
+		if (n > 256) {
+			n = 256;
+		}
+		if (fread(qw_tail_buf + total, 1, n, fp) != n) {
+			fclose(fp);
+			return -1;
+		}
+		total += n;
+	}
+	fclose(fp);
+	*ptailSize = tailSize;
+	return 0;
+}
 
 static int parseDateKey8(const char *name) {
 	int i, n = 0, key = 0;
@@ -103,6 +163,7 @@ static void trimQualLogBudget(void) {
 	uint32_t oldestSize = 0, totalSize = 0;
 	int res;
 
+	pqFsLock();
 	while (findOldestQualLog(oldestName, &oldestSize, &totalSize)) {
 		if (totalSize <= FLASH_LOG_BUDGET_PQ) {
 			break;
@@ -121,6 +182,7 @@ static void trimQualLogBudget(void) {
 			break;
 		}
 	}
+	pqFsUnlock();
 }
 
 void uLocalTime(const uint32_t *utc, struct tm *ptm) {
@@ -255,6 +317,8 @@ int appendQualLog(char *fn, void *bf, int size) {
 #else
 	FINFO fi;
 #endif
+
+	pqFsLock();
 	fi.fileID = 0;      
 	if (ffind (fn, &fi)) {
 		printf("createQualLog(%s), ...\n", fn);
@@ -279,6 +343,8 @@ int appendQualLog(char *fn, void *bf, int size) {
 			printf("~~~ appendQualLog, can't open log file(%s)\n", fn);
 		}
 	}
+	pqFsUnlock();
+	return 0;
 }
 
 
@@ -348,30 +414,31 @@ int writeQual10mData(char *path, QualData10m *pq10m) {
 
 int createQualWeekData(char *path, QualWeek *pqw) {
 	FILE *fp;
+	int res = 0;
 	
 	printf("writeQualWeekData (%s) ...\n", path);
+	pqFsLock();
 	fp = fopen(path, "wb");
 	if (fp == NULL) {
 		printf("Can't open file(%s)\n", path);
-		return -1;
+		res = -1;
+	} else {
+		if (fwrite(pqw, sizeof(QualWeek), 1, fp) != 1) {
+			res = -1;
+		}
+		fclose(fp);
 	}
-	
-	fwrite(pqw, sizeof(QualWeek), 1, fp);
-	fclose(fp);
-	
-	return 0;
+	pqFsUnlock();
+	return res;
 }
 
 int updateQualWeekData(int id, char *path, QualWeek *pqw) {
 	FILE *fp;
 	EVENT_Q *pevQ = &meter[id].eventQ;
 	QualWeek weekSnap;
-#ifdef USE_CMSIS_RTOS2
-	fsFileInfo fi;
-#else
-	FINFO fi;
-#endif
+	uint32_t tailSize = 0;
 	int evCount = pevQ->count;
+	int res = 0;
 
 	weekSnap = *pqw;
 	if (evCount > 0) {
@@ -379,22 +446,31 @@ int updateQualWeekData(int id, char *path, QualWeek *pqw) {
 	}
 	printf("updateQualWeekData[m%d] (%s), event count=%d ...\n", id, path, evCount);
 
-	fi.fileID = 0;
-	if (ffind(path, &fi)) {
-		fp = fopen(path, "wb");
-	} else {
-		/* 기존 파일 갱신은 r+ 모드 사용(기존 동작 유지) */
-		fp = fopen(path, "r+");
+	pqFsLock();
+	if (qualWeekReadTail(path, &tailSize) != 0) {
+		printf("updateQualWeekData, tail read failed(%s)\n", path);
+		pqFsUnlock();
+		return -1;
 	}
 
+	/* RL-FlashFS: r+/r+b 갱신 실패 회피 — wb 재기록 + 기존 이벤트 tail 보존 */
+	fp = fopen(path, "wb");
 	if (fp == NULL) {
 		printf("updateQualWeekData, Can't open file(%s)\n", path);
+		pqFsUnlock();
 		return -1;
 	}
 
 	if (fwrite(&weekSnap, sizeof(QualWeek), 1, fp) != 1) {
 		printf("updateQualWeekData, fwrite failed(%s)\n", path);
 		fclose(fp);
+		pqFsUnlock();
+		return -1;
+	}
+	if (tailSize > 0 && fwrite(qw_tail_buf, 1, tailSize, fp) != tailSize) {
+		printf("updateQualWeekData, tail fwrite failed(%s)\n", path);
+		fclose(fp);
+		pqFsUnlock();
 		return -1;
 	}
 	fclose(fp);
@@ -403,19 +479,22 @@ int updateQualWeekData(int id, char *path, QualWeek *pqw) {
 		fp = fopen(path, "ab");
 		if (fp == NULL) {
 			printf("updateQualWeekData, Can't append events(%s)\n", path);
-			return -1;
-		}
-		if (fwrite(pevQ->eq, sizeof(EVENT_LOG), evCount, fp) != (size_t)evCount) {
+			res = -1;
+		} else if (fwrite(pevQ->eq, sizeof(EVENT_LOG), evCount, fp) != (size_t)evCount) {
 			printf("updateQualWeekData, event fwrite failed(%s)\n", path);
 			fclose(fp);
-			return -1;
+			res = -1;
+		} else {
+			fclose(fp);
 		}
-		fclose(fp);
 	}
 
-	*pqw = weekSnap;
-	pevQ->count = 0;
-	return 0;
+	if (res == 0) {
+		*pqw = weekSnap;
+		pevQ->count = 0;
+	}
+	pqFsUnlock();
+	return res;
 }
 
 //int readQualLastWeekData(QualWeek *pqw) {

@@ -106,3 +106,6 @@
 2026/06/16 : Quality updateQualWeekData — Flash full 시 rb+/wb 분리, 실패 시 덮어쓰기 방지
 2026/06/16 : Quality updateQualWeekData — 기존 파일 open 모드 rb+→r+b 수정(Keil RL-FlashFS 호환)
 2026/06/16 : Quality updateQualWeekData — 기존 파일 갱신 open을 r+로 복원(r+b 호환 이슈 회피)
+2026/06/17 : Quality updateQualWeekData — r+ 대신 wb 재기록+tail 보존, PQ FS mutex 직렬화
+2026/06/17 : Quality updateQualWeekData — 4KB 스택 버퍼 제거(홀딩 원인), 정적 버퍼+vTaskSuspendAll
+2026/06/17 : ade9000 V_FULL 848.88*4→*2 수정(220V 대비 2배 과대 계측 보정)
