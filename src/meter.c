@@ -2398,31 +2398,43 @@ void makeRandomData(void) {
 		}
 
 		// total kwh
-		meter[id].egy.Ereg32[0].eh[0][0] = 123456;
-		meter[id].egy.Ereg32[0].eh[0][1] = 654;
+		EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KWH, EGY_SIGN_IMPORT) = 123456;
+		EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KWH, EGY_SIGN_EXPORT) = 654;
 		// this kwh
-		meter[id].egy.Ereg32[1].eh[0][0] = 7890;
-		meter[id].egy.Ereg32[1].eh[0][1] = 543;
+		EGY_TOTAL(meter[id].egy.Ereg32[1], EGY_MODE_KWH, EGY_SIGN_IMPORT) = 7890;
+		EGY_TOTAL(meter[id].egy.Ereg32[1], EGY_MODE_KWH, EGY_SIGN_EXPORT) = 543;
 		// last kwh
-		meter[id].egy.Ereg32[2].eh[0][0] = 123;
-		meter[id].egy.Ereg32[2].eh[0][1] = 456;
+		EGY_TOTAL(meter[id].egy.Ereg32[2], EGY_MODE_KWH, EGY_SIGN_IMPORT) = 123;
+		EGY_TOTAL(meter[id].egy.Ereg32[2], EGY_MODE_KWH, EGY_SIGN_EXPORT) = 456;
 
 		// total kvarh
-		meter[id].egy.Ereg32[0].eh[1][0] = 11234;
-		meter[id].egy.Ereg32[0].eh[1][1] = 654321;
+		EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KVARH, EGY_SIGN_IMPORT) = 11234;
+		EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KVARH, EGY_SIGN_EXPORT) = 654321;
 		// this kvarh
-		meter[id].egy.Ereg32[1].eh[1][0] = 1356;
-		meter[id].egy.Ereg32[1].eh[1][1] = 785;
+		EGY_TOTAL(meter[id].egy.Ereg32[1], EGY_MODE_KVARH, EGY_SIGN_IMPORT) = 1356;
+		EGY_TOTAL(meter[id].egy.Ereg32[1], EGY_MODE_KVARH, EGY_SIGN_EXPORT) = 785;
 		// last kvarh
-		meter[id].egy.Ereg32[2].eh[1][0] = 548;
-		meter[id].egy.Ereg32[2].eh[1][1] = 145;
+		EGY_TOTAL(meter[id].egy.Ereg32[2], EGY_MODE_KVARH, EGY_SIGN_IMPORT) = 548;
+		EGY_TOTAL(meter[id].egy.Ereg32[2], EGY_MODE_KVARH, EGY_SIGN_EXPORT) = 145;
 
 		// total kvah
-		meter[id].egy.Ereg32[0].eh[2][0] = meter[id].egy.Ereg32[0].eh[0][0]+ meter[id].egy.Ereg32[0].eh[0][1] + meter[id].egy.Ereg32[0].eh[1][0]+ meter[id].egy.Ereg32[0].eh[1][1];
+		EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KVAH, EGY_SIGN_IMPORT) =
+			EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KWH, EGY_SIGN_IMPORT) +
+			EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KWH, EGY_SIGN_EXPORT) +
+			EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KVARH, EGY_SIGN_IMPORT) +
+			EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KVARH, EGY_SIGN_EXPORT);
 		// this kvah
-		meter[id].egy.Ereg32[1].eh[2][0] = meter[id].egy.Ereg32[1].eh[0][0]+ meter[id].egy.Ereg32[1].eh[0][1] + meter[id].egy.Ereg32[1].eh[1][0]+ meter[id].egy.Ereg32[1].eh[1][1];
+		EGY_TOTAL(meter[id].egy.Ereg32[1], EGY_MODE_KVAH, EGY_SIGN_IMPORT) =
+			EGY_TOTAL(meter[id].egy.Ereg32[1], EGY_MODE_KWH, EGY_SIGN_IMPORT) +
+			EGY_TOTAL(meter[id].egy.Ereg32[1], EGY_MODE_KWH, EGY_SIGN_EXPORT) +
+			EGY_TOTAL(meter[id].egy.Ereg32[1], EGY_MODE_KVARH, EGY_SIGN_IMPORT) +
+			EGY_TOTAL(meter[id].egy.Ereg32[1], EGY_MODE_KVARH, EGY_SIGN_EXPORT);
 		// last kvah
-		meter[id].egy.Ereg32[2].eh[2][0] = meter[id].egy.Ereg32[2].eh[0][0]+ meter[id].egy.Ereg32[2].eh[0][1] + meter[id].egy.Ereg32[2].eh[1][0]+ meter[id].egy.Ereg32[2].eh[1][1];
+		EGY_TOTAL(meter[id].egy.Ereg32[2], EGY_MODE_KVAH, EGY_SIGN_IMPORT) =
+			EGY_TOTAL(meter[id].egy.Ereg32[2], EGY_MODE_KWH, EGY_SIGN_IMPORT) +
+			EGY_TOTAL(meter[id].egy.Ereg32[2], EGY_MODE_KWH, EGY_SIGN_EXPORT) +
+			EGY_TOTAL(meter[id].egy.Ereg32[2], EGY_MODE_KVARH, EGY_SIGN_IMPORT) +
+			EGY_TOTAL(meter[id].egy.Ereg32[2], EGY_MODE_KVARH, EGY_SIGN_EXPORT);
 
 		//	srand(time(NULL));
 	}
@@ -2910,10 +2922,10 @@ void putDemandBin(int id, float dd, uint32_t utc) {
 
 // 현재 전력량을 임시 저장
 void initEnergyLog(int id) {
-	meter[id].cntl.egyBuf[0] = meter[id].egy.Ereg32[0].eh[0][0];	// imp kwh
-	meter[id].cntl.egyBuf[1] = meter[id].egy.Ereg32[0].eh[1][0];	// kvarh lag
-	meter[id].cntl.egyBuf[2] = meter[id].egy.Ereg32[0].eh[1][0];	// kvarh lead
-	meter[id].cntl.egyBuf[3] = meter[id].egy.Ereg32[0].eh[2][0];	// kVAh
+	meter[id].cntl.egyBuf[0] = EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KWH, EGY_SIGN_IMPORT);
+	meter[id].cntl.egyBuf[1] = EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KVARH, EGY_SIGN_IMPORT);
+	meter[id].cntl.egyBuf[2] = EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KVARH, EGY_SIGN_EXPORT);
+	meter[id].cntl.egyBuf[3] = EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KVAH, EGY_SIGN_IMPORT);
 }
 
 
@@ -3102,16 +3114,23 @@ int storeEnergyLogNVR(int sel, ENERGY_LOG *pEgyLog) {
 }
 
 
-// nvram energy를 meter영역으로 복사한다 
+// nvram energy를 meter영역으로 복사한다
 void copyEreg32(int id) {
-	int ix, j;
+	int grp, mode, sign;
+	uint32_t ieh;
 
-	// ix: 누적,현월,전월
-	// j : kwh, kvarh, kvah
-	for (ix=0; ix<3; ix++) {
-		for (j=0; j<3; j++) {
-			meter[id].egy.Ereg32[ix].eh[j][0] = egyNvr.Ereg64[id][ix].eh[j][0]/100;		// Imp
-			meter[id].egy.Ereg32[ix].eh[j][1] = egyNvr.Ereg64[id][ix].eh[j][1]/100;		// Exp
+	for (grp = 0; grp < ENERGY_GROUP_COUNT; grp++) {
+		for (mode = 0; mode < ENERGY_MODE_COUNT; mode++) {
+			for (sign = 0; sign < ENERGY_SIGN_COUNT; sign++) {
+				ieh = (uint32_t)(EGY_VAL(egyNvr.Ereg64[id], mode, sign, grp) / EREG32_UNIT);
+				EGY_VAL(meter[id].egy.Ereg32[EGY_PERIOD_TOTAL], mode, sign, grp) = ieh;
+
+				ieh = EGY_VAL(egyNvr.month_wh[id], mode, sign, grp) / EREG32_UNIT;
+				EGY_VAL(meter[id].egy.Ereg32[EGY_PERIOD_THIS_MONTH], mode, sign, grp) = ieh;
+
+				EGY_VAL(meter[id].egy.Ereg32[EGY_PERIOD_LAST_MONTH], mode, sign, grp) =
+					EGY_VAL(egyNvr.Ereg32_last[id], mode, sign, grp);
+			}
 		}
 	}
 }
@@ -3124,50 +3143,59 @@ void copyEreg64(ENERGY_REG64 *pdst, ENERGY_REG64 *psrc) {
 }
 
 
-// nvram energy만 저장한다 
-int updateEh(int id, int mode, float diff) {
-	int i, dir, ret=0, dt;
+// nvram energy만 저장한다
+int updateEhGrp(int id, int mode, int group, float diff) {
+	int dir, ret = 0, dt;
 	uint32_t ieh;
-	
+	float *pAccum;
+	uint64_t *pCell;
+	uint32_t *pMonthWh;
+
 	if (diff > 0) {
-		dir = 0;
+		dir = EGY_SIGN_IMPORT;
 	}
 	else if (diff < 0) {
-		dir = 1;
+		dir = EGY_SIGN_EXPORT;
 		diff = -diff;
 	}
 	else {
 		return ret;
 	}
-	
-	// 1w 이상인 값을 추출한다
-	meter[id].cntl.Ereg.eh[mode][dir] += diff;
-	dt = meter[id].cntl.Ereg.eh[mode][dir];
+
+	if (mode < 0 || mode >= ENERGY_MODE_COUNT)
+		return ret;
+	if (group < 0 || group >= ENERGY_GROUP_COUNT)
+		return ret;
+
+	pAccum = &EGY_VAL(meter[id].cntl.Ereg, mode, dir, group);
+	*pAccum += diff;
+	dt = (int)*pAccum;
 	if (dt) {
-		meter[id].cntl.Ereg.eh[mode][dir] -= dt;
-	
-		// 누적, 현월 반영		
-		for (i=0; i<2; i++) {											
-			egyNvr.Ereg64[id][i].eh[mode][dir] += dt;						
-			if (egyNvr.Ereg64[id][i].eh[mode][dir] >= MAX_EREG64) {
-				egyNvr.Ereg64[id][i].eh[mode][dir] -= MAX_EREG64;
-			}					
-			
-			// 64bit 누적 -> meter 64bit 누적으로 복사 
-			if (i==0) {
-				meter[id].egy.Ereg64.eh[mode][dir] = egyNvr.Ereg64[id][i].eh[mode][dir];
-			}
-			
-			// 100wh 이상 변할때 마다 저장한다 
-			ieh = egyNvr.Ereg64[id][i].eh[mode][dir]/EREG32_UNIT;		
-			if (meter[id].egy.Ereg32[i].eh[mode][dir] != ieh) {			
-				//printf("eh, i=%d, m=%d, dir=%d, e32=%d, e64=%d\n", i, mode, dir, meter[id].egy.Ereg32[i].eh[mode][dir], ieh);
-				ret |= (1<<mode);
-			}
-		}
-	} 
-	
-	return ret;	
+		*pAccum -= (float)dt;
+
+		pCell = &EGY_VAL(egyNvr.Ereg64[id], mode, dir, group);
+		*pCell += dt;
+		if (*pCell >= MAX_EREG64)
+			*pCell -= MAX_EREG64;
+		EGY_VAL(meter[id].egy.Ereg64, mode, dir, group) = *pCell;
+
+		pMonthWh = &EGY_VAL(egyNvr.month_wh[id], mode, dir, group);
+		*pMonthWh += dt;
+
+		ieh = (uint32_t)(*pCell / EREG32_UNIT);
+		if (EGY_VAL(meter[id].egy.Ereg32[EGY_PERIOD_TOTAL], mode, dir, group) != ieh)
+			ret |= (1 << mode);
+
+		ieh = *pMonthWh / EREG32_UNIT;
+		if (EGY_VAL(meter[id].egy.Ereg32[EGY_PERIOD_THIS_MONTH], mode, dir, group) != ieh)
+			ret |= (1 << mode);
+	}
+
+	return ret;
+}
+
+int updateEh(int id, int mode, float diff) {
+	return updateEhGrp(id, mode, EGY_GRP_TOTAL, diff);
 }
 
 
@@ -3200,7 +3228,7 @@ static void initEnergyNvrBlob(void *blob)
 	ENERGY_NVRAM *pnvr = blob;
 
 	memset(pnvr, 0, sizeof(ENERGY_NVRAM));
-	pnvr->magic = 0x1234abcd;
+	pnvr->magic = ENERGY_NVRAM_MAGIC;
 	pnvr->ts = sysTick1s;
 }
 
@@ -3269,8 +3297,7 @@ int loadEnergyLogFs(void)
 
 int loadEnergyNVR(ENERGY_NVRAM *pEgyNvr) {
 	uint16_t os = 0, crc;
-	int id, i, j, ret=0;
-	//uint64_t eh;
+	int id, grp, mode, sign, ret=0;
 	
 	FramRead(pEgyNvr, os, sizeof(ENERGY_NVRAM));
 	crc = gencrc_modbus((uint8_t *)pEgyNvr, sizeof(ENERGY_NVRAM));
@@ -3284,19 +3311,23 @@ int loadEnergyNVR(ENERGY_NVRAM *pEgyNvr) {
 			return -1;
 		}
 	}
+
+	if (pEgyNvr->magic != ENERGY_NVRAM_MAGIC) {
+		printf(">>Energy NVRAM magic mismatch(%x) <<<\n", (unsigned)pEgyNvr->magic);
+		return -1;
+	}
 	
-	//ENERGY_REG64 Ereg[3]
 	if (crc == 0) {
 		for (id=0; id<ENERGY_CH_COUNT; id++) {
-			for (i=0; i<3; i++) {
-				for (j=0; j<3; j++) {
-					if (egyNvr.Ereg64[id][i].eh[j][0] > MAX_EREG64) {
-						printf(">>Error on Ereg[%d][%d].eh[%d][0] = %lld<<\n", id, i, j, egyNvr.Ereg64[id][i].eh[j][0]);
-						ret = -1;
-					}
-					if (egyNvr.Ereg64[id][i].eh[j][1] > MAX_EREG64) {
-						printf(">>Error on Ereg[%d][%d].eh[%d][1] = %lld<<\n", id, i, j, egyNvr.Ereg64[id][i].eh[j][1]);
-						ret = -1;
+			for (grp=0; grp<ENERGY_GROUP_COUNT; grp++) {
+				for (mode=0; mode<ENERGY_MODE_COUNT; mode++) {
+					for (sign=0; sign<ENERGY_SIGN_COUNT; sign++) {
+						if (EGY_VAL(pEgyNvr->Ereg64[id], mode, sign, grp) > MAX_EREG64) {
+							printf(">>Error on Ereg64[%d] grp=%d mode=%d sign=%d = %lld<<\n",
+								id, grp, mode, sign,
+								EGY_VAL(pEgyNvr->Ereg64[id], mode, sign, grp));
+							ret = -1;
+						}
 					}
 				}
 			}
@@ -3346,8 +3377,8 @@ void storeEnergy() {
 	egyNvr.crc = gencrc_modbus((uint8_t *)&egyNvr, sizeof(ENERGY_NVRAM)-2);	
 	storeEnergyNVR(&egyNvr);
 	
-	if (egyNvr.magic != 0x1234abcd) {
-		printf("&&& storeEnergyNVR. bad magic number(%x) &&&\n", egyNvr.magic);
+	if (egyNvr.magic != ENERGY_NVRAM_MAGIC) {
+		printf("&&& storeEnergyNVR. bad magic number(%x) &&&\n", (unsigned)egyNvr.magic);
 	}		
 	else {
 		printf("+++ store Energy, crc=%x(%x)\n", egyNvr.crc, gencrc_modbus((uint8_t *)&egyNvr, sizeof(ENERGY_NVRAM)));		
@@ -3365,8 +3396,9 @@ void checkEnergy(int id) {
 	
 	if (lto.tm_mon != meter[0].cntl.tod.tm_mon) {
 		for (i=0; i<ENERGY_CH_COUNT; i++) {
-			memcpy(&egyNvr.Ereg64[i][2], &egyNvr.Ereg64[i][1], sizeof(ENERGY_REG64));	// 현월->전월
-			memset(&egyNvr.Ereg64[i][1], 0, sizeof(ENERGY_REG64));	// 현월 reset
+			memcpy(&egyNvr.Ereg32_last[i], &meter[i].egy.Ereg32[EGY_PERIOD_THIS_MONTH], sizeof(ENERGY_REG32));
+			memset(&egyNvr.month_wh[i], 0, sizeof(ENERGY_MONTH_WH));
+			memset(&meter[i].egy.Ereg32[EGY_PERIOD_THIS_MONTH], 0, sizeof(ENERGY_REG32));
 		}
 		
 	}	
@@ -3374,8 +3406,11 @@ void checkEnergy(int id) {
 	for (id=0; id<ENERGY_CH_COUNT; id++) {
 		copyEreg32(id);
 		copyEreg64(&meter[id].egy.Ereg64, egyNvr.Ereg64[id]);
-		printf("[[[[%d]Energy Reg : %lld, %lld, %lld]]]\n", 
-			id, egyNvr.Ereg64[id][0].eh[0][0], egyNvr.Ereg64[id][0].eh[1][0], egyNvr.Ereg64[id][0].eh[2][0]);
+		printf("[[[[%d]Energy Reg : %lld, %lld, %lld]]]\n",
+			id,
+			EGY_TOTAL(egyNvr.Ereg64[id], EGY_MODE_KWH, EGY_SIGN_IMPORT),
+			EGY_TOTAL(egyNvr.Ereg64[id], EGY_MODE_KVARH, EGY_SIGN_IMPORT),
+			EGY_TOTAL(egyNvr.Ereg64[id], EGY_MODE_KVAH, EGY_SIGN_IMPORT));
 	}
 	storeEnergy();
 }
@@ -3394,10 +3429,19 @@ int loadEnergy(int id) {
 		{
 			printf(">>Can't load Energy from FS ...<<\n");
 			memset(&egyNvr, 0, sizeof(egyNvr));
-			egyNvr.magic = 0x1234abcd;
+			egyNvr.magic = ENERGY_NVRAM_MAGIC;
 			storeEnergy();
 			pass = -1;
 		}
+	}
+
+	if (egyNvr.magic != ENERGY_NVRAM_MAGIC) {
+		printf(">>Energy re-init (magic %x) ...<<\n", (unsigned)egyNvr.magic);
+		memset(&egyNvr, 0, sizeof(egyNvr));
+		egyNvr.magic = ENERGY_NVRAM_MAGIC;
+		egyNvr.ts = sysTick1s;
+		storeEnergy();
+		pass = -1;
 	}
 	
 	checkEnergy(id);
@@ -3467,15 +3511,15 @@ int putEnergyLog(int id, int hix)
 	}
 
 	// delta = 현재값 - 한시간 전 값
-	peLog->egy[hix].kwh      = meter[id].egy.Ereg32[0].eh[0][0] - meter[id].cntl.egyBuf[0];
-	peLog->egy[hix].kvarh[0] = meter[id].egy.Ereg32[0].eh[1][0] - meter[id].cntl.egyBuf[1];
-	peLog->egy[hix].kvarh[1] = meter[id].egy.Ereg32[0].eh[1][1] - meter[id].cntl.egyBuf[2];
-	peLog->egy[hix].kVAh     = meter[id].egy.Ereg32[0].eh[2][0] - meter[id].cntl.egyBuf[3];
+	peLog->egy[hix].kwh      = EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KWH, EGY_SIGN_IMPORT) - meter[id].cntl.egyBuf[0];
+	peLog->egy[hix].kvarh[0] = EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KVARH, EGY_SIGN_IMPORT) - meter[id].cntl.egyBuf[1];
+	peLog->egy[hix].kvarh[1] = EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KVARH, EGY_SIGN_EXPORT) - meter[id].cntl.egyBuf[2];
+	peLog->egy[hix].kVAh     = EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KVAH, EGY_SIGN_IMPORT) - meter[id].cntl.egyBuf[3];
 
-	meter[id].cntl.egyBuf[0] = meter[id].egy.Ereg32[0].eh[0][0];
-	meter[id].cntl.egyBuf[1] = meter[id].egy.Ereg32[0].eh[1][0];
-	meter[id].cntl.egyBuf[2] = meter[id].egy.Ereg32[0].eh[1][1];
-	meter[id].cntl.egyBuf[3] = meter[id].egy.Ereg32[0].eh[2][0];
+	meter[id].cntl.egyBuf[0] = EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KWH, EGY_SIGN_IMPORT);
+	meter[id].cntl.egyBuf[1] = EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KVARH, EGY_SIGN_IMPORT);
+	meter[id].cntl.egyBuf[2] = EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KVARH, EGY_SIGN_EXPORT);
+	meter[id].cntl.egyBuf[3] = EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KVAH, EGY_SIGN_IMPORT);
 
 	// 1일이 경과하면 금일 데이터를 전일 데이터로 복사한다
 	if (meter[id].cntl.egyTs1D != meter[id].cntl.tod.tm_mday) {
@@ -3501,6 +3545,7 @@ int putEnergyLog(int id, int hix)
 void energy_scan(int id, METER_EH_REGS *ereg, ENERGY_NVRAM *pEgyNvr) {
 	//static int initF=0;
 	float	dval,freq;
+	float	dtP_ph[3], dtQ_ph[3], dtS_ph[3];
 	int32_t	wh, varh, vah, es[3];
 	int		i, ewF=0, wF=0;
 	uint16_t phnoload;
@@ -3561,6 +3606,13 @@ void energy_scan(int id, METER_EH_REGS *ereg, ENERGY_NVRAM *pEgyNvr) {
 		es[0] += wh;
 		es[1] += varh;
 		es[2] += vah;
+
+		dtP_ph[i] = scaleEnergy(id, wh);
+		dtQ_ph[i] = scaleEnergy(id, varh);
+		if (db.pt[id].wiring == WM_3LL3CT || db.pt[id].wiring == WM_3LL2CT)
+			dtS_ph[i] = scaleEnergy(id, vah) * SQRT_3 / 2;
+		else
+			dtS_ph[i] = scaleEnergy(id, vah);
 	}
 	
 	// 2017-10-11, 각 상별로 개별적으로 누적하면 3P3W, PF=0.5 이하에서 누적 문제 발생한다
@@ -3633,18 +3685,25 @@ void energy_scan(int id, METER_EH_REGS *ereg, ENERGY_NVRAM *pEgyNvr) {
 		storeDemand();
 	}
 		
-	// Total, 현월 에너지 누적
-	ewF += updateEh(id, 0, meter[id].cntl.dtP);
-	ewF += updateEh(id, 1, meter[id].cntl.dtQ);
-	ewF += updateEh(id, 2, meter[id].cntl.dtS);
+	// Total / 상별 에너지 누적
+	for (i = 0; i < 3; i++) {
+		ewF += updateEhGrp(id, EGY_MODE_KWH, EGY_GRP_PH_A + i, dtP_ph[i]);
+		ewF += updateEhGrp(id, EGY_MODE_KVARH, EGY_GRP_PH_A + i, dtQ_ph[i]);
+		ewF += updateEhGrp(id, EGY_MODE_KVAH, EGY_GRP_PH_A + i, dtS_ph[i]);
+	}
+	ewF += updateEh(id, EGY_MODE_KWH, meter[id].cntl.dtP);
+	ewF += updateEh(id, EGY_MODE_KVARH, meter[id].cntl.dtQ);
+	ewF += updateEh(id, EGY_MODE_KVAH, meter[id].cntl.dtS);
 	
 	// 월 변경 검사
 	uLocalTime(&pEgyNvr->ts, &lto);
 	if (lto.tm_mon != meter[0].cntl.tod.tm_mon) {
 		printf("+++ copy this month energy to last month ...\n");
 		for (i=0; i<ENERGY_CH_COUNT; i++) {
-			memcpy(&egyNvr.Ereg64[i][2], &egyNvr.Ereg64[i][1], sizeof(ENERGY_REG64));	// 현월 -> 전월
-			memset(&egyNvr.Ereg64[i][1], 0, sizeof(ENERGY_REG64));			// 현월 reset
+			memcpy(&egyNvr.Ereg32_last[i], &meter[i].egy.Ereg32[EGY_PERIOD_THIS_MONTH], sizeof(ENERGY_REG32));
+			memcpy(&meter[i].egy.Ereg32[EGY_PERIOD_LAST_MONTH], &egyNvr.Ereg32_last[i], sizeof(ENERGY_REG32));
+			memset(&egyNvr.month_wh[i], 0, sizeof(ENERGY_MONTH_WH));
+			memset(&meter[i].egy.Ereg32[EGY_PERIOD_THIS_MONTH], 0, sizeof(ENERGY_REG32));
 		}
 		ewF += (1<<3);
 	}	
@@ -3652,15 +3711,12 @@ void energy_scan(int id, METER_EH_REGS *ereg, ENERGY_NVRAM *pEgyNvr) {
 	if (meter[id].cntl.rstEgy == 0x1234) {
 		printf("+++ clear energy ...\n");
 		meter[id].cntl.rstEgy = 0;
-		memset(&egyNvr.Ereg64[id][0], 0, sizeof(ENERGY_REG64));	
-		memset(&egyNvr.Ereg64[id][1], 0, sizeof(ENERGY_REG64));	
-		memset(&egyNvr.Ereg64[id][2], 0, sizeof(ENERGY_REG64));	
-//		memset(&egyNvr.Ereg64[1][0], 0, sizeof(ENERGY_REG64));	
-//		memset(&egyNvr.Ereg64[1][1], 0, sizeof(ENERGY_REG64));	
-//		memset(&egyNvr.Ereg64[1][2], 0, sizeof(ENERGY_REG64));	
-		// 64bit 영역 반영
-		copyEreg64(&meter[id].egy.Ereg64, egyNvr.Ereg64[id]);
-//		copyEreg64(&meter[1].egy.Ereg64, egyNvr.Ereg64[1]);
+		memset(&egyNvr.Ereg64[id], 0, sizeof(ENERGY_REG64));
+		memset(&egyNvr.month_wh[id], 0, sizeof(ENERGY_MONTH_WH));
+		memset(&egyNvr.Ereg32_last[id], 0, sizeof(ENERGY_REG32));
+		memset(&meter[id].cntl.Ereg, 0, sizeof(meter[id].cntl.Ereg));
+		memset(&meter[id].egy.Ereg32, 0, sizeof(meter[id].egy.Ereg32));
+		copyEreg64(&meter[id].egy.Ereg64, &egyNvr.Ereg64[id]);
 		ewF += (1<<3);
 	}
 	

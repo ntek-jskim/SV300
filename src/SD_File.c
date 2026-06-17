@@ -417,7 +417,7 @@ static void cmd_setwh(char *par) {
   }
   else {
     saveLockEnergy = 1;
-    egyNvr.Ereg64[k1].eh[k2][k3] = k4;
+    EGY_TOTAL(egyNvr.Ereg64[k1], k2, k3) = k4;
 //    copyEreg32(&egyNvr);
 //    storeEnergy(&egyNvr);
     printf("Stored: [%d][%d][%d] = %lld\n", k1, k2, k3, (unsigned long long)k4);

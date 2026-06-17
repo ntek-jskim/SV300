@@ -92,7 +92,43 @@
 #define ACTIVE_METER_CH_COUNT METER_CH_COUNT
 #endif
 
-#define ENERGY_SIGN_COUNT 2
+/* Energy 배열 차원 — cell[GROUP][MODE][SIGN] (Modbus: Total 6워드 구맵 유지 후 PhA~C)
+ *  GROUP: Total(3상 합) / PhA / PhB / PhC
+ *  MODE : kWh / kvarh / kVAh
+ *  SIGN : Import / Export */
+typedef enum {
+	EGY_MODE_KWH   = 0,
+	EGY_MODE_KVARH = 1,
+	EGY_MODE_KVAH  = 2,
+	EGY_MODE_COUNT = 3
+} ENERGY_MODE;
+
+typedef enum {
+	EGY_SIGN_IMPORT = 0,
+	EGY_SIGN_EXPORT = 1,
+	EGY_SIGN_COUNT  = 2
+} ENERGY_SIGN;
+
+typedef enum {
+	EGY_GRP_TOTAL = 0,
+	EGY_GRP_PH_A  = 1,
+	EGY_GRP_PH_B  = 2,
+	EGY_GRP_PH_C  = 3,
+	EGY_GRP_COUNT = 4
+} ENERGY_GROUP;
+
+typedef enum {
+	EGY_PERIOD_TOTAL     = 0,	/* 누적 */
+	EGY_PERIOD_THIS_MONTH = 1,
+	EGY_PERIOD_LAST_MONTH = 2,
+	EGY_PERIOD_COUNT     = 3
+} ENERGY_PERIOD;
+
+#define ENERGY_MODE_COUNT   EGY_MODE_COUNT
+#define ENERGY_SIGN_COUNT   EGY_SIGN_COUNT
+#define ENERGY_GROUP_COUNT  EGY_GRP_COUNT
+#define ENERGY_PERIOD_COUNT EGY_PERIOD_COUNT
+#define ENERGY_REG64_VALS   (ENERGY_MODE_COUNT * ENERGY_SIGN_COUNT * ENERGY_GROUP_COUNT)
 
 /* Demand 배열 차원 의미 매크로 */
 #define DEMAND_PHASE_COUNT   3   /* I, DD_I, etc. */
@@ -519,39 +555,46 @@ typedef struct {
 #define	MAX_EREG64	(99999999999LL)
 #define	EREG32_UNIT		(100)
 
-// REG64: 99,999,999.999 wh (1w 단위)
+// REG64: 99,999,999.999 Wh (1Wh 단위) — 누적 전용, 24셀 = 4 group × 3 mode × 2 sign
 typedef struct {
-//	uint64_t kwh[2];	// import, export
-//	uint64_t kvarh[2];	// import, export
-//	uint64_t kvah;
-	uint64_t eh[3][ENERGY_SIGN_COUNT];
+	uint64_t cell[ENERGY_GROUP_COUNT][ENERGY_MODE_COUNT][ENERGY_SIGN_COUNT];
 } ENERGY_REG64;
 
-// REG32: 99,999,999.9 kwh(0.1kwh 단위)
+// REG32: 99,999,999.9 kWh (0.1kWh 단위) — Modbus 표시·현월/전월
 typedef struct {
-//	uint32_t kwh[2];	// import, export
-//	uint32_t kvarh[2];	// import, export
-//	uint32_t kvah;
-	uint32_t eh[3][ENERGY_SIGN_COUNT];
+	uint32_t cell[ENERGY_GROUP_COUNT][ENERGY_MODE_COUNT][ENERGY_SIGN_COUNT];
 } ENERGY_REG32;
 
 typedef struct {
-//	float kwh[2];	// import, export
-//	float kvarh[2];	// import, export
-//	float kvah;
-	float eh[3][ENERGY_SIGN_COUNT];
+	float cell[ENERGY_GROUP_COUNT][ENERGY_MODE_COUNT][ENERGY_SIGN_COUNT];
 } ENERGY_FREG;
-													
-// modbus  영역 -> 32bit에서 64bit로 변경
-typedef struct {																																														
-	ENERGY_REG32	Ereg32[3];	// Total, Last Month, This Month
-	ENERGY_REG64  Ereg64;
+
+typedef struct {
+	uint32_t cell[ENERGY_GROUP_COUNT][ENERGY_MODE_COUNT][ENERGY_SIGN_COUNT];
+} ENERGY_MONTH_WH;
+
+#define EGY_VAL(reg, mode, sign, grp) \
+	((reg).cell[(grp)][(mode)][(sign)])
+#define EGY_TOTAL(reg, mode, sign) \
+	EGY_VAL(reg, mode, sign, EGY_GRP_TOTAL)
+#define EGY_PHASE(reg, mode, sign, ph) \
+	EGY_VAL(reg, mode, sign, (EGY_GRP_PH_A + (ph)))
+
+// Ereg32[period]: 누적/현월/전월(Modbus U32), Ereg64: 고해상도 누적만(Modbus U64)
+typedef struct {
+	ENERGY_REG32	Ereg32[ENERGY_PERIOD_COUNT];
+	ENERGY_REG64	Ereg64;
 } ENERGY;
 
-typedef struct {																				
+/* ENERGY_NVRAM 포맷 식별 — Ereg64 누적만, 현월/전월은 month_wh·Ereg32_last */
+#define	ENERGY_NVRAM_MAGIC	0x1234abd0
+
+typedef struct {
 	uint32_t magic;
-	uint32_t ts;	
-	ENERGY_REG64 Ereg64[ENERGY_CH_COUNT][3];	// [채널][Total, Last Month, This Month]
+	uint32_t ts;
+	ENERGY_REG64 Ereg64[ENERGY_CH_COUNT];
+	ENERGY_MONTH_WH month_wh[ENERGY_CH_COUNT];
+	ENERGY_REG32 Ereg32_last[ENERGY_CH_COUNT];
 	uint16_t _r[3], crc;
 } ENERGY_NVRAM;
 
@@ -2083,6 +2126,8 @@ extern void _enableTaskMonitor(int id, int limit);
 extern void setMeterInfo(void);
 extern int loadMaxMin(void);
 extern void copyEreg64(ENERGY_REG64 *, ENERGY_REG64 *);
+extern void copyEreg32(int id);
+extern int updateEhGrp(int id, int mode, int group, float diff);
 extern uint32_t sysTick32, sysTick1s, sysTick10s, sysTick10m, sysTick15m, sysTickDemand, WM_tick32;
 extern uint64_t sysTick64;
 

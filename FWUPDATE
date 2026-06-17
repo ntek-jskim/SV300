@@ -109,3 +109,8 @@
 2026/06/17 : Quality updateQualWeekData — r+ 대신 wb 재기록+tail 보존, PQ FS mutex 직렬화
 2026/06/17 : Quality updateQualWeekData — 4KB 스택 버퍼 제거(홀딩 원인), 정적 버퍼+vTaskSuspendAll
 2026/06/17 : ade9000 V_FULL 848.88*4→*2 수정(220V 대비 2배 과대 계측 보정)
+2026/06/17 : meter.h ENERGY — MODE/SIGN/GROUP/period enum·cell[3][2][4] union·EGY_* 매크로·NVRAM magic 0x1234abce
+2026/06/17 : meter.c energy — updateEhGrp·copyEreg32 전체 group·energy_scan 상별 누적·NVRAM magic 검증
+2026/06/17 : meter.h ENERGY — eh union 별칭 제거, cell[mode][sign][group] 단일 배열만 사용
+2026/06/17 : meter.h ENERGY — cell[GROUP][MODE][SIGN] Modbus Total 구간 호환, NVRAM magic 0x1234abcf
+2026/06/17 : ENERGY NVRAM — Ereg64 누적만(period 제거), 현월 month_wh·전월 Ereg32_last, magic 0x1234abd0

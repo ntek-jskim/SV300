@@ -174,7 +174,7 @@ void copySummary(void)
 	}
 
 	for(i=0; i<chCount; i++) {
-		psmap->ch[i].eh = meter[i].egy.Ereg32[0].eh[0][0];			// import kwh
+		psmap->ch[i].eh = EGY_TOTAL(meter[i].egy.Ereg32[0], EGY_MODE_KWH, EGY_SIGN_IMPORT);
 		psmap->ch[i].P = meter[i].meter.P[3];
 
 		for(j=0; j<3; j++) {

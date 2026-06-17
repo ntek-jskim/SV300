@@ -620,6 +620,7 @@ void readEnergy(uint8_t id);
 float scaleEnergy(int id, int32_t raw);
 void incEnergy(float diff, float *pAcc);
 int updateEh(int id, int mode, float diff);
+int updateEhGrp(int id, int mode, int group, float diff);
 //int updateWh(float diff);
 //int updateVarh(float diff);
 //int updateVAh(float diff);
