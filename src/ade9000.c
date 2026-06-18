@@ -2852,7 +2852,7 @@ void meter_scan(uint8_t id)
 	
 //	Board_LED_On(3);	// 실행시간: 15us
 	
-	// RMS 1 cycle 
+	// RMS 1/2 cycle 
 	if (stat0 & (1<<19)) {
 		readPeriod(id);
 		readPhaseFastRMS(id);

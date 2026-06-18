@@ -6,6 +6,7 @@
 #include "os_port.h"
 #include "board.h"
 #include "time.h"
+#include <stddef.h>
 
 // Qual Test 
 #undef	_QUAL_TEST
@@ -134,38 +135,9 @@ typedef enum {
 #define DEMAND_PHASE_COUNT   3   /* I, DD_I, etc. */
 #define DEMAND_PQ_DIR_COUNT  2   /* P/Q 방향 (예: imp/exp 또는 lag/lead) */
 
-/* Modbus holding map (gems7000) — memorymap/SV300 memory map_*.xlsx 참고
- * 0 meter … 3550 soe | 6930 settings, 7266 time(2), 7276 cmd … 7393 last
- */
-#define	MBAD_SETTING 6930
-#define	MBAD_SET_TS  7266
-#define	MBAD_SET_CMD 7276
-#define	MBAD_SET_END 7393	/* exclusive: last holding reg 7392 */
-/* 명령 영역 fetch (memory map: +67/+77/+107/+110 → 7233/7243/7273/7276)
- * 각 베이스+0/1/2 → meter id 0/1/2 (event 7233~7235, alarm 7243~7245, itic 7273~7275, itic2 7276~7278) */
-#define	MBAD_CMD_FETCH_EVENT	(MBAD_SET_CMD + 67)
-#define	MBAD_CMD_FETCH_ALARM	(MBAD_SET_CMD + 73)
-#define	MBAD_CMD_FETCH_ITIC		(MBAD_SET_CMD + 103)
-#define	MBAD_CMD_FETCH_ITIC2	(MBAD_SET_CMD + 106)
-
+/* Modbus 채널 베이스 — METER_DEF 오프셋 매크로는 METER_DEF 정의 뒤 참고 */
 #define	ADD_ADE9000_M2 10000
-/* Modbus 20000번대: 3번 미터(METER index 2) 데이터/설정 베이스 오프셋 */
 #define	ADD_ADE9000_M3 20000
-/* M1/M2 RW 포켓(절대 16520~16869 / 26520~26869) — 채널 내 offset 6520~6869 */
-#define	MBAD_RW_OFF_START	6520
-#define	MBAD_RW_OFF_END		6870	/* exclusive: last reg 6869 */
-#define	MBAD_M1_RW_START	(ADD_ADE9000_M2 + MBAD_RW_OFF_START)
-#define	MBAD_M1_RW_END		(ADD_ADE9000_M2 + MBAD_RW_OFF_END)
-#define	MBAD_M2_RW_START	(ADD_ADE9000_M3 + MBAD_RW_OFF_START)
-#define	MBAD_M2_RW_END		(ADD_ADE9000_M3 + MBAD_RW_OFF_END)
-/* M1/M2 read 상한(exclusive) — 17220/27220 이상 거부 (= RW 포켓 직후) */
-#define	MBAD_METER_END_M2	MBAD_M1_RW_END
-#define	MBAD_METER_END_M3	MBAD_M2_RW_END
-#define	MBAD_SETTING_M2	MBAD_METER_END_M2
-#define	MBAD_SETTING_M3	MBAD_METER_END_M3
-
-/* Modbus MBAD_SETTING — METER_DEF.pqevt 선두(P2~), FC16 설정 쓰기는 pmset 오프셋 */
-#define METER_MB_SETTING_REGS(m)	((uint16_t *)&(m).pqevt)
 
 #define ZCT_NONE		0
 #define ZCT_2000_1		1
@@ -1912,24 +1884,24 @@ typedef struct {
 
 typedef struct {
 	METERING	meter;		// 0
-	ENERGY	egy;
-	DEMAND	dm;	
+	ENERGY	egy;		// MBAD_ENERGY_START (240w)
+	DEMAND	dm;
 	VQDATA  vq;
 	EN50160	rpt[2];
 	HARMONICS hd;
 	INTERHARMONICS interhd;
-	MAXMIN	maxmin;	// 2000	
-	ALARM_STATUS alarm;	// 2350
-	ALARM_LIST alist;	// 2550
-	EVENT_LIST elist;	// 2850
-	PQ_EVENT_COUNT pqEvtCnt;	// 3240
-	WAVEFORM_L16 wv;
-	LOG_DATA	 log;			// 4700
-	ENERGY_LOG	elog[2];// 5000
-	DEMAND_LOG	dlog;		// 5400 - last da demand log
+	MAXMIN	maxmin;
+	ALARM_STATUS alarm;
+	ALARM_LIST alist;
+	EVENT_LIST elist;
+	PQ_EVENT_COUNT pqEvtCnt;
+	WAVEFORM_L16 wv;		// MBAD_WV_REG — read 시 waveform 갱신
+	LOG_DATA	 log;
+	ENERGY_LOG	elog[2];
+	DEMAND_LOG	dlog;
 
-	ITIC_EVT_LIST	itic;	// 5600
-	ITIC_EVT_LIST	itic2;// 6060
+	ITIC_EVT_LIST	itic;
+	ITIC_EVT_LIST	itic2;
 
 	/* PQE/Trend/Alarm 설정 — METER_DEF에서 IOM_DATA(iom) 직전 영역( Modbus P2~P4 ) */
 	PQEVENT pqevt[4];		/* 0: OC, 1: sag, 2:swell, 3: Interruption */
@@ -1942,15 +1914,12 @@ typedef struct {
 	PQREPORT_DEF pqRpt;
 	ALARM_DEF	almSet;		/* Modbus P4 알람 설정 (ALARM_STATUS alarm 과 구분) */
  
-	IOM_DATA iom;		// 6870
-	METER_INFO info;		// 6890
+	IOM_DATA iom;		// MBAD_RW_OFF_END
+	METER_INFO info;
 
 	SETTINGS	setting;	/* comm/pt/ct/etc/iom — 파일(settings.dat) 및 P1(별도 맵) */
-//	uint16_t 	_r[10];
 
 	COMMANDS	cmds;			/* MBAD_SET_CMD */
-//	FLOW_DATA	flowMeter;
-//
 
 	EVENT_FIFO 	eventFifo;
 	ALARM_FIFO	alarmFifo;	
@@ -1963,6 +1932,50 @@ typedef struct {
 	SETTINGS	db;	// loadSettings을 통해 읽는다 
 	float		almCnt;
 } METER_DEF;
+
+/* Modbus input map — base &meter[id].meter (uint16_t index), memorymap/SV300 참고
+ * ENERGY 확장: 60w → 240w, 이후 필드 +180w */
+#define MB_FIELD_OFF(field) \
+	((uint16_t)((offsetof(METER_DEF, field) - offsetof(METER_DEF, meter)) / sizeof(uint16_t)))
+#define MB_FIELD_SIZE(field) \
+	((uint16_t)(sizeof(((METER_DEF *)0)->field) / sizeof(uint16_t)))
+
+#define MBAD_ENERGY_START		MB_FIELD_OFF(egy)
+#define MBAD_ENERGY_SIZE		MB_FIELD_SIZE(egy)
+#define MBAD_ENERGY_U32_PERIOD	48u	/* Ereg32[period]: 4group×3mode×2sign×2w */
+#define MBAD_ENERGY_U32_TOTAL	MBAD_ENERGY_START
+#define MBAD_ENERGY_U32_THIS	(MBAD_ENERGY_START + MBAD_ENERGY_U32_PERIOD)
+#define MBAD_ENERGY_U32_LAST	(MBAD_ENERGY_START + MBAD_ENERGY_U32_PERIOD * 2u)
+#define MBAD_ENERGY_U64_START	(MBAD_ENERGY_START + MBAD_ENERGY_U32_PERIOD * ENERGY_PERIOD_COUNT)
+
+#define MBAD_DM_START			MB_FIELD_OFF(dm)
+#define MBAD_WV_REG				MB_FIELD_OFF(wv)
+
+#define MBAD_RW_POCKET_SIZE		350u
+#define MBAD_RW_OFF_END			MB_FIELD_OFF(iom)
+#define MBAD_RW_OFF_START		(MBAD_RW_OFF_END - MBAD_RW_POCKET_SIZE)
+#define MBAD_M1_RW_START		(ADD_ADE9000_M2 + MBAD_RW_OFF_START)
+#define MBAD_M1_RW_END			(ADD_ADE9000_M2 + MBAD_RW_OFF_END)
+#define MBAD_M2_RW_START		(ADD_ADE9000_M3 + MBAD_RW_OFF_START)
+#define MBAD_M2_RW_END			(ADD_ADE9000_M3 + MBAD_RW_OFF_END)
+#define MBAD_METER_END_M2		MBAD_M1_RW_END
+#define MBAD_METER_END_M3		MBAD_M2_RW_END
+#define MBAD_SETTING_M2			MBAD_METER_END_M2
+#define MBAD_SETTING_M3			MBAD_METER_END_M3
+
+#define MBAD_SETTING			MB_FIELD_OFF(pqevt)
+#define MBAD_SET_TS_REL			336u
+#define MBAD_SET_CMD_REL		346u
+#define MBAD_SET_END_REL		463u
+#define MBAD_SET_TS				(MBAD_SETTING + MBAD_SET_TS_REL)
+#define MBAD_SET_CMD				(MBAD_SETTING + MBAD_SET_CMD_REL)
+#define MBAD_SET_END				(MBAD_SETTING + MBAD_SET_END_REL)
+#define MBAD_CMD_FETCH_EVENT		(MBAD_SET_CMD + 67)
+#define MBAD_CMD_FETCH_ALARM		(MBAD_SET_CMD + 73)
+#define MBAD_CMD_FETCH_ITIC		(MBAD_SET_CMD + 103)
+#define MBAD_CMD_FETCH_ITIC2		(MBAD_SET_CMD + 106)
+
+#define METER_MB_SETTING_REGS(m)	((uint16_t *)&(m).pqevt)
 
 
 typedef struct {

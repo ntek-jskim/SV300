@@ -3405,7 +3405,7 @@ void checkEnergy(int id) {
 	
 	for (id=0; id<ENERGY_CH_COUNT; id++) {
 		copyEreg32(id);
-		copyEreg64(&meter[id].egy.Ereg64, egyNvr.Ereg64[id]);
+		copyEreg64(&meter[id].egy.Ereg64, &egyNvr.Ereg64[id]);
 		printf("[[[[%d]Energy Reg : %lld, %lld, %lld]]]\n",
 			id,
 			EGY_TOTAL(egyNvr.Ereg64[id], EGY_MODE_KWH, EGY_SIGN_IMPORT),

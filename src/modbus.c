@@ -272,7 +272,7 @@ int modbusSlvProcFrame(uint8_t *prx, uint16_t rxsize, uint8_t *ptx, int longFram
 		}
 		break; 
 	
-	// FC6: CH0 명령 또는 M1/M2 RW 포켓(16870~17219 / 26870~27219)
+	// FC6: CH0 명령 또는 M1/M2 RW 포켓(MBAD_M1_RW_* / MBAD_M2_RW_*)
 	case 6:
 		if (start < ADD_ADE9000_M2) {
 			size = writeSingleMem(start, count);
@@ -575,7 +575,7 @@ int	readMem(uint8_t *ptx, uint16_t start, uint16_t count)
 //		buildWV16();
 //	}
 	// Wave 데이터를 load 한다 
-	if (start == 2300) {
+	if (start == MBAD_WV_REG) {
 		copyModbusWaveData();
 	}
 
@@ -919,7 +919,7 @@ int   readMemCb(uint16_t address, uint16_t *value)
 	uint16_t offset;
 	uint16_t *psmb;
 	// Wave 데이터를 load 한다 
-	if (address == 2300) {
+	if (address == MBAD_WV_REG) {
 		copyModbusWaveData();
 	}
 

@@ -114,3 +114,5 @@
 2026/06/17 : meter.h ENERGY — eh union 별칭 제거, cell[mode][sign][group] 단일 배열만 사용
 2026/06/17 : meter.h ENERGY — cell[GROUP][MODE][SIGN] Modbus Total 구간 호환, NVRAM magic 0x1234abcf
 2026/06/17 : ENERGY NVRAM — Ereg64 누적만(period 제거), 현월 month_wh·전월 Ereg32_last, magic 0x1234abd0
+2026/06/17 : meter.h Modbus — MB_FIELD_OFF 기반 MBAD_* 재계산(ENERGY 240w, 이후 필드 +180w)
+2026/06/17 : meter.c — copyEreg64 2번째 인자 &egyNvr.Ereg64[id] 포인터 수정
