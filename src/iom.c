@@ -872,10 +872,10 @@ void IOM_Task(void *arg)
 		scanKey();
 		scanTemp(ch++);
 
-		if(ch>1)
+		if(ch>4)
 			ch = 0;
 
-		osDelayTask(1000);
+		osDelayTask(1);
 
 // 		if(pInfo->Io_sts == STS_ERROR) {
 // 			if (sysTick1s == ts1s) {

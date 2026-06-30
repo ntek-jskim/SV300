@@ -15,7 +15,7 @@
 #define	FW_VER	0001
 #define	FW_BUILD_YEAR 26
 #define	FW_BUILD_MON  6
-#define	FW_BUILD_DAY  17
+#define	FW_BUILD_DAY  18
 
 #define	SQRT_2	 1.414213562 
 
@@ -72,6 +72,39 @@ extern void assertEventOutput(int, int);
 
 int		saveLockEnergy=0;
 
+static const void *fsMsgPayload(const FS_MSG *p)
+{
+	if (p == NULL)
+		return NULL;
+	if (p->useData)
+		return p->data;
+	return p->pbuf;
+}
+
+/* M0/M1/M2가 동시에 fopen/fwrite 하면 FatFS 내부 포인터가 깨질 수 있음 */
+static OsMutex fsFileMutex;
+static uint8_t fsFileMutexReady;
+
+void fsFileLockInit(void)
+{
+	if (!fsFileMutexReady) {
+		osCreateMutex(&fsFileMutex);
+		fsFileMutexReady = 1;
+	}
+}
+
+void fsFileLock(void)
+{
+	if (!fsFileMutexReady)
+		fsFileLockInit();
+	osAcquireMutex(&fsFileMutex);
+}
+
+void fsFileUnlock(void)
+{
+	osReleaseMutex(&fsFileMutex);
+}
+
 int getTzOffset(int tz) {
 	//if (tz > 31) tz = 0;
 	//return tzTable[tz]*60;
@@ -80,14 +113,34 @@ int getTzOffset(int tz) {
 
 void putFsQ(FS_MSG *p) {
 	uint32_t primask;
+	int next, tries = 0;
+	FS_MSG copy;
 
-	/* Meter0/1/2 등 여러 태스크가 동시에 큐를 쓰면 fr/re가 깨질 수 있다. */
-	primask = __get_PRIMASK();
-	__disable_irq();
-	memcpy(&fsQ.mQ[fsQ.fr], p, sizeof(*p));
-	if (++fsQ.fr >= FS_MSG_CNT) {
-		fsQ.fr = 0;
+	if (p == NULL)
+		return;
+	copy = *p;
+	if (copy.size > 0 && copy.size <= FS_MSG_DATA_SZ && copy.pbuf != NULL) {
+		memcpy(copy.data, copy.pbuf, copy.size);
+		copy.useData = 1;
+		copy.pbuf = NULL;
 	}
+
+	for (;;) {
+		primask = __get_PRIMASK();
+		__disable_irq();
+		next = fsQ.fr + 1;
+		if (next >= FS_MSG_CNT)
+			next = 0;
+		if (next != fsQ.re)
+			break;
+		__set_PRIMASK(primask);
+		if (++tries > 200)
+			return;
+		osDelayTask(5);
+	}
+
+	memcpy(&fsQ.mQ[fsQ.fr], &copy, sizeof(copy));
+	fsQ.fr = next;
 	__set_PRIMASK(primask);
 
 #ifdef __FREERTOS	
@@ -1023,16 +1076,21 @@ int loadSettings(SETTINGS	*pdb)
 
 
 int saveSettings(SETTINGS	*pdb) {
-	FILE *fp = fopen(SETTING_FILE, "wb");
+	FILE *fp;
+	int ret;
+
+	fsFileLock();
+	fp = fopen(SETTING_FILE, "wb");
 	if (fp != NULL) {
 		fwrite(pdb, 1, sizeof(SETTINGS), fp);
 		fclose(fp);
 		printf("[[Save Settings(%s)]]\n", SETTING_FILE);
-		return 0;
-	}			
-	else {
-		return -1;
+		ret = 0;
+	} else {
+		ret = -1;
 	}
+	fsFileUnlock();
+	return ret;
 }
 
 
@@ -2521,6 +2579,8 @@ void FS_task(void *arg)
 	uint32_t notificationValue;
 	EVENT_U elog;
 
+	fsFileLockInit();
+
 #ifdef __FREERTOS	
 	fsQ.tid = xTaskGetCurrentTaskHandle();
 #else
@@ -2542,9 +2602,11 @@ void FS_task(void *arg)
 		meter[0].cntl.wdtTbl[Tid_Fs].count++;
 		
 		if (fsQ.fr != fsQ.re) {
-			t1 = sysTick64;
-			pmsg = &fsQ.mQ[fsQ.re];			
-			
+			fsFileLock();
+			while (fsQ.fr != fsQ.re) {
+				t1 = sysTick64;
+				pmsg = &fsQ.mQ[fsQ.re];
+
 			// delete
 			if (strcmp(pmsg->mode, "rm") == 0) {
 #ifdef USE_CMSIS_RTOS2				
@@ -2555,45 +2617,48 @@ void FS_task(void *arg)
 				t2 = sysTick64;			
 				printf("FS, delete(%s, %s), elap=%lld\n", pmsg->fname, pmsg->mode, t2-t1);
 			}
-#if 1	// 2025-3-13, event Fifo			
-			else if (strcmp(pmsg->mode, "ff") == 0) {				
-				fp = fopen(pmsg->fname, "r+b");
-				if (fp == NULL) {
-					// create header
+			else if (strcmp(pmsg->mode, "ff") == 0) {
+				const void *payload = fsMsgPayload(pmsg);
+
+				if (payload == NULL)
+					;
+				else if ((fp = fopen(pmsg->fname, "r+b")) == NULL) {
 					memset(&elog, 0, sizeof(elog));
 					elog.head.magic = 0x1234abcd;
 					elog.head.fr = 1;
 					elog.head.count = 1;
 					elog.head.ts = sysTick1s;
 					fp = fopen(pmsg->fname, "wb");
-					fwrite(&elog, sizeof(elog), 1, fp);
-					fwrite(pmsg->pbuf, pmsg->size, 1, fp);
-					fclose(fp);
+					if (fp != NULL) {
+						fwrite(&elog, sizeof(elog), 1, fp);
+						fwrite(payload, pmsg->size, 1, fp);
+						fclose(fp);
+					}
 				}
 				else {
-					// update header
 					fread(&elog, sizeof(elog), 1, fp);
 					if (elog.head.count < pmsg->argv) {
 						elog.head.count++;
 					}
 					if (++elog.head.fr > pmsg->argv) {
 						elog.head.fr = 1;
-					}	
-				
-					// update header
+					}
 					fseek(fp, 0, SEEK_SET);
-					fwrite(&elog, sizeof(elog), 1, fp);						
-					// append or update data
-					fseek(fp, sizeof(elog)*elog.head.fr, SEEK_SET);
-					fwrite(pmsg->pbuf, pmsg->size, 1, fp);
+					fwrite(&elog, sizeof(elog), 1, fp);
+					fseek(fp, sizeof(elog) * elog.head.fr, SEEK_SET);
+					fwrite(payload, pmsg->size, 1, fp);
 					fclose(fp);
 				}
 			}
-#endif			
+			else if (strcmp(pmsg->mode, "af") == 0 || strcmp(pmsg->mode, "al") == 0) {
+				alarmFsDispatch(pmsg);
+			}
 			else {
+				const void *payload = fsMsgPayload(pmsg);
+
 				fp = fopen(pmsg->fname, pmsg->mode);
-				if (fp != NULL) {
-					fwrite(pmsg->pbuf, pmsg->size, 1, fp);
+				if (fp != NULL && payload != NULL) {
+					fwrite(payload, pmsg->size, 1, fp);
 					fclose(fp);
 					if ((strcmp(pmsg->mode, "ab") == 0) &&
 						(strncmp(pmsg->fname, EVENT_LIST_FILE, strlen(EVENT_LIST_FILE)) == 0)) {
@@ -2603,10 +2668,12 @@ void FS_task(void *arg)
 				t2 = sysTick64;			
 				printf("FS, write(%s, %s, %d), elap=%lld\n", pmsg->fname, pmsg->mode, pmsg->size, t2-t1);
 			}
-			
-			if (++fsQ.re >= FS_MSG_CNT) {
-				fsQ.re = 0;
-			}			
+
+				if (++fsQ.re >= FS_MSG_CNT) {
+					fsQ.re = 0;
+				}
+			}
+			fsFileUnlock();
 		}
 		else if (meter[id].cntl.saveSetting == 0x1234) {
 			/* 파일: SETTINGS 단일(db). PT/CT는 db.pt[id]/ct[id], PQE는 meter[] */
@@ -2984,7 +3051,8 @@ void storeDemand() {
 	FILE *fp;
 	char path[64];
 	int id;
-	
+
+	fsFileLock();
 	for (id = 0; id < METER_CH_COUNT; id++) {
 		if (id == 0) sprintf(path, "%s", DEMAND_FILE);
 		else sprintf(path, "%s\\demand.d%d", SYS_DIR, id);
@@ -2996,6 +3064,7 @@ void storeDemand() {
 		fwrite(&meter[id].dlog, sizeof(DEMAND_LOG), 1, fp);
 		fclose(fp);
 	}
+	fsFileUnlock();
 }
 
 int storeDemandNVR() {
@@ -3021,7 +3090,8 @@ void loadDemand() {
 	FILE *fp;
 	char path[64];
 	int id;
-	
+
+	fsFileLock();
 	for (id = 0; id < METER_CH_COUNT; id++) {
 		if (id == 0) sprintf(path, "%s", DEMAND_FILE);
 		else sprintf(path, "%s\\demand.d%d", SYS_DIR, id);
@@ -3044,6 +3114,7 @@ void loadDemand() {
 		fclose(fp);
 		printf("[[Create Demand File(%s)]]\n", path);
 	}
+	fsFileUnlock();
 }
 
 
@@ -3237,12 +3308,15 @@ static int loadOrCreateFsBlob(const char *path, void *blob, size_t nbytes,
 	void (*on_create)(void *blob))
 {
 	FILE *fp;
+	int ret;
 
+	fsFileLock();
 	fp = fopen(path, "rb");
 	if (fp != NULL) {
 		if (fread(blob, nbytes, 1, fp) != 1)
 			memset(blob, 0, nbytes);
 		fclose(fp);
+		fsFileUnlock();
 		return 0;
 	}
 
@@ -3254,12 +3328,15 @@ static int loadOrCreateFsBlob(const char *path, void *blob, size_t nbytes,
 	fp = fopen(path, "wb");
 	if (fp == NULL) {
 		printf("{{Can't create File(%s)}}\n", path);
+		fsFileUnlock();
 		return -1;
 	}
 	fwrite(blob, nbytes, 1, fp);
 	fclose(fp);
 	printf("[[Create File(%s)]]\n", path);
-	return 0;
+	ret = 0;
+	fsFileUnlock();
+	return ret;
 }
 
 static void getEnergyLogFileName(int id, int sel, char *path)
@@ -3344,12 +3421,15 @@ int loadEnergyFs(ENERGY_NVRAM *pEgyNvr) {
 
 
 void storeEnergyFs(ENERGY_NVRAM *pEgyNvr) {
-	FILE *fp = fopen(ENERGY_FILE, "wb");				
-	
+	FILE *fp;
+
+	fsFileLock();
+	fp = fopen(ENERGY_FILE, "wb");				
 	if (fp != NULL) {		
 		fwrite(pEgyNvr, sizeof(ENERGY_NVRAM), 1, fp);
 		fclose(fp);
 	}
+	fsFileUnlock();
 }
 
 
@@ -3362,11 +3442,13 @@ void storeEnergyLogFs(int id, int sel, ENERGY_LOG *pEgyLog)
 		return;
 
 	getEnergyLogFileName(id, sel, path);
+	fsFileLock();
 	fp = fopen(path, "wb");
 	if (fp != NULL) {
 		fwrite(&pEgyLog[sel], sizeof(ENERGY_LOG), 1, fp);
 		fclose(fp);
 	}
+	fsFileUnlock();
 }
 
 // energy
@@ -3451,20 +3533,28 @@ int loadEnergy(int id) {
 
 int loadMaxMin() {
 	MAXMIN *pmm;
-	FILE *fp = fopen(MAXMIN_FILE, "rb");
+	FILE *fp;
 	int id;
+
+	fsFileLock();
+	fp = fopen(MAXMIN_FILE, "rb");
 		
 	if (fp == NULL) {
+		fsFileUnlock();
 		for (id = 0; id < METER_CH_COUNT; id++)
 			memset(&meter[id].maxmin, 0, sizeof(MAXMIN));
+		fsFileLock();
 		fp = fopen(MAXMIN_FILE, "wb");
-		if (fp == NULL)
+		if (fp == NULL) {
+			fsFileUnlock();
 			return -1;
+		}
 		for (id = 0; id < METER_CH_COUNT; id++) {
 			pmm = &meter[id].maxmin;
 			fwrite(pmm, sizeof(MAXMIN), 1, fp);
 		}
 		fclose(fp);
+		fsFileUnlock();
 		printf("[[Create MaxMin File(%s)]]\n", MAXMIN_FILE);
 		return 0;
 	}
@@ -3477,23 +3567,30 @@ int loadMaxMin() {
 		}
 	}
 	
-	fclose(fp);	
+	fclose(fp);
+	fsFileUnlock();
 	return 0;
 }
 
 int storeMaxMin() {
 	MAXMIN *pmm;
-	FILE *fp = fopen(MAXMIN_FILE, "wb");
+	FILE *fp;
 	int id;
+
+	fsFileLock();
+	fp = fopen(MAXMIN_FILE, "wb");
 		
-	if (fp == NULL) 
+	if (fp == NULL) {
+		fsFileUnlock();
 		return -1;
+	}
 
 	for (id = 0; id < METER_CH_COUNT; id++) {
 		pmm = &meter[id].maxmin;
 		fwrite(pmm, sizeof(MAXMIN), 1, fp);	// 현재 max/min
 	}
-	fclose(fp);	
+	fclose(fp);
+	fsFileUnlock();
 	return 0;	
 }
 
@@ -4210,11 +4307,12 @@ void PostScan_Task(void *arg)
 					deleteAlarmLog(id);
 //					Board_LED_Off(1);				// alarm off
 				}
+#if 1
 				else if (alarmProc(id) > 0) {
 					meter[id].alarm.updateTs = sysTick32;
 					storeAlarmStatus(id);
 				}
-
+#endif
 				ledAlmCount += meter[id].alarm.almCount;
 			}
 			

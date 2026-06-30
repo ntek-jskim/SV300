@@ -30,15 +30,11 @@ extern int readQualWeekData(char *path, QualWeek *pqw);
 static uint8_t qw_tail_buf[QW_TAIL_MAX];
 
 static void pqFsLock(void) {
-#ifdef __FREERTOS
-	vTaskSuspendAll();
-#endif
+	fsFileLock();
 }
 
 static void pqFsUnlock(void) {
-#ifdef __FREERTOS
-	(void)xTaskResumeAll();
-#endif
+	fsFileUnlock();
 }
 
 static int qualWeekReadTail(const char *path, uint32_t *ptailSize) {
@@ -84,21 +80,39 @@ static int qualWeekReadTail(const char *path, uint32_t *ptailSize) {
 }
 
 static int parseDateKey8(const char *name) {
-	int i, n = 0, key = 0;
-	for (i = 0; name[i] != 0; i++) {
-		if (name[i] >= '0' && name[i] <= '9') {
-			key = key * 10 + (name[i] - '0');
-			if (++n >= 8) {
-				return key;
+	const char *p;
+	int i, key;
+
+	if (name == NULL)
+		return 99999999;
+
+	/* 파일명: ql1_20260628_m1.d / qw1_20260628.d → '_' 뒤 YYYYMMDD */
+	for (p = name; *p != 0; p++) {
+		if (*p == '_' && p[1] >= '0' && p[1] <= '9') {
+			key = 0;
+			for (i = 0; i < 8 && p[1 + i] >= '0' && p[1 + i] <= '9'; i++) {
+				key = key * 10 + (p[1 + i] - '0');
 			}
+			if (i == 8)
+				return key;
 		}
 	}
+
+	/* dstr: "20260628" */
+	key = 0;
+	for (i = 0; name[i] != 0 && i < 8; i++) {
+		if (name[i] < '0' || name[i] > '9')
+			return 99999999;
+		key = key * 10 + (name[i] - '0');
+	}
+	if (i == 8)
+		return key;
 	return 99999999;
 }
 
 static int findOldestQualLog(char *oldestName, uint32_t *oldestSize, uint32_t *totalSize) {
 	char dstr[16];
-	int currentKey, lastWeekKey;
+	int currentKey;
 #ifdef USE_CMSIS_RTOS2
 	fsFileInfo info;
 #else
@@ -110,8 +124,6 @@ static int findOldestQualLog(char *oldestName, uint32_t *oldestSize, uint32_t *t
 
 	getQualStartDate(dstr);
 	currentKey = parseDateKey8(dstr);
-	getQualLastStartDate(dstr);
-	lastWeekKey = parseDateKey8(dstr);
 
 	*totalSize = 0;
 	oldestName[0] = 0;
@@ -136,14 +148,14 @@ static int findOldestQualLog(char *oldestName, uint32_t *oldestSize, uint32_t *t
 		}
 	}
 
-	// qw* 파일도 PQ 통합 예산에 포함하되, 금주·전주 파일은 보호
+	// qw* — 금주만 보호 (전주 qw는 용량 부족 시 trim 가능)
 	info.fileID = 0;
 	while (ffind(maskQw, &info) == 0) {
 		const char *name = (const char *)info.name;
 		int key = parseDateKey8(name);
 
 		*totalSize += info.size;
-		if (key >= lastWeekKey) {
+		if (key >= currentKey) {
 			continue;
 		}
 
@@ -158,12 +170,11 @@ static int findOldestQualLog(char *oldestName, uint32_t *oldestSize, uint32_t *t
 	return found;
 }
 
-static void trimQualLogBudget(void) {
+static void trimQualLogBudget_nolock(void) {
 	char oldestName[64], path[96];
 	uint32_t oldestSize = 0, totalSize = 0;
 	int res;
 
-	pqFsLock();
 	while (findOldestQualLog(oldestName, &oldestSize, &totalSize)) {
 		if (totalSize <= FLASH_LOG_BUDGET_PQ) {
 			break;
@@ -182,6 +193,36 @@ static void trimQualLogBudget(void) {
 			break;
 		}
 	}
+	if (totalSize > FLASH_LOG_BUDGET_PQ) {
+		printf("trimQualLogBudget: PQ flash still over budget (%u > %u)\n",
+			totalSize, (unsigned)FLASH_LOG_BUDGET_PQ);
+	}
+}
+
+static void ensureLogPqDir(void) {
+	FILE *fp;
+
+	fp = fopen(CONCAT(LOG_PQ_DIR, TEMP_FILE), "ab");
+	if (fp != NULL) {
+		fclose(fp);
+	}
+}
+
+static FILE *pqFopenLocked(const char *path, const char *mode) {
+	FILE *fp;
+
+	ensureLogPqDir();
+	fp = fopen(path, mode);
+	if (fp == NULL) {
+		trimQualLogBudget_nolock();
+		fp = fopen(path, mode);
+	}
+	return fp;
+}
+
+static void trimQualLogBudget(void) {
+	pqFsLock();
+	trimQualLogBudget_nolock();
 	pqFsUnlock();
 }
 
@@ -322,7 +363,7 @@ int appendQualLog(char *fn, void *bf, int size) {
 	fi.fileID = 0;      
 	if (ffind (fn, &fi)) {
 		printf("createQualLog(%s), ...\n", fn);
-		fp = fopen(fn, "wb");
+		fp = pqFopenLocked(fn, "wb");
 		if (fp) {
 			fwrite(bf, size, 1, fp);	// 마지막에 새 record 기록한다 
 			fclose(fp);				
@@ -333,7 +374,7 @@ int appendQualLog(char *fn, void *bf, int size) {
 	}
 	else {	
 		printf("appendQualLog(%s), size = %d\n", fn, fi.size);
-		fp = fopen(fn, "ab");
+		fp = pqFopenLocked(fn, "ab");
 		if (fp) {
 			fseek(fp, -1, SEEK_END);
 			fwrite(bf, size, 1, fp);	// 마지막에 새 record 기록한다 
@@ -349,14 +390,12 @@ int appendQualLog(char *fn, void *bf, int size) {
 
 
 // 10m 데이터를 파일에 기록한다. 10m을 다 채우지 못하면 기록하지 않는다 
-int writeQual10mData(char *path, QualData10m *pq10m) {	
-	int		result, woY;
-	//FINFO info;
-	FILE *fp;
+int writeQual10mData(int id, char *path, QualData10m *pq10m) {	
 	struct tm lt;
 	
 	appendQualLog(path, &pq10m->avg, sizeof(pq10m->avg));
-	trimQualLogBudget();
+	if (id == 0)
+		trimQualLogBudget();
 	uLocalTime(&sysTick1s, &lt);
 	printf("{{Qual10m(%s) TS[%d-%d-%d %d:%d:%d], C[%d] U[%f,%f,%f]}\n", 
 		path, lt.tm_year, lt.tm_mon, lt.tm_mday, 
@@ -418,7 +457,7 @@ int createQualWeekData(char *path, QualWeek *pqw) {
 	
 	printf("writeQualWeekData (%s) ...\n", path);
 	pqFsLock();
-	fp = fopen(path, "wb");
+	fp = pqFopenLocked(path, "wb");
 	if (fp == NULL) {
 		printf("Can't open file(%s)\n", path);
 		res = -1;
@@ -454,7 +493,7 @@ int updateQualWeekData(int id, char *path, QualWeek *pqw) {
 	}
 
 	/* RL-FlashFS: r+/r+b 갱신 실패 회피 — wb 재기록 + 기존 이벤트 tail 보존 */
-	fp = fopen(path, "wb");
+	fp = pqFopenLocked(path, "wb");
 	if (fp == NULL) {
 		printf("updateQualWeekData, Can't open file(%s)\n", path);
 		pqFsUnlock();
@@ -476,7 +515,7 @@ int updateQualWeekData(int id, char *path, QualWeek *pqw) {
 	fclose(fp);
 
 	if (evCount > 0) {
-		fp = fopen(path, "ab");
+		fp = pqFopenLocked(path, "ab");
 		if (fp == NULL) {
 			printf("updateQualWeekData, Can't append events(%s)\n", path);
 			res = -1;
@@ -517,18 +556,21 @@ int updateQualWeekData(int id, char *path, QualWeek *pqw) {
 
 int readQualWeekData(char *path, QualWeek *pqw) {
 	FILE *fp;
-	
+	int res = 0;
+
 	printf("readQualWeekData (%s) ...\n", path);
+	pqFsLock();
 	fp = fopen(path, "rb");
 	if (fp == NULL) {
-		printf("Can't open file(%s) ...\n", path);		
-		return -1;
-	}	
-	
-	fread(pqw, sizeof(QualWeek), 1, fp);
-	fclose(fp);
-	
-	return 0;
+		printf("readQualWeekData, no file(%s)\n", path);
+		res = -1;
+	} else {
+		if (fread(pqw, sizeof(QualWeek), 1, fp) != 1)
+			res = -1;
+		fclose(fp);
+	}
+	pqFsUnlock();
+	return res;
 }
 
 
@@ -923,7 +965,7 @@ int updateQualData(int id)
 		// report 주기 변동 여부 확인 
 		if (pqLog->qw.startTs <= sysTick1s && sysTick1s < pqLog->qw.endTs) {
 			// 10m Log 쓰기					
-			writeQual10mData(pqLog->qlfn, pq10m);
+			writeQual10mData(id, pqLog->qlfn, pq10m);
 			
 			// 주별 통계 데이터 갱신
 			updateQualWeek(pq10m, &pqLog->qw);		
@@ -934,7 +976,7 @@ int updateQualData(int id)
 		else {
 			// 새로운 로그 시작전에 마지막 데이터를 갱신한다
 			// 10m Log 쓰기		
-			writeQual10mData(pqLog->qlfn, pq10m);			
+			writeQual10mData(id, pqLog->qlfn, pq10m);			
 			// 새로운 주기 시작전에 마지막 데이터를 갱신한다
 			// 주별 통계 데이터 갱신
 			updateQualWeek(pq10m, &pqLog->qw);		

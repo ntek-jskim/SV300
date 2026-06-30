@@ -67,7 +67,11 @@
 #define	F_INIT	"init.ini"
 
 // SPI Flash(2MB) 운용을 위한 로그 예산(바이트)
+#if (METER_CH_COUNT > 1)
+#define	FLASH_LOG_BUDGET_PQ		(1400UL * 1024UL)	/* 3CH: ql/qw × M0~M2 */
+#else
 #define	FLASH_LOG_BUDGET_PQ		(800UL * 1024UL)
+#endif
 #define	FLASH_LOG_BUDGET_TREND	(320UL * 1024UL)
 
 // trdTime[] 인덱스 4 => 10분
@@ -1554,14 +1558,18 @@ typedef struct {
 } METER_INFO;
 
 
-#define FS_MSG_CNT	4
+#define FS_MSG_CNT	32
+
+#define FS_MSG_DATA_SZ	32
 
 typedef struct {
 	char fname[64];
-	char mode[4];		// "w", "wb"
+	char mode[4];		/* "w","wb","ab","ff","af","al","rm" */
 	int	 argv;
-	void *pbuf;			// 디스크에 쓸 buf 시작번지
+	void *pbuf;			/* useData==0 일 때만 유효(대용량 wb) */
 	int	size;
+	uint8_t data[FS_MSG_DATA_SZ];
+	uint8_t useData;
 } FS_MSG;
 
 typedef struct {
@@ -1889,7 +1897,7 @@ typedef struct {
 	VQDATA  vq;
 	EN50160	rpt[2];
 	HARMONICS hd;
-	INTERHARMONICS interhd;
+	INTERHARMONICS interhd;				// CLASS A 필수항목
 	MAXMIN	maxmin;
 	ALARM_STATUS alarm;
 	ALARM_LIST alist;
@@ -2145,7 +2153,11 @@ extern uint32_t sysTick32, sysTick1s, sysTick10s, sysTick10m, sysTick15m, sysTic
 extern uint64_t sysTick64;
 
 extern void fetchEvent(int id, int cmd);
+extern void putFsQ(FS_MSG *p);
 extern void fetchAlarm(int id, int cmd);
+extern void fsFileLockInit(void);
+extern void fsFileLock(void);
+extern void fsFileUnlock(void);
 extern void fetchItic(int id, int cmd);
 extern void fetchItic2(int id, int cmd);
 extern int loadEventFifo(int id);

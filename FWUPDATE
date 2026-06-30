@@ -116,3 +116,16 @@
 2026/06/17 : ENERGY NVRAM — Ereg64 누적만(period 제거), 현월 month_wh·전월 Ereg32_last, magic 0x1234abd0
 2026/06/17 : meter.h Modbus — MB_FIELD_OFF 기반 MBAD_* 재계산(ENERGY 240w, 이후 필드 +180w)
 2026/06/17 : meter.c — copyEreg64 2번째 인자 &egyNvr.Ereg64[id] 포인터 수정
+2026/06/18 : alarm.c — FIFO magic/크기 자동 검증·손상 시 M0~M2 purge, alarmProc ZX(online)·rmsInit 없으면 알람·로그 억제(무전압 부팅 HardFault 방지)
+2026/06/18 : alarm.c·meter.c — FatFS fsFileLock(M0/M1/M2·FS_task 직렬화), alarmProc 주파수 47~63Hz·zxMonCnt 검사, fetchAlarm bottom count=0 언더플로 수정
+2026/06/18 : Quality.c pqFsLock→fsFileLock 통합(동시 fopen 방지), putFsQ 큐 32·가득 참 시 대기
+2026/06/18 : alarm.c — M1/M2 전압 억제 제거(전압 포트 1개·M0~M2 동일 계측 HW), 알람 가드는 CH 공통 적용
+2026/06/18 : alarm.c·meter.c — 알람 파일 I/O를 FS_task 전용(al/af 큐)·putFsQ 페이로드 복사, Meter 태스크 fopen 제거
+2026/06/18 : Quality.c parseDateKey8 — qw1_YYYYMMDD 파일명에서 qw1의 1이 날짜에 섞여 금주 PQ 파일이 trimQualLogBudget에 삭제되던 버그 수정
+2026/06/18 : Quality.c — 3CH PQ 예산 1400KB·전주 qw trim 허용·fopen 실패 시 trim 후 재시도·trim M0 1회만
+2026/06/18 : FS.c FORMAT — osSuspendAllTasks로 동시 fopen 차단·init_directory 재생성·init_card finit 1회만
+2026/06/18 : meter.c storeMaxMin/loadMaxMin — fsFileLock 직렬화(FORMAT 직후 FAT 손상 방지)
+2026/06/18 : FS.c cmd_dir/cmd_delete·alarm Trend·meter loadOrCreateFsBlob 등 잔여 fopen fsFileLock 직렬화
+2026/06/18 : meter.c storeDemand/loadDemand/saveSettings — fsFileLock(알람 I/O와 demand.d 동시 쓰기 FAT 손상 방지)
+2026/06/18 : alarm.c alarmFifoFileAppend — r+b 제거·RAM FIFO wb 스냅샷(RL-FlashFS FAT 손상 회피)
+2026/06/18 : meter.c FS_task — putFsQ 백로그 while 루프로 al/af 연속 처리

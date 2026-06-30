@@ -9,6 +9,10 @@
 #include "time.h"
 #include "meter.h"
 #include "debug.h"
+#include "os_port.h"
+
+static uint8_t s_fsMounted;
+void init_directory(void);
 
 extern int  debug_getchar();
 extern int readchar();
@@ -181,8 +185,22 @@ static void cmd_format (char *par) {
   printf ("\nFormat Flash Memory Card? [Y/N]\n");
   while ((retv = readchar()) == 0);
   if (retv == 'y' || retv == 'Y') {
-    /* Format the Device with Label "KEIL". "*/
-    if (fformat (arg) == 0) {
+    int fmtOk;
+
+    /* Meter/Alarm/PostScan 동시 fopen 시 FAT 손상 — FORMAT 구간만 전 태스크 정지 */
+    fsFileLock();
+    osSuspendAllTasks();
+    fmtOk = (fformat(arg) == 0);
+    if (fmtOk) {
+      s_fsMounted = 1;
+      init_directory();
+    } else {
+      s_fsMounted = 0;
+    }
+    osResumeAllTasks();
+    fsFileUnlock();
+
+    if (fmtOk) {
       printf ("Memory Card Formatted.\n");
       printf ("Card Label is %s\n",label);
     }
@@ -392,6 +410,7 @@ static void cmd_delete (char *par) {
     dir = 1;
   }
 
+  fsFileLock();
   if (fdelete (fname) == 0) {
     if (dir) {
       printf ("\nDirectory %s deleted.\n",fname);
@@ -408,6 +427,7 @@ static void cmd_delete (char *par) {
       printf ("\nFile %s not found.\n",fname);
     }
   }
+  fsFileUnlock();
 }
 /*-----------------------------------------------------------------------------
  *        Print a Directory
@@ -440,6 +460,7 @@ static void cmd_dir (char *par) {
   files = 0;
   dirs  = 0;
   fsize = 0;
+  fsFileLock();
   info.fileID  = 0;
   while (ffind (mask,&info) == 0) {
     if (info.attrib & ATTR_DIRECTORY) {
@@ -489,6 +510,7 @@ static void cmd_dir (char *par) {
   else {
     printf ("\n%56s bytes free.\n",temp);
   }
+  fsFileUnlock();
 }
 
 
@@ -911,6 +933,10 @@ void init_card (void) {
   {
     U32 retv;
 
+    if (s_fsMounted) {
+      return;
+    }
+
     retv = finit (NULL);
     if (retv != 0 && retv != 1) {
       /* 미포맷 등 — SD 경로와 동일하게 한 번 포맷 시도 */
@@ -921,10 +947,16 @@ void init_card (void) {
     }
     if (retv != 0) {
       printf ("\nSPI Flash FS finit failed (%u)\n", (unsigned)retv);
+    } else {
+      s_fsMounted = 1;
     }
   }
 #else
   U32 retv;
+
+  if (s_fsMounted) {
+    return;
+  }
 
   while ((retv = finit (NULL)) != 0) {        /* Wait until the Card is ready */
     if (retv == 1) {
@@ -936,6 +968,9 @@ void init_card (void) {
       strcpy (&in_line[0], "KEIL\r\n");
       cmd_format (&in_line[0]);
     }
+  }
+  if (retv == 0) {
+    s_fsMounted = 1;
   }
 #endif
 	

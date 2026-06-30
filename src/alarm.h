@@ -22,6 +22,7 @@ int loadAlarmStatus(int id);
 int deleteAlarmLog(int id);
 void buildTrendSetting();
 int loadEventLog(void);
+int alarmFsDispatch(const FS_MSG *pmsg);
 
 #endif
 

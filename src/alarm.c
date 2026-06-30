@@ -46,6 +46,61 @@ static const char *getAlarmStatusFileName(int id) {
 	}
 }
 
+#define ALARM_FIFO_MAGIC  0x1234abcd
+
+static void purgeAlarmFifoFile_nolock(int id)
+{
+	char path[64];
+
+	if (id < 0 || id >= METER_CH_COUNT)
+		return;
+	getAlarmFifoFileName(id, path);
+#ifdef USE_CMSIS_RTOS2
+	(void)fdelete(path, NULL);
+#else
+	(void)fdelete(path);
+#endif
+	memset(&meter[id].alarmFifo, 0, sizeof(meter[id].alarmFifo));
+	printf("---> purge invalid alarm fifo M%d: %s\n", id, path);
+}
+
+static void purgeAlarmFifoFile(int id)
+{
+	fsFileLock();
+	purgeAlarmFifoFile_nolock(id);
+	fsFileUnlock();
+}
+
+static int alarmFifoHeaderOk(const ALARM_U *alog, long fsize)
+{
+	long minsz;
+	int n;
+
+	if (alog == NULL || fsize < (long)sizeof(ALARM_U))
+		return 0;
+	if (alog->head.magic != ALARM_FIFO_MAGIC)
+		return 0;
+	n = alog->head.count;
+	if (n < 0 || n > LOG_FIFO_SIZE)
+		return 0;
+	if (alog->head.fr < 0 || alog->head.fr > LOG_FIFO_SIZE)
+		return 0;
+	minsz = (long)sizeof(ALARM_U) + (long)n * (long)sizeof(ALARM_LOG);
+	return (fsize >= minsz);
+}
+
+static void alarmFifoSanitizeRam(ALARM_FIFO *pFifo)
+{
+	if (pFifo == NULL)
+		return;
+	if (pFifo->count > N_ALARM_FIFO)
+		pFifo->count = N_ALARM_FIFO;
+	if (pFifo->fr >= N_ALARM_FIFO)
+		pFifo->fr = 0;
+	if (pFifo->re >= N_ALARM_FIFO)
+		pFifo->re = 0;
+}
+
 void initAlarmTable(int id) {
 	int ix=0;
 	float temp;
@@ -319,12 +374,15 @@ int storeAlarmStatus(int id) {
 	const char *path = getAlarmStatusFileName(id);
 	ALARM_STATUS *palm = &meter[id].alarm;
 
+	fsFileLock();
 	fp = fopen(path, "wb");
 	if (fp == NULL) {
+		fsFileUnlock();
 		return -1;
-	}	
+	}
 	fwrite(palm, sizeof(ALARM_STATUS), 1, fp);
 	fclose(fp);
+	fsFileUnlock();
 	return 0;
 }
 
@@ -334,11 +392,13 @@ int deleteAlarmLog(int id) {
 	ALARM_FIFO *pFifo = &meter[id].alarmFifo;
 
 	getAlarmFifoFileName(id, path);
-#ifdef USE_CMSIS_RTOS2	
-   res = fdelete(path, NULL);	
+	fsFileLock();
+#ifdef USE_CMSIS_RTOS2
+   res = fdelete(path, NULL);
 #else
 	res = fdelete(path);
-#endif	
+#endif
+	fsFileUnlock();
 	
 	memset(pFifo, 0, sizeof(*pFifo));
 	printf("---> deleteAlarmLog(M%d), result=%d\n", id, res);
@@ -416,20 +476,42 @@ int loadAlarmLog(int id) {
 	}
 
 	getAlarmFifoFileName(id, path);
-	// 시간순으로 읽는다
+	fsFileLock();
+	memset(pFifo, 0, sizeof(*pFifo));
 	fp = fopen(path, "rb");
 	if (fp != NULL) {
-		fread(&alog, sizeof(alog), 1, fp);
-		
-		for (i=0; i<alog.head.count; i++) {			
-			fread(&pFifo->alog[i], sizeof(alog), 1, fp);			
+		long fsize;
 
-			pFifo->fr++;
-			pFifo->count++;
+		if (fseek(fp, 0, SEEK_END) == 0) {
+			fsize = ftell(fp);
+			rewind(fp);
+		} else {
+			fsize = -1;
 		}
-		fclose(fp);
+		if (fread(&alog, sizeof(alog), 1, fp) != 1 ||
+		    !alarmFifoHeaderOk(&alog, fsize)) {
+			fclose(fp);
+			purgeAlarmFifoFile_nolock(id);
+		} else {
+			int n = alog.head.count;
+
+			for (i = 0; i < n; i++) {
+				if (fread(&pFifo->alog[i], sizeof(ALARM_LOG), 1, fp) != 1)
+					break;
+			}
+			if (i != n) {
+				fclose(fp);
+				purgeAlarmFifoFile_nolock(id);
+			} else {
+				pFifo->count = (uint16_t)n;
+				pFifo->fr = (uint16_t)n;
+				fclose(fp);
+			}
+		}
 	}
-	
+	fsFileUnlock();
+
+	alarmFifoSanitizeRam(pFifo);
 	fetchAlarm(id, 3);
 		
 //		re = pAlmFifo->re;
@@ -552,14 +634,74 @@ int loadEventLog(void)
 	return 0;
 }
 
+/* RL-FlashFS: r+b 갱신 시 FAT 손상 — RAM FIFO 스냅샷을 wb로 전체 재기록 (Quality.c qw와 동일) */
+static int alarmFifoFileAppend(int id, int cap, const ALARM_LOG *plog)
+{
+	FILE *fp;
+	char fifoPath[64];
+	ALARM_U hdr;
+	const ALARM_FIFO *pFifo;
+	int i, n;
+
+	(void)cap;
+	(void)plog;
+
+	if (id < 0 || id >= METER_CH_COUNT)
+		return -1;
+
+	pFifo = &meter[id].alarmFifo;
+	n = pFifo->count;
+	if (n > N_ALARM_FIFO)
+		n = N_ALARM_FIFO;
+
+	getAlarmFifoFileName(id, fifoPath);
+	fp = fopen(fifoPath, "wb");
+	if (fp == NULL)
+		return -1;
+
+	memset(&hdr, 0, sizeof(hdr));
+	hdr.head.magic = ALARM_FIFO_MAGIC;
+	hdr.head.fr = pFifo->fr;
+	hdr.head.count = n;
+	hdr.head.ts = sysTick1s;
+	fwrite(&hdr, sizeof(hdr), 1, fp);
+	for (i = 0; i < n; i++)
+		fwrite(&pFifo->alog[i], sizeof(ALARM_LOG), 1, fp);
+	fclose(fp);
+	return 0;
+}
+
+int alarmFsDispatch(const FS_MSG *pmsg)
+{
+	const ALARM_LOG *plog;
+	FILE *fp;
+	int id, cap;
+
+	if (pmsg == NULL || pmsg->size < (int)sizeof(ALARM_LOG))
+		return -1;
+	plog = (const ALARM_LOG *)(pmsg->useData ? pmsg->data : pmsg->pbuf);
+	if (plog == NULL)
+		return -1;
+
+	if (strcmp(pmsg->mode, "al") == 0) {
+		fp = fopen(pmsg->fname, "ab");
+		if (fp == NULL)
+			return -1;
+		fwrite(plog, sizeof(ALARM_LOG), 1, fp);
+		fclose(fp);
+		return 0;
+	}
+	if (strcmp(pmsg->mode, "af") == 0) {
+		id = pmsg->argv & 0xff;
+		cap = (pmsg->argv >> 8) & 0xffff;
+		return alarmFifoFileAppend(id, cap, plog);
+	}
+	return -1;
+}
+
 
 int storeAlarmLog(int id, int ix, int status, float value, int doSel) {
-	FILE *fp;
-	char path[64];
-	char fifoPath[64];
-	uint16_t	do_action;
-	int		i;
-	ALARM_U	alog;
+	FS_MSG fsmsg;
 	CNTL_DATA *pcntlId = &meter[id].cntl;
 	ALARM_STATUS *palm = &meter[id].alarm;
 	ALARM_FIFO *pFifo = &meter[id].alarmFifo;
@@ -571,79 +713,40 @@ int storeAlarmLog(int id, int ix, int status, float value, int doSel) {
 	pcntlId->alog.value = value;
 	pcntlId->alog.status = status;
 
-	//woY = getYear_n_WoY(pcntlId->tod.tm_yday, pcntlId->tod.tm_wday);
-	sprintf(path, "%s%04d%02d.d", ALARM_LIST_FILE, pcntlId->tod.tm_year, pcntlId->tod.tm_mon);
-	fp = fopen(path, "ab"); 
-	if (fp != NULL) {
-		fwrite(&pcntlId->alog, sizeof(ALARM_LOG), 1, fp);
-		fclose(fp);
-	}
-#if 1	// 2025-3-13, alarm Fifo
-	getAlarmFifoFileName(id, fifoPath);
-	printf("ALARM_FIFO_FILE(M%d):%s\n", id, fifoPath);
-	fp = fopen(fifoPath, "r+b");
-	if (fp == NULL) {
-		// create header
-		memset(&alog, 0, sizeof(alog));
-		alog.head.magic = 0x1234abcd;
-		alog.head.fr = 1;		
-		alog.head.count = 1;
-		alog.head.ts = sysTick1s;
-		fp = fopen(fifoPath, "wb");
-		fwrite(&alog, sizeof(alog), 1, fp);
-		fwrite(&pcntlId->alog, sizeof(ALARM_LOG), 1, fp);
-		fclose(fp);
-	}
-	else {
-		// update header
-		fread(&alog, sizeof(alog), 1, fp);
-		if (alog.head.count < LOG_FIFO_SIZE) {
-			alog.head.count++;
-		}
-		if (++alog.head.fr > LOG_FIFO_SIZE) {
-			alog.head.fr = 1;
-		}	
-		// update header
-		fseek(fp, 0, SEEK_SET);
-		fwrite(&alog, sizeof(alog), 1, fp);						
-		// append or update data
-		fseek(fp, sizeof(alog)*alog.head.fr, SEEK_SET);
-		fwrite(&pcntlId->alog, sizeof(ALARM_LOG), 1, fp);
-		fclose(fp);
-	}
-	
-	// 2025-3-20, Alarm FiFo에 추가한다
-	memcpy(&pFifo->alog[pFifo->fr], &pcntlId->alog, sizeof(pcntlId->alog));	
+	memset(&fsmsg, 0, sizeof(fsmsg));
+	sprintf(fsmsg.fname, "%s%04d%02d.d", ALARM_LIST_FILE,
+		pcntlId->tod.tm_year, pcntlId->tod.tm_mon);
+	strcpy(fsmsg.mode, "al");
+	fsmsg.pbuf = &pcntlId->alog;
+	fsmsg.size = sizeof(ALARM_LOG);
+	putFsQ(&fsmsg);
+
+	getAlarmFifoFileName(id, fsmsg.fname);
+	strcpy(fsmsg.mode, "af");
+	fsmsg.argv = (LOG_FIFO_SIZE << 8) | (id & 0xff);
+	fsmsg.pbuf = &pcntlId->alog;
+	fsmsg.size = sizeof(ALARM_LOG);
+	putFsQ(&fsmsg);
+
+	memcpy(&pFifo->alog[pFifo->fr], &pcntlId->alog, sizeof(pcntlId->alog));
 	if (pFifo->count < N_ALARM_FIFO) {
 		pFifo->count++;
-		if (++pFifo->fr >= N_ALARM_FIFO) pFifo->fr = 0;
+		if (++pFifo->fr >= N_ALARM_FIFO)
+			pFifo->fr = 0;
 	}
 	else {
-		// Full 발생하면, fr, re 모두 이동한다
-		if (++pFifo->re >= N_ALARM_FIFO) pFifo->re = 0;
-		if (++pFifo->fr >= N_ALARM_FIFO) pFifo->fr = 0;
+		if (++pFifo->re >= N_ALARM_FIFO)
+			pFifo->re = 0;
+		if (++pFifo->fr >= N_ALARM_FIFO)
+			pFifo->fr = 0;
 	}
-	
-	fetchAlarm(id, 0);
-#else
-	ALARM_LIST *plist = &meter[id].alist;
-	for(i=N_ALARM_LIST-1; i>0; --i) {
-		plist->alog[i] = plist->alog[i-1];
-	}
-	memcpy(&plist->alog[0], &pcntlId->alog, sizeof(ALARM_LOG));
-	if (plist->count < (N_ALARM_LIST+1)) {
-		plist->count++;
-	}
-#endif	
-	
-	printf("alarm log(M%d) [Ts=%d, st=%d, value=%f, chan=%d, cond=%d, doPnt = %d]\n", id,
-		pcntlId->alog.ts, pcntlId->alog.status, pcntlId->alog.value, pcntlId->alog.chan, pcntlId->alog.cond, doSel);	
 
-#if 1
-	// doSel과 관계없이 호출한다(cskang)
-	// if(status && doSel !=0)
+	printf("alarm log(M%d) [Ts=%d, st=%d, value=%f, chan=%d, cond=%d, doPnt = %d]\n", id,
+		pcntlId->alog.ts, pcntlId->alog.status, pcntlId->alog.value,
+		pcntlId->alog.chan, pcntlId->alog.cond, doSel);
+
 	assertAlarmOutput(doSel, status);
-#endif
+	return 0;
 }
 
 
@@ -670,6 +773,7 @@ void fetchAlarm(int id, int cmd) {
 	ALARM_FIFO *pFifo = &meter[id].alarmFifo;
 	ALARM_LIST *plist = &meter[id].alist;
 
+	alarmFifoSanitizeRam(pFifo);
 	plist->count = pFifo->count;
 	
 	// update
@@ -691,7 +795,10 @@ void fetchAlarm(int id, int cmd) {
 	}
 	// bottom
 	else if (cmd == 4) {
-		plist->re = (plist->count-1)/N_ALARM_LIST * N_ALARM_LIST;
+		if (plist->count > 0)
+			plist->re = (plist->count - 1) / N_ALARM_LIST * N_ALARM_LIST;
+		else
+			plist->re = 0;
 	}
 	
 	// src
@@ -700,13 +807,14 @@ void fetchAlarm(int id, int cmd) {
 	plist->fr = plist->re;
 	for (i=0; i<N_ALARM_LIST; i++) {
 		if (plist->fr < pFifo->count) {
-			if (--ix < 0) ix = N_ALARM_FIFO-1;
-			memcpy(&plist->alog[i], &pFifo->alog[ix], sizeof(ALARM_LOG));			
-			// dst
+			if (--ix < 0) ix = N_ALARM_FIFO - 1;
+			if (ix < 0 || ix >= N_ALARM_FIFO)
+				memset(&plist->alog[i], 0, sizeof(ALARM_LOG));
+			else
+				memcpy(&plist->alog[i], &pFifo->alog[ix], sizeof(ALARM_LOG));
 			plist->fr++;
 		}
 		else {
-			// fill zero
 			memset(&plist->alog[i], 0, sizeof(ALARM_LOG));
 		}
 	}	
@@ -852,9 +960,19 @@ int alarmProc(int id) {
 	ALARM_STATUS *palm = &meter[id].alarm;
 	CNTL_DATA *pcntlId = &meter[id].cntl;
 	
-	// 시작 후 모든 값이 안정화 될때 까지 기다린다(5s)
-	if (pcntlId->online2++ < 5) return 0;
-		
+	/* 부팅 5s + RMS 초기화 + ZX(online) 없으면 알람·FIFO 기록 안 함 (무전압/미배선 보호) */
+	if (pcntlId->online2++ < 5)
+		return 0;
+	if (!pcntlId->rmsInit)
+		return 0;
+	if (!pcntlId->online || pcntlId->zxMonCnt == 0)
+		return 0;
+	{
+		float f = meter[id].meter.Freq;
+		if (f < 47.0f || f > 63.0f)
+			return 0;
+	}
+
 	for (i=0; i<32; i++) {		
 		if (paset->set[i].chan == 0) continue;
 		if (paset->set[i].chan >= MAX_ALARM_CH) continue;
@@ -949,6 +1067,8 @@ int alarmProc(int id) {
 	
 	palm->almCount = almCount;	
 	meter[id].almCnt = almCount;
+	if (change > 0)
+		fetchAlarm(id, 0);
 	return change;
 }
 
@@ -1171,7 +1291,8 @@ int appendTrendRcrd(int mid, int g) {
 
 	if (mid < 0 || mid >= METER_CH_COUNT)
 		return 0;
-	
+
+	fsFileLock();
 	getTrendFile(fn, mid, g);
 	
 	fi.fileID = 0;      
@@ -1202,6 +1323,7 @@ int appendTrendRcrd(int mid, int g) {
 			fclose(fp);				
 		}
 	}
+	fsFileUnlock();
 	return 0;
 }
 
@@ -1210,7 +1332,8 @@ void checkTrendHeader() {
 	int mid, i, j, err=0;
 	char fn[64], fnew[64];
 	FILE *fp;
-	
+
+	fsFileLock();
 	trimTrendLogBudget();
 
 	for (mid = 0; mid < ACTIVE_METER_CH_COUNT; mid++) {
@@ -1240,6 +1363,7 @@ void checkTrendHeader() {
 			}
 		}
 	}
+	fsFileUnlock();
 }
 
 void Trend_Task(void *arg)		
