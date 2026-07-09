@@ -134,3 +134,6 @@
 2026/07/09 : meter.h·meter.c — COMM_CFG layoutVer·SETTINGS_LAYOUT_VER 도입, loadSettings에서 크기 동일해도 버전 불일치 시 재초기화(레이아웃 변경 무성증 손상 방지)
 2026/07/09 : meter.c·smb_rtu.c — COMM_CFG 삭제 필드(comMode/baud/parity/gwEable/RS485MasterMode) 참조 정리, RS485 baud 115200 고정
 2026/07/09 : net_config.h·main.c — SNTP/NTP 트레이스 WARNING, sntpTask IPv4 주기 로그 억제
+2026/07/09 : ade9000.c scaleAngle/getComplexSum — 폐기된 cntl.freq[0](항상0) 대신 meter.Freq 사용(전압 위상각 0/360 오류 수정)
+2026/07/09 : ade9000.c readWFB8k/32k_Data — wQ.halfFull=1 설정 누락 수정(wave 태스크 미처리로 파형 미갱신되던 버그)
+2026/07/09 : modbus.c·meter.h — copyModbusWaveData(id) prototype 추가 및 인자 없는 호출 수정(쓰레기 id로 meter[0].wv 미갱신), TCP 경로 전 채널 파형 지원

@@ -109,14 +109,14 @@ float summation(float *pf,int c)
 float scaleAngle(int id, int raw)
 {
 	//float angle = 360 - raw * ANGLE_CONST *pmeter->Freq;
-	float angle = raw * ANGLE_CONST *meter[id].cntl.freq[0];
+	float angle = raw * ANGLE_CONST * meter[id].meter.Freq;	// cntl.freq[] 폐기됨 → 측정 주파수 사용
 	return angle;
 	//return fmod(angle, 360);
 }
 
 //
 void getComplexSum(int id, int raw, float *cx) {
-	float rad = raw * RAD_CONST * meter[id].cntl.freq[0];
+	float rad = raw * RAD_CONST * meter[id].meter.Freq;	// cntl.freq[] 폐기됨 → 측정 주파수 사용
 	cx[0] += cos(rad);
 	cx[1] += sin(rad);
 }
@@ -1995,14 +1995,15 @@ void readWFB8k_Data(int id)
 			wQ[id].lastolc = wQ[id].olc;
 			wQ[id].count = wQ[id].olc = 0;
 			wQ[id].ts = sysTick64-200;	// 시작시간 계산 : 완료시간-200ms
+			wQ[id].halfFull = 1;		// wave 태스크 처리 플래그(누락되어 파형 미갱신되던 버그)
 
 			if (tid_wave[id] != 0) {
-#ifdef __FREERTOS			
+#ifdef __FREERTOS
 				if (tid_wave[id] != 0) xTaskNotify(tid_wave[id], 0x1, eSetBits);
 #else
 				if (tid_wave[id] != 0) os_evt_set(0x1, tid_wave[id]);
-#endif				
-			}			
+#endif
+			}
 		}
 	}	
 	SSP_SSEL_Mode(id, 0);	// SSEL:Manual
@@ -2061,13 +2062,14 @@ void readWFB32k_Data(int id)
 			wQ[id].lastolc = wQ[id].olc;
 			wQ[id].count = wQ[id].olc = 0;
 			wQ[id].ts = sysTick64-200;	// 시작시간 계산 : 완료시간-200ms
+			wQ[id].halfFull = 1;		// wave 태스크 처리 플래그(누락되어 파형 미갱신되던 버그)
 			if (tid_wave[0] != 0) {
-#ifdef __FREERTOS			
+#ifdef __FREERTOS
             	if (tid_wave[0] != 0) xTaskNotify(tid_wave[0], 0x1, eSetBits);
 #else
 				if (tid_wave[0] != 0) os_evt_set(0x1, tid_wave[0]);
-#endif				
-			}			
+#endif
+			}
 		}
 	}	
 	SSP_SSEL_Mode(id, 0);	

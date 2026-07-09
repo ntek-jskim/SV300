@@ -574,9 +574,9 @@ int	readMem(uint8_t *ptx, uint16_t start, uint16_t count)
 //	if (start == SMB_WAVE) {
 //		buildWV16();
 //	}
-	// Wave 데이터를 load 한다 
+	// Wave 데이터를 load 한다
 	if (start == MBAD_WV_REG) {
-		copyModbusWaveData();
+		copyModbusWaveData(0);
 	}
 
 	ptx[inx++] = count << 1;  // bc = count * 2
@@ -918,15 +918,14 @@ int   readMemCb(uint16_t address, uint16_t *value)
 	int id;
 	uint16_t offset;
 	uint16_t *psmb;
-	// Wave 데이터를 load 한다 
-	if (address == MBAD_WV_REG) {
-		copyModbusWaveData();
-	}
 
 //	pInfo->MbusHeartBit++;
 	//printf("MbusHeartBit = %d\n", pInfo->MbusHeartBit);
 
 	if (decodeMeterAddress(address, &id, &offset) == 0) {
+		// Wave 데이터를 load 한다 (CH별 offset == MBAD_WV_REG)
+		if (offset == MBAD_WV_REG)
+			copyModbusWaveData(id);
 		if (readMeterChOffsetBlocked(id, offset))
 			return -1;
 		psmb = getMeterRegBaseById(id);

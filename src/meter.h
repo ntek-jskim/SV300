@@ -2084,6 +2084,7 @@ extern METER_INFO *pInfo;
 //extern WV16_DATA	*pwv;
 //extern WV16_BUF	  *pwbuf;
 extern WAVEFORM_L16	*pWFL16;
+extern void copyModbusWaveData(int id);	/* 인자 없는 호출 방지용 prototype */
 //extern ENERGY_NVRAM egyNvr;
 //extern ALARM_LOG  *palog;
 //extern ALARM_LOG  *pevt;
