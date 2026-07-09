@@ -192,7 +192,7 @@ void copySummary(void)
 }
 
 
-
+// 미사용
 // smb에서 호출
 // 2017-8-16, modbusSlvChkFrame호출시 addr를 0으로 설정
 int modbusSlvProcFrame(uint8_t *prx, uint16_t rxsize, uint8_t *ptx, int longFrame)
@@ -296,7 +296,7 @@ int modbusSlvProcFrame(uint8_t *prx, uint16_t rxsize, uint8_t *ptx, int longFram
 		ptx[inx++] = count;
 		break;
 		
-	// FC16: CH0 설정(7280~7625) 또는 M1/M2 RW 포켓
+	// FC16: CH0 P2~P4 설정(6700~7049)·UTC(7446) 또는 M1/M2 RW 포켓
 	case 16:
 		if (start >= MBAD_SETTING_M2)
 			return makeExceptFrame(prx[0], fc, 2, ptx);
@@ -905,7 +905,7 @@ int	writeMultiMem(uint16_t start, uint16_t count, uint8_t *pcmd)
 		putUTCtime(start-MBAD_SET_TS, count, pcmd);
 		return 0;
 	}
-	if (start >= MBAD_SETTING && start < MBAD_SET_CMD) {
+	if (start >= MBAD_SETTING && start < MBAD_SETTING_END) {
 		printf("recv Settings(M1), s=%d, c=%d ...\n", start, count);
 		putSettings(start-MBAD_SETTING, count, pcmd, pmset);
 		return 0;
@@ -993,7 +993,7 @@ int writeMemCb(uint16_t address, uint16_t value) {
 		RTC_SetTimeUTC(_utc);
 		return 0;
 	}
-	else if (id == 0 && offset >= MBAD_SETTING && offset < MBAD_SET_CMD) {
+	else if (id == 0 && offset >= MBAD_SETTING && offset < MBAD_SETTING_END) {
 		pmset[offset-MBAD_SETTING] = value;
 		return 0;
 	}

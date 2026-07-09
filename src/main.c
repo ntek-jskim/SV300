@@ -339,7 +339,7 @@ void sntpTask(void *arg)
    {
 #if (IPV4_SUPPORT == ENABLED)
       ipv4GetHostAddr(interface, &ipv4Addr);
-      printf("IPv4 Addr : %-16s\r\n", ipv4AddrToString(ipv4Addr, buffer));
+//      printf("IPv4 Addr : %-16s\r\n", ipv4AddrToString(ipv4Addr, buffer));
 #endif
       if (++interval >= ntpInterval) {
          interval = 0;
@@ -1137,7 +1137,7 @@ error_t modbusServerWriteRegCallback(const char_t *role, uint16_t address,
    //Initialize status code
    error = NO_ERROR;
    
-	// printf("modbusServerWriteRegCallback, address=%d, value=%d, commit=%d\n", 
+	// printf("modbusServerWriteRegCallback, address=%d, value=%d, commit=%d\n",
 	//    address, value, commit);
 
    if (commit) {

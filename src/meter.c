@@ -15,7 +15,7 @@
 #define	FW_VER	0001
 #define	FW_BUILD_YEAR 26
 #define	FW_BUILD_MON  6
-#define	FW_BUILD_DAY  18
+#define	FW_BUILD_DAY  30
 
 #define	SQRT_2	 1.414213562 
 
@@ -319,10 +319,7 @@ void build_set_db(void)
 	db.ct[id].zctType = 1;
 #endif
 
-	db.comm.comMode = 0;
 	db.comm.devId = 1;
-	db.comm.baud = 0;
-	db.comm.parity = 1;
 
 	commit_db_settings();
 }
@@ -375,10 +372,8 @@ int initSettings(int id)
 	if (id == 0) {
 		memset(&db, 0, sizeof(db));
 
-		db.comm.comMode = 1;
-		db.comm.baud = 4; /* 115200 */
+		db.comm.layoutVer = SETTINGS_LAYOUT_VER;
 		db.comm.devId = 1;
-		db.comm.parity = 0;
 		db.comm.tcpPort = 502;
 		db.comm.dhcpEn = 0;
 
@@ -409,8 +404,6 @@ int initSettings(int id)
 
 		strcpy((char *)db.comm.host, "SV300");
 		db.comm.tcpPort = 502;
-		db.comm.gwEable = 0x0f;
-		db.comm.RS485MasterMode = 2;
 		db.comm.dhcpEn = 0;
 
 		db.etc.backlightTime = 1;
@@ -459,10 +452,6 @@ int buildSettings(int id)
 	if (id == 0) {
 		if (db.comm.devId > 250) {
 			printf("*** Invalid devId = %d\n", db.comm.devId);
-			ret = -1;
-		}
-		if (db.comm.baud >= 5) {
-			printf("*** Invalid baudrate = %d\n", db.comm.baud);
 			ret = -1;
 		}
 		if (strlen(db.comm.host) == 0)
@@ -670,7 +659,7 @@ int buildSettings(int id)
 
 	//printf("sag   : %d, %d\n", db[id].Sag_lvl, db[id].Sag_cyc);
 	//printf("swell : %d, %d\n", db[id].Swell_lvl, db[id].Swell_cyc);
-	printf("devId=%d, speed=%d, parity=%d\n", db.comm.devId, db.comm.baud, db.comm.parity);
+	printf("devId=%d\n", db.comm.devId);
 
 #ifdef METER_TEST_DATA
 	// alarm db
@@ -853,12 +842,6 @@ int buildExtSettings(int id)
 		printf("MAC      = %02x:%02x:%02x:%02x\n", pcal->mac[0], pcal->mac[1], pcal->mac[2], pcal->mac[3]);
 	}
 
-// 2017-12-6
-	if (pComm->baud >= 5) {
-		printf("Invalid baud rate : %d\n", pComm->baud);
-		ret = -1;
-	}
-	
 	
 #if 0		// 레거시 자동 doType 매핑 로직: 현재는 사용자 설정값을 그대로 유지하므로 참고용으로만 보존
 	// 초기화
@@ -1032,7 +1015,14 @@ int loadSettings(SETTINGS	*pdb)
 		} else {
 			fread(&db, 1, sizeof(db), fp);
 			fclose(fp);
-			printf("loadSettings ok\n");
+			if (db.comm.layoutVer != SETTINGS_LAYOUT_VER) {
+				printf("{{Settings layout ver mismatch (%04x != %04x), re-init}}\n",
+				       db.comm.layoutVer, SETTINGS_LAYOUT_VER);
+				recreate_settings_dat("[[Settings re-created (layout ver)]]");
+				ret = -1;
+			} else {
+				printf("loadSettings ok\n");
+			}
 		}
 	}
 

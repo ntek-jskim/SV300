@@ -129,3 +129,8 @@
 2026/06/18 : meter.c storeDemand/loadDemand/saveSettings — fsFileLock(알람 I/O와 demand.d 동시 쓰기 FAT 손상 방지)
 2026/06/18 : alarm.c alarmFifoFileAppend — r+b 제거·RAM FIFO wb 스냅샷(RL-FlashFS FAT 손상 회피)
 2026/06/18 : meter.c FS_task — putFsQ 백로그 while 루프로 al/af 연속 처리
+2026/07/09 : meter.h — UTC/명령 블록 앵커를 pqevt→cmds(COMMANDS)로 변경, 260626 맵 정렬(UTC 7446·CMD 7456), fetch 오프셋 보정(alarm+77·itic+107·itic2+110)
+2026/07/09 : meter.h·modbus.c — MBAD_SETTING_END(=iom) 신설, CH0 설정쓰기 포켓을 P2~P4(6700~7050)로 한정(iom/info 덮어쓰기 방지)
+2026/07/09 : meter.h·meter.c — COMM_CFG layoutVer·SETTINGS_LAYOUT_VER 도입, loadSettings에서 크기 동일해도 버전 불일치 시 재초기화(레이아웃 변경 무성증 손상 방지)
+2026/07/09 : meter.c·smb_rtu.c — COMM_CFG 삭제 필드(comMode/baud/parity/gwEable/RS485MasterMode) 참조 정리, RS485 baud 115200 고정
+2026/07/09 : net_config.h·main.c — SNTP/NTP 트레이스 WARNING, sntpTask IPv4 주기 로그 억제

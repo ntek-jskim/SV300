@@ -808,48 +808,29 @@ typedef struct {
 } MAXMIN;
 
 typedef struct {
-	uint16_t  comMode;
-	uint16_t	baud;
-	uint16_t  parity;	//0:none, 1:odd, 2:even
 	uint16_t	devId;	//1~250
+	uint16_t tcpPort;		// std modbus port, ext modbus port
+	uint16_t useSntp;
+	uint16_t sntpInterval;
+
 	//
 	uint16_t ip0[4], sm0[4], gw0[4], dns0[4], sntp[4];
 	char     host[32];
-	uint16_t tcpPort;		// std modbus port, ext modbus port
-	uint16_t dhcpEn;
-	// gems3500
-//	struct {
-//		uint16_t enable, busId;
-//	} gw[2];
-	
-	// Gateway Enable Bit
-	// 0: 3500 #1
-	// 1: 3500 #2
-	// 2: 3500 CB #1
-	// 3: 3500 CB #2
-	// 4: 3500 Trip #1
-	// 5: 3500 Trip #2
-	// 6: 3500 ZCT #1
-	// 7: 3500 ZCT #2
-	uint16_t gwEable;	//		
-	uint16_t onionTcpPort;	
-	uint16_t r1[2];
-	//
+
 	uint16_t daq_ip[4];	// update server ip
-	//
-	uint16_t RS485MasterMode;	// 0: None, 1: Serial Temp Sensor, 2: TGW10  3: Azbil gateway, 4 : Azbil MCF
+	uint16_t dhcpEn;
 	uint16_t daq_srate;	// sampling rate (0: 32k, 1:16k, 2:8k: 3:4k, 4:2k
 	uint16_t daq_length;	// 0: 2k, 1:4k, 2:8k, 3:16k, 4: 32k, 5:64k
 	uint16_t daq_interval;	//  minute
 	uint16_t daq_format;	// 0: wave, 1: onion
 	uint16_t daq_id; // 0 ~ 65535
 	uint8_t  daq_bitpersample;	// 0 : 16it, 1: 32bit
-
-	uint16_t pullup_485; // 0 ~ 65535
-//	uint16_t r0[2];
-	uint16_t useSntp;
-	uint16_t sntpInterval;
+	uint16_t layoutVer;		/* settings.dat 레이아웃 버전 — 불일치 시 재초기화 */
+	uint16_t r1[8];
 } COMM_CFG;
+
+/* COMM_CFG/SETTINGS 필드 배치가 바뀔 때마다 값을 올린다(연/월). 크기가 같아도 재초기화 유도 */
+#define SETTINGS_LAYOUT_VER		0x2606u
 
 typedef struct {
 	uint16_t	wiring;	// 0:3p4w(3LN,3CT), 1:3p3W(2CT):2LL,2CT, 2:3P3W(3CT):2LL,3CT, 3:1P2W, 4: 1P3W 5 : Simulation
@@ -1971,17 +1952,17 @@ typedef struct {
 #define MBAD_SETTING_M2			MBAD_METER_END_M2
 #define MBAD_SETTING_M3			MBAD_METER_END_M3
 
-#define MBAD_SETTING			MB_FIELD_OFF(pqevt)
-#define MBAD_SET_TS_REL			336u
-#define MBAD_SET_CMD_REL		346u
-#define MBAD_SET_END_REL		463u
-#define MBAD_SET_TS				(MBAD_SETTING + MBAD_SET_TS_REL)
-#define MBAD_SET_CMD				(MBAD_SETTING + MBAD_SET_CMD_REL)
-#define MBAD_SET_END				(MBAD_SETTING + MBAD_SET_END_REL)
-#define MBAD_CMD_FETCH_EVENT		(MBAD_SET_CMD + 67)
-#define MBAD_CMD_FETCH_ALARM		(MBAD_SET_CMD + 73)
-#define MBAD_CMD_FETCH_ITIC		(MBAD_SET_CMD + 103)
-#define MBAD_CMD_FETCH_ITIC2		(MBAD_SET_CMD + 106)
+#define MBAD_SETTING			MB_FIELD_OFF(pqevt)		/* P2~P4 설정(pmset) 베이스 = 6700 */
+#define MBAD_SETTING_END		MBAD_RW_OFF_END			/* P2~P4 설정 끝 = iom(7050) */
+/* 260626 맵: UTC/명령 블록 = COMMANDS(cmds) 구조체 기준.
+ *   cmds[0..1] = UTC Time(7446), cmds[10] = reboot(7456) ... */
+#define MBAD_SET_TS				MB_FIELD_OFF(cmds)			/* UTC Time  = 7446 */
+#define MBAD_SET_CMD			(MBAD_SET_TS + 10u)			/* 명령 시작 = 7456 */
+#define MBAD_SET_END			(MBAD_SET_TS + 127u)		/* 명령 끝   = 7573 */
+#define MBAD_CMD_FETCH_EVENT		(MBAD_SET_CMD + 67)		/* load event  = 7523 */
+#define MBAD_CMD_FETCH_ALARM		(MBAD_SET_CMD + 77)		/* load alarm  = 7533 */
+#define MBAD_CMD_FETCH_ITIC			(MBAD_SET_CMD + 107)	/* load itic   = 7563 */
+#define MBAD_CMD_FETCH_ITIC2		(MBAD_SET_CMD + 110)	/* load itic2  = 7566 */
 
 #define METER_MB_SETTING_REGS(m)	((uint16_t *)&(m).pqevt)
 

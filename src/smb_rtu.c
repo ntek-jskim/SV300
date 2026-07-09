@@ -54,11 +54,11 @@ void SMB_rtu_Task(void *arg)
 {
 	int uId=1;	// USART1
 	
-	// UART Init, RS485 port
-	UART_Init(uId, getBaudrate(pdb->comm.baud));
+	// UART Init, RS485 port (baud 설정 제거됨 → 115200 고정)
+	UART_Init(uId, getBaudrate(4));
 
-	printf("[smb(RS485) meterTask, devId=%d, speed=%d, parity=%d]\n", 
-		pdb->comm.devId, getBaudrate(pdb->comm.baud), pdb->comm.parity);
+	printf("[smb(RS485) meterTask, devId=%d, speed=%d]\n",
+		pdb->comm.devId, getBaudrate(4));
 	
 	makeCRC32table();
 	
@@ -104,11 +104,11 @@ void SMB_rtu_Task2(void *arg)
 {
 	int uId=2;
 	
-	// UART Init, RS485 port
-	UART_Init(uId, getBaudrate(pdb->comm.baud));
+	// UART Init, RS485 port (baud 설정 제거됨 → 115200 고정)
+	UART_Init(uId, getBaudrate(4));
 
-	printf("[Tid_GW(RS485) meterTask, uId=%d, speed=%d, parity=%d]\n", 
-		uId, getBaudrate(pdb->comm.baud), pdb->comm.parity);
+	printf("[Tid_GW(RS485) meterTask, uId=%d, speed=%d]\n",
+		uId, getBaudrate(4));
 	
 	makeCRC32table();
 	
