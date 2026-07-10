@@ -137,3 +137,7 @@
 2026/07/09 : ade9000.c scaleAngle/getComplexSum — 폐기된 cntl.freq[0](항상0) 대신 meter.Freq 사용(전압 위상각 0/360 오류 수정)
 2026/07/09 : ade9000.c readWFB8k/32k_Data — wQ.halfFull=1 설정 누락 수정(wave 태스크 미처리로 파형 미갱신되던 버그)
 2026/07/09 : modbus.c·meter.h — copyModbusWaveData(id) prototype 추가 및 인자 없는 호출 수정(쓰레기 id로 meter[0].wv 미갱신), TCP 경로 전 채널 파형 지원
+2026/07/10 : ade9000.c meter_scan_2 — WFB(파형) 읽기를 M1↔M2 RR·슬라이스에서 제외(매 bit17 읽기), 나머지 PQM은 2슬라이스 유지 → M1/M2 파형 깨짐(~1/6만 읽힘) 수정
+2026/07/10 : ade9000.c meter_scan/meter_scan_2 — ZX 타임아웃 시 online 상태면 wQ 리셋 억제(경합성 타임아웃으로 인한 파형 불연속 방지)
+2026/07/10 : ade9000.c — readWFB32k_Data→readWFB_Data 개명(실제 8k인데 이름만 32k라 혼동), 죽은 readWFB8k_Data는 보존
+2026/07/10 : meter.c build_set_db — CH1/2 기본 결선(wiring) 2→1 수정

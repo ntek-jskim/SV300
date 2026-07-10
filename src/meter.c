@@ -296,7 +296,7 @@ void build_set_db(void)
 	db.ct[0].zctType = 1;
 
 	id = 1;
-	db.pt[id].wiring = 2;	/* 1P2W */
+	db.pt[id].wiring = 1;	/* 1P2W */
 	db.pt[id].vnorm = 220;
 	db.pt[id].PT1 = 220;
 	db.pt[id].PT2 = 220;
@@ -308,7 +308,7 @@ void build_set_db(void)
 
 #if METER_CH_COUNT > 2
 	id = 2;
-	db.pt[id].wiring = 2;
+	db.pt[id].wiring = 1;
 	db.pt[id].vnorm = 220;
 	db.pt[id].PT1 = 220;
 	db.pt[id].PT2 = 220;

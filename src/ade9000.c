@@ -2024,7 +2024,8 @@ WVPG *getWave32kBuf(WAVE_PGBUF *pWQ)
 	return pb;
 }
 
-void readWFB32k_Data(int id) 
+/* WFB(파형버퍼)를 8페이지 DMA로 읽는다. 실제 샘플레이트는 configWaveXkCapture 설정을 따름(현재 8k). */
+void readWFB_Data(int id)
 {
 	uint16_t wtemp;
 	WVPG *pwb;
@@ -2681,12 +2682,14 @@ void meter_scan_2(uint8_t id)
 #endif	
 	{
 		printf(">>> ZX timeout [%d]...\n", id);
-		 // wave sampling를 다시시작한다 
- //		if (id == 0) 
+		 // wave sampling를 다시시작한다
+ //		if (id == 0)
  //			w8kQ.fr = w8kQ.re = 0;
  //		else
  //			w32kQ.fr = w32kQ.re = 0;
-		wQ[id].fr = wQ[id].re = 0;
+		// online(정상 계측) 중엔 파형버퍼 유지 — SSP1 경합성 타임아웃으로 인한 불연속 방지
+		if (!meter[id].cntl.online)
+			wQ[id].fr = wQ[id].re = 0;
 	}	
 // 	ts_delta[id] = sysTick64 - ts_irq[id];
 //	ts_irq[id] = sysTick64;
@@ -2700,28 +2703,30 @@ void meter_scan_2(uint8_t id)
 	if (stat0 & (1<<0)) {
 		readEnergy(id);
 	}
-	/* PQM: CH3 M1↔M2 RR + 17/19/21 슬라이스(핸들러만 게이트) */
+	/* WFB(파형)은 연속성이 필요하므로 RR/슬라이스와 무관하게 매 page-full(bit17)마다 읽는다(M0와 동일).
+	 * 이전에는 RR+슬라이스로 ~1/6만 읽어 M1/M2 파형이 깨졌음. */
+	if (stat0 & (1u << 17)) {
+		readWFB_Data(id);
+	}
+	/* 나머지 PQM(period/RMS/THD): CH3 M1↔M2 RR + 19/21 슬라이스로 SSP1 부하 분산 */
 #ifdef CH3
 	if (id != m12_pq_rr_owner) {
 		/* 상대 미터 슬롯: PQM SPI 생략 */
 	} else
 #endif
 	{
-		unsigned sl = (unsigned)m12_pq_slice[id] % 3u;
+		unsigned sl = (unsigned)m12_pq_slice[id] % 2u;
 
-		if ((stat0 & (1u << 17)) && sl == 0u) {
-			readWFB32k_Data(id);
-		}
-		if ((stat0 & (1u << 19)) && sl == 1u) {
+		if ((stat0 & (1u << 19)) && sl == 0u) {
 			readPeriod(id);
 			readPhaseFastRMS(id);
 			checkPqEvent(id);
 		}
-		if ((stat0 & (1u << 21)) && sl == 2u) {
+		if ((stat0 & (1u << 21)) && sl == 1u) {
 			readPhaseTHD(id);
 		}
 
-		m12_pq_slice[id] = (uint8_t)(((unsigned)m12_pq_slice[id] + 1u) % 3u);
+		m12_pq_slice[id] = (uint8_t)(((unsigned)m12_pq_slice[id] + 1u) % 2u);
 
 #ifdef CH3
 		m12_pq_rr_owner = (uint8_t)((id == 1) ? 2 : 1);
@@ -2816,12 +2821,14 @@ void meter_scan(uint8_t id)
 #endif	
 	{
 		printf(">>> ZX timeout ...\n");
-		// wave sampling를 다시시작한다 
-//		if (id == 0) 
+		// wave sampling를 다시시작한다
+//		if (id == 0)
 //			w8kQ.fr = w8kQ.re = 0;
 //		else
 //			w32kQ.fr = w32kQ.re = 0;
-		wQ[id].fr = wQ[id].re = 0;
+		// online(정상 계측) 중엔 파형버퍼 유지 — 경합성 타임아웃으로 인한 불연속 방지
+		if (!meter[id].cntl.online)
+			wQ[id].fr = wQ[id].re = 0;
 	}	
 //	ts_delta[id] = sysTick64 - ts_irq[id];
 //	ts_irq[id] = sysTick64;
@@ -2848,8 +2855,8 @@ void meter_scan(uint8_t id)
 	}			
 	// capture Wave Form
 	if (stat0 & (1<<17)) {
-		//(id ==0) ? readWFB32k_Data(id) : readWFB8k_Data(id);
-		readWFB32k_Data(id);		
+		//(id ==0) ? readWFB_Data(id) : readWFB8k_Data(id);
+		readWFB_Data(id);		
 	}
 	
 //	Board_LED_On(3);	// 실행시간: 15us
@@ -2950,7 +2957,7 @@ void meter_scan(uint8_t id)
 //	read_reg32(id, AD9X_STATUS0, &stat0);		
 //	// capture Wave Form
 //	if (stat0 & (1<<17)) {
-//		readWFB32k_Data(id);		
+//		readWFB_Data(id);		
 //	}
 //	// clear status0
 //	write_reg32(id, AD9X_STATUS0, &stat0);		
