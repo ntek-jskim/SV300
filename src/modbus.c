@@ -910,6 +910,12 @@ int	writeMultiMem(uint16_t start, uint16_t count, uint8_t *pcmd)
 		putSettings(start-MBAD_SETTING, count, pcmd, pmset);
 		return 0;
 	}
+	if (start >= MBAD_P1_SETTING && start < MBAD_P1_SETTING_END) {
+		/* P1 설정(device id/comm/PT/CT/ETC/IOM, 7110~7445) — save settings로 db 반영 */
+		printf("recv P1 Settings, s=%d, c=%d ...\n", start, count);
+		putSettings(start-MBAD_SETTING, count, pcmd, pmset);
+		return 0;
+	}
 	return 0;
 }
 
@@ -993,6 +999,11 @@ int writeMemCb(uint16_t address, uint16_t value) {
 		return 0;
 	}
 	else if (id == 0 && offset >= MBAD_SETTING && offset < MBAD_SETTING_END) {
+		pmset[offset-MBAD_SETTING] = value;
+		return 0;
+	}
+	else if (id == 0 && offset >= MBAD_P1_SETTING && offset < MBAD_P1_SETTING_END) {
+		/* P1 설정(device id/comm/PT/CT/ETC/IOM, 7110~7445) — save settings 명령으로 db 반영·적용 */
 		pmset[offset-MBAD_SETTING] = value;
 		return 0;
 	}

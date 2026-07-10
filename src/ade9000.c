@@ -2031,12 +2031,13 @@ void readWFB_Data(int id)
 	WVPG *pwb;
 	int i, page, sp;
 	uint64_t t1, t2;
-	
-	read_reg16(id, AD9X_WFB_TRIG_STAT, &wtemp);	
+
+	read_reg16(id, AD9X_WFB_TRIG_STAT, &wtemp);
 	page = wtemp >> 12;
-	sp = (page == 7) ? 0 : 0x80*8;
-	//printf("page=%d, last=%d\n", page, lastpage);	
-	// page# 7, 15에서 인터럽트 발생한다
+	// page# 7, 15에서 인터럽트 발생. 단 스캔 지연 시 page가 8~14 등으로 진행할 수 있는데,
+	// (page==7)?0:0x400 은 "쓰는 중인 절반"을 읽어 앞/뒤 샘플이 섞이는 torn을 유발한다.
+	// 항상 "현재 쓰는 중이 아닌 안정된 절반"을 읽는다: writing=(page+1)&15, writing이 1st half면 2nd half(0x400) 읽기.
+	sp = ((((page + 1) & 15) < 8) ? 0x80*8 : 0);
 		
 	t1 = sysTick64;
 	

@@ -1954,6 +1954,9 @@ typedef struct {
 
 #define MBAD_SETTING			MB_FIELD_OFF(pqevt)		/* P2~P4 설정(pmset) 베이스 = 6700 */
 #define MBAD_SETTING_END		MBAD_RW_OFF_END			/* P2~P4 설정 끝 = iom(7050) */
+/* P1 설정: device id/comm/PT/CT/ETC/IOM (SETTINGS 구조체) — R/W, save settings로 db 반영 */
+#define MBAD_P1_SETTING			MB_FIELD_OFF(setting)	/* = 7110 (device id) */
+#define MBAD_P1_SETTING_END		MB_FIELD_OFF(cmds)		/* = 7446 (cmds 시작 = UTC) */
 /* 260626 맵: UTC/명령 블록 = COMMANDS(cmds) 구조체 기준.
  *   cmds[0..1] = UTC Time(7446), cmds[10] = reboot(7456) ... */
 #define MBAD_SET_TS				MB_FIELD_OFF(cmds)			/* UTC Time  = 7446 */
