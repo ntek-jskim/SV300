@@ -5,3 +5,15 @@
 *.dep
 keil_output/
 keil/
+
+# tooling / temp (not shared)
+.claude/
+.cursor/
+_mm_dump.txt
+_mm_filter.txt
+_all_patches/
+_catalog_pages/
+_meter_patches/
+_apply_patches.py
+_extract_patches.py
+_extract_patches2.py

@@ -577,11 +577,11 @@ typedef struct {
 
 typedef struct {
 	// deviation
-	float Uud[3], Uod[3];
+	float Uud[3], Uuv[3], Uod[3], Uov[3];
 	// Flicker
-	float Pi[3], Pim[3], Pst[3], Plt[3];		
-	float	SV[3];	
-	float r[29];	
+	float Pi[3], Pst[3], Plt[3];		
+	float	SV[3], SVM[3];	
+	float r[23];	
 } VQDATA;
 
 #ifdef VQ_VAR_V0

@@ -452,7 +452,8 @@ void FFT_Task(void)
 			
 			// 계산시간 : 160 ms/phase, U/Upp/I 모두 처리하는데  1440ms 소요된다 
 
-			t1 = sysTick64;							
+			t1 = sysTick64;
+		if (id == 0) {
 			for (i=0; i<3; i++) {
 				if (db.pt[id].wiring == WM_3LL3CT || db.pt[id].wiring == WM_3LL2CT) {
 					k = (i == 0) ? 0 : (i == 1) ? 2 : 1;
@@ -465,13 +466,13 @@ void FFT_Task(void)
 					memset(pHD->U[i], 0, sizeof(pHD->U)/3);
 				}
 				else {
-					FFT_prepare(wbFFT8k[id].U[k], N_FFT);				
+					FFT_prepare(wbFFT8k[id].U[k], N_FFT);
 					pmeter->CF_U[i] = calcCF(pFFT->xreal, N_FFT);
-					FFT_czt(pFFT->xreal, pFFT->ximag, N_FFT, M_FFT);	// 157 ms				
-					pmeter->THD_U[i] = FFT_postproc(N_FFT, 0, pHD->U[i])*100;		
+					FFT_czt(pFFT->xreal, pFFT->ximag, N_FFT, M_FFT);	// 157 ms
+					pmeter->THD_U[i] = FFT_postproc(N_FFT, 0, pHD->U[i])*100;
 				}
 			}
-			
+
 			// phase-to-phase voltage
 			for (i=0; i<3; i++) {
 				if (db.pt[id].wiring == WM_3LL3CT || db.pt[id].wiring == WM_3LL2CT) {
@@ -480,7 +481,7 @@ void FFT_Task(void)
 					else if(i==1)
 						k=2;
 					else
-						k =1;		
+						k =1;
 					pmeter->CF_Upp[i] = pmeter->CF_U[i];
 					pmeter->THD_Upp[i] = pmeter->THD_U[i];
 					memcpy(pHD->Upp[i], pHD->U[i], sizeof(pHD->U)/3);
@@ -488,17 +489,34 @@ void FFT_Task(void)
 				else {
 					if (pmeter->Upp[i] == 0) {
 						pmeter->CF_Upp[i] = pmeter->THD_Upp[i] = 0;
-						memset(pHD->Upp[i], 0, sizeof(pHD->Upp)/3);					
+						memset(pHD->Upp[i], 0, sizeof(pHD->Upp)/3);
 					}
 					else {
-						FFT_prepare_pp(wbFFT8k[id].U[i], wbFFT8k[id].U[(i+1)%3], N_FFT);				
+						FFT_prepare_pp(wbFFT8k[id].U[i], wbFFT8k[id].U[(i+1)%3], N_FFT);
 						pmeter->CF_Upp[i] = calcCF(pFFT->xreal, N_FFT);
-						FFT_czt(pFFT->xreal, pFFT->ximag, N_FFT, M_FFT);	// 157 ms				
-						pmeter->THD_Upp[i] = FFT_postproc(N_FFT, 1, pHD->Upp[i])*100;							
+						FFT_czt(pFFT->xreal, pFFT->ximag, N_FFT, M_FFT);	// 157 ms
+						pmeter->THD_Upp[i] = FFT_postproc(N_FFT, 1, pHD->Upp[i])*100;
 					}
 				}
 			}
-			
+		}
+		else {
+			/* M0~M2가 동일 전압 입력 — 전압 고조파(U/Upp)는 M0에서만 FFT 수행하고
+			 * 결과를 M1/M2로 복사한다(채널당 U·Upp 6-phase FFT ~960ms 절감).
+			 * I 고조파는 아래 루프에서 채널별로 계속 계산. hmd 누산은 복사값 기준으로 fft_average()가 처리.
+			 * 전제: M1/M2 wiring이 M0와 동일(전압 공통 입력). */
+			METERING  *pm0  = &meter[0].meter;
+			HARMONICS *pHD0 = &meter[0].hd;
+			for (i=0; i<3; i++) {
+				pmeter->THD_U[i]   = pm0->THD_U[i];
+				pmeter->CF_U[i]    = pm0->CF_U[i];
+				pmeter->THD_Upp[i] = pm0->THD_Upp[i];
+				pmeter->CF_Upp[i]  = pm0->CF_Upp[i];
+			}
+			memcpy(pHD->U,   pHD0->U,   sizeof(pHD->U));
+			memcpy(pHD->Upp, pHD0->Upp, sizeof(pHD->Upp));
+		}
+
 			for (i=0; i<3; i++) {
 				if (pmeter->I[i] == 0) {
 					pmeter->CF_I[i] = pmeter->KF_I[i] = pmeter->THD_I[i] = pmeter->TDD_I[i] = 0;

@@ -13,7 +13,9 @@
 #include <LPC43xx.h>                    /* LPC43xx Definitions                */
 #include "SDIO_LPC43xx.h"
 
-#ifdef NOSDMEM
+/* NOSDMEM(3CH, SPI Flash) 빌드에서는 SD(M0:) 미사용 → mci0_drv 미제공.
+   2CH(SD) 빌드에서만 mci0_drv 를 컴파일하여 File_Config(MC0_EN=1) 참조를 만족. */
+#ifndef NOSDMEM
 
 /*-----------------------------------------------------------------------------
   Memory Card FAT Driver instance definition
