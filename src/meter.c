@@ -15,7 +15,7 @@
 #define	FW_VER	0001
 #define	FW_BUILD_YEAR 26
 #define	FW_BUILD_MON  7
-#define	FW_BUILD_DAY  9
+#define	FW_BUILD_DAY  16
 
 #define	SQRT_2	 1.414213562 
 
@@ -2696,9 +2696,17 @@ void FS_task(void *arg)
 			NVIC_SystemReset();
 			meter[id].cntl.runFlag = 0;
 		}
-		else if (meter[id].cntl.rebootFlag == 0x1234) {			
-			// 재시작
-			meter[id].cntl.rebootFlag = meter[id].cntl.runFlag = 0;
+		else if (meter[id].cntl.rebootFlag == 0x1234) {
+			/* 재시작: 실제 리셋은 taskMonitor 의 (wdtEn==0 && runFlag==0)
+			 * → Board_WDT_Enable() 경로(외부 WDT OFF->ON arming)에서만 일어난다.
+			 * SV300_3CH(_WDT_EN 미정의)는 wdtEn=0 이라 정상 리셋되지만,
+			 * _WDT_EN 빌드는 wdtEn=1 이라 else 분기로 빠져 리셋이 안 됐다.
+			 * 여기서 WDT off + wdtEn=0 으로 만들어 SV300_3CH 와 동일 경로를 타게 한다. */
+			meter[id].cntl.rebootFlag = 0;
+			Board_WDT_Disable();		/* 외부 WDT OFF → 이후 taskMonitor 의 Enable 이 OFF->ON 전이가 됨 */
+			pcntl->wdtEn = 0;			/* taskMonitor 가 reboot(Board_WDT_Enable) 분기를 타게 */
+			pcntl->runFlag = meter[id].cntl.runFlag = 0;
+			printf("[[reboot: external WDT reset ...]]\n");
 		}
 	}
 	

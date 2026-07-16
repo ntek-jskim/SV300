@@ -478,14 +478,18 @@ void CmdProc_Task(void *arg)
 	_enableTaskMonitor(Tid_CmdProc, 50);
 
 	while (pcntl->runFlag) {
+		/* 명령 유무와 무관하게 매 주기 워치독 kick.
+		 * idle(명령 대기) 중인 정상 태스크를 멈춤으로 오판하지 않도록,
+		 * 무한 대기 대신 유한 타임아웃으로 깨어나 kick 한다 (SMB 태스크와 동일 패턴). */
+		meter[0].cntl.wdtTbl[Tid_CmdProc].count++;
 #ifdef __FREERTOS
 		uint32_t nv;
-		if (xTaskNotifyWait(0, 0x08, &nv, portMAX_DELAY) != pdPASS)
-			continue;
+		if (xTaskNotifyWait(0, 0x08, &nv, pdMS_TO_TICKS(100)) != pdPASS)
+			continue;	/* 타임아웃(명령 없음) → 루프 반복하며 다시 kick */
 #else
-		os_evt_wait_and(0x8, 0xffff);
+		if (os_evt_wait_and(0x8, 100) == OS_R_TMO)
+			continue;	/* 타임아웃(명령 없음) → 루프 반복하며 다시 kick */
 #endif
-		meter[0].cntl.wdtTbl[Tid_CmdProc].count++;
 		do {
 			cmdProc();
 		} while (cmdQ.fr != cmdQ.re);
