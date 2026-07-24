@@ -2159,6 +2159,26 @@ uint16_t getZxToutThreshold(float prop) {
 	return (uint16_t)thrsh;	
 }
 
+/* 미터 id의 ADC_REDIRECT 워드 계산 — wiring 기준 전압 채널만 재지정.
+ *  단상 피더가 물린 CT 슬롯의 전압 채널(VA/VB/VC_DIN)을 그 피더 상 전압 ADC로 돌린다.
+ *  3상(미터 통째) 또는 미배정 슬롯은 own(기본) 유지. */
+static uint32_t adcRedirectWord(int id)
+{
+	FEEDER_MAP map[MAX_CH];
+	uint32_t v = ADC_RDR_DEFAULT;
+	const uint8_t vcode[3] = { ADC_VCODE_L1, ADC_VCODE_L2, ADC_VCODE_L3 };
+	int f;
+
+	buildFeederMap(map);
+	for (f = 0; f < MAX_CH; f++) {
+		if (!map[f].valid || map[f].is3ph || map[f].meter != (uint8_t)id)
+			continue;
+		v &= ~(7u << ADC_RDR_VSH(map[f].slot));
+		v |=  ((uint32_t)vcode[map[f].vphase]) << ADC_RDR_VSH(map[f].slot);
+	}
+	return v;
+}
+
 void initADE9000(uint8_t id)
 {
 	uint32_t chipId, flag;
@@ -2237,7 +2257,13 @@ void initADE9000(uint8_t id)
 	wtemp = (1<<10) | (1<<11) | (1<<12);
 	write_reg16(id, AD9X_CONFIG1, &wtemp);
 	read_reg16(id, AD9X_CONFIG1, &wtemp);
-	printf("CONFIG1 = %x\n", wtemp);	
+	printf("CONFIG1 = %x\n", wtemp);
+
+	// ADC_REDIRECT: wiring(pt[].wiring) 기준 전압 채널 재지정 (부팅 시 1회, 수정은 리셋 후 반영)
+	dtemp = adcRedirectWord(id);
+	write_reg32(id, AD9X_ADC_REDIRECT, &dtemp);
+	read_reg32(id, AD9X_ADC_REDIRECT, &dtemp);
+	printf("ADC_REDIRECT[M%d] = 0x%06x\n", id, dtemp);
 	
 	// PWR_TIME & EGY_TIME, 매 1초 마다 전력, 전력상 생성
 	wtemp = 7999;	

@@ -192,6 +192,127 @@ void copySummary(void)
 }
 
 
+/* SMP_MAP(psmpMap) 갱신 — memorymap '#1,2,3 Simple' 시트.
+ *  buildFeederMap()으로 논리 피더 ch[f]를 물리 미터/CT슬롯에 배정해 복사.
+ *  단상 피더: ADC_REDIRECT로 전압이 이미 해당 상으로 정합 → 슬롯 인덱스 하나로 U/I/P 읽음.
+ *  PostScan_Task(HIGH)에서 500ms 주기 호출. */
+static void smpFillCommon(SMP_MAP *dst)
+{
+	SMP_COMMON *c = &dst->common;
+	METER_INFO *pi = &meter[0].info;
+
+	c->utc         = meter[0].meter.utc;
+	c->heartBit    = pi->HeartBit;
+	c->hwModel     = pi->hwModel;
+	c->hwVer       = pi->hwVer;
+	c->fwVer       = pi->fwVer;
+	c->fwBuildYear = pi->fwBuildYear;
+	c->fwBuildMon  = pi->fwBuildMon;
+	c->fwBuildDay  = pi->fwBuildDay;
+	c->serialNum   = pi->sn[0];
+	c->temp        = meter[0].meter.Temp;
+}
+
+static void smpFill3ph(SMP_CHANNEL *d, SMP_HARMONICS *h, int m)
+{
+	METERING *pm = &meter[m].meter;
+	ENERGY_REG32 *e = meter[m].egy.Ereg32;
+	int j, o;
+
+	d->Freq = pm->Freq;
+	for (j = 0; j < 3; j++) {
+		d->U[j]     = pm->U[j];
+		d->Upp[j]   = pm->Upp[j];
+		d->I[j]     = pm->I[j];
+		d->P[j]     = pm->P[j];
+		d->THD_U[j] = pm->THD_U[j];
+		d->THD_I[j] = pm->THD_I[j];
+		d->TDD_I[j] = pm->TDD_I[j];
+	}
+	d->In    = pm->In;
+	d->Ptot  = pm->P[3];
+	d->Qtot  = pm->Q[3];
+	d->Stot  = pm->S[3];
+	d->PFtot = pm->PF[3];
+	d->Uunb  = pm->Ubal[0];
+	d->Iunb  = pm->Ibal[0];
+
+	d->kWh_imp       = EGY_TOTAL(e[EGY_PERIOD_TOTAL],      EGY_MODE_KWH,   EGY_SIGN_IMPORT);
+	d->kWh_imp_thisM = EGY_TOTAL(e[EGY_PERIOD_THIS_MONTH], EGY_MODE_KWH,   EGY_SIGN_IMPORT);
+	d->kWh_imp_lastM = EGY_TOTAL(e[EGY_PERIOD_LAST_MONTH], EGY_MODE_KWH,   EGY_SIGN_IMPORT);
+	d->kVARh_imp     = EGY_TOTAL(e[EGY_PERIOD_TOTAL],      EGY_MODE_KVARH, EGY_SIGN_IMPORT);
+	d->kVAh          = EGY_TOTAL(e[EGY_PERIOD_TOTAL],      EGY_MODE_KVAH,  EGY_SIGN_IMPORT);
+
+	for (j = 0; j < 3; j++)
+		for (o = 0; o < SMP_HARM_ORDER; o++) {
+			h->U[j][o] = (int16_t)meter[m].hd.U[j][o];
+			h->I[j][o] = (int16_t)meter[m].hd.I[j][o];
+		}
+}
+
+static void smpFill1ph(SMP_CHANNEL *d, SMP_HARMONICS *h, int m, int slot)
+{
+	METERING *pm = &meter[m].meter;
+	ENERGY_REG32 *e = meter[m].egy.Ereg32;
+	int o;
+
+	d->Freq  = pm->Freq;
+	d->U[0]  = pm->U[slot];		/* redirect로 U[slot]가 해당 상 전압 */
+	d->I[0]  = pm->I[slot];
+	d->P[0]  = pm->P[slot];
+	d->Ptot  = pm->P[slot];
+	d->Qtot  = pm->Q[slot];
+	d->Stot  = pm->S[slot];
+	d->PFtot = pm->PF[slot];
+	d->THD_U[0] = pm->THD_U[slot];
+	d->THD_I[0] = pm->THD_I[slot];
+	d->TDD_I[0] = pm->TDD_I[slot];
+	/* Upp/U[1..2]/I[1..2]/P[1..2]/In/Uunb/Iunb 는 0 유지 */
+
+	d->kWh_imp       = EGY_PHASE(e[EGY_PERIOD_TOTAL],      EGY_MODE_KWH,   EGY_SIGN_IMPORT, slot);
+	d->kWh_imp_thisM = EGY_PHASE(e[EGY_PERIOD_THIS_MONTH], EGY_MODE_KWH,   EGY_SIGN_IMPORT, slot);
+	d->kWh_imp_lastM = EGY_PHASE(e[EGY_PERIOD_LAST_MONTH], EGY_MODE_KWH,   EGY_SIGN_IMPORT, slot);
+	d->kVARh_imp     = EGY_PHASE(e[EGY_PERIOD_TOTAL],      EGY_MODE_KVARH, EGY_SIGN_IMPORT, slot);
+	d->kVAh          = EGY_PHASE(e[EGY_PERIOD_TOTAL],      EGY_MODE_KVAH,  EGY_SIGN_IMPORT, slot);
+
+	for (o = 0; o < SMP_HARM_ORDER; o++) {
+		h->U[0][o] = (int16_t)meter[m].hd.U[slot][o];
+		h->I[0][o] = (int16_t)meter[m].hd.I[slot][o];
+	}
+}
+
+void copySimpleMap(void)
+{
+	FEEDER_MAP map[MAX_CH];
+	SMP_MAP *dst;
+	int f;
+
+	/* 읽는 쪽이 현재 보고 있지 않은 뒷버퍼를 고른다 */
+	dst = (psmpMap == &smpMapBuf[0]) ? &smpMapBuf[1] : &smpMapBuf[0];
+
+	buildFeederMap(map);
+	smpFillCommon(dst);
+
+	for (f = 0; f < MAX_CH; f++) {
+		SMP_CHANNEL *d = &dst->ch[f];
+		SMP_HARMONICS *h = &dst->harm[f];
+
+		memset(d, 0, sizeof(*d));
+		memset(h, 0, sizeof(*h));
+
+		if (!map[f].valid)
+			continue;
+		if (map[f].is3ph)
+			smpFill3ph(d, h, map[f].meter);
+		else
+			smpFill1ph(d, h, map[f].meter, map[f].slot);
+	}
+
+	/* 완결된 스냅샷을 원자적으로 발행 (volatile 포인터 단일 스토어) */
+	psmpMap = dst;
+}
+
+
 // 미사용
 // smb에서 호출
 // 2017-8-16, modbusSlvChkFrame호출시 addr를 0으로 설정
@@ -267,10 +388,14 @@ int modbusSlvProcFrame(uint8_t *prx, uint16_t rxsize, uint8_t *ptx, int longFram
 				size = readMem3(&ptx[inx], start - ADD_ADE9000_M2, count);
 		}
 #endif
+		else if (start >= ADD_SIMPLE_MAP &&
+		         (start + count) <= ADD_SIMPLE_MAP + (uint16_t)(sizeof(SMP_MAP)/sizeof(uint16_t))) {
+			size = readMemSmp(&ptx[inx], start - ADD_SIMPLE_MAP, count, longFrame);
+		}
 		else {
 			return makeExceptFrame(prx[0], fc, 2, ptx);
 		}
-		break; 
+		break;
 	
 	// FC6: CH0 명령 또는 M1/M2 RW 포켓(MBAD_M1_RW_* / MBAD_M2_RW_*)
 	case 6:
@@ -656,6 +781,29 @@ int	readMem3_m3(uint8_t *ptx, uint16_t start, uint16_t count)
 }
 #endif
 
+/* #1,2,3 Simple 맵(50000~) 블록 읽기 — offset은 ADD_SIMPLE_MAP 기준.
+ *  longFrame=0: 1바이트 바이트수, 아니면 2바이트 길이(readMem2 계열과 동일 포맷). */
+int	readMemSmp(uint8_t *ptx, uint16_t offset, uint16_t count, int longFrame)
+{
+	uint16_t    i, inx = 0, c;
+	uint16_t    *psmb = (uint16_t *)psmpMap;
+
+	c = count << 1;
+	if (longFrame) {
+		ptx[inx++] = c << 8;
+		ptx[inx++] = c;
+	}
+	else {
+		ptx[inx++] = c;		// bc = count * 2
+	}
+	for (i=0; i<count; i++)  {
+		ptx[inx++] = psmb[offset+i] >> 8;
+		ptx[inx++] = psmb[offset+i];
+	}
+
+	return inx;
+}
+
 
 //void putCommandS(int addr, int count)
 //{
@@ -961,6 +1109,12 @@ int   readMemCb(uint16_t address, uint16_t *value)
 	//  	*value = psmb[address-51000];
 	//  	return 0;
 	// }
+	else if (address >= ADD_SIMPLE_MAP &&
+	         address < ADD_SIMPLE_MAP + (uint16_t)(sizeof(SMP_MAP) / sizeof(uint16_t))) {
+		/* #1,2,3 Simple 맵(50000~) — copySimpleMap()가 500ms 주기 갱신 */
+		*value = ((uint16_t *)psmpMap)[address - ADD_SIMPLE_MAP];
+		return 0;
+	}
 	else {
 		return -1;
 	}

@@ -1,3 +1,4 @@
+2026/07/24 : [1P9EA] meter.h SMP_MAP(50000, '#1,2,3 Simple' 시트) 구조체 신설(COMMON20w+CH80w×9+HARM246w×9) 및 컴파일타임 레이아웃 가드; FEEDER_MAP+buildFeederMap(meter.c) — pt[].wiring 순차 스캔으로 논리 피더를 물리 미터/CT슬롯 배정(단상=슬롯0/1/2, feeder_cnt가 METER_CH_COUNT 초과분은 valid=0 미배정); ade9000 ADC_REDIRECT(0x424) wiring 기준 전압 채널 재지정(부팅 시 1회, 수정은 리셋 후 반영, L1→VA/L2→VB/L3→VC ADC); modbus copySimpleMap — PostScan 500ms 주기 SMP_MAP 갱신(단상은 slot 인덱스로 U/I/P·상별 ENERGY 복사)
 2026/05/21 : board_sysinit·fs_port_rtx·FS·board_api.h — SPIFI 관련 조건부 컴파일을 CH3→HWV1으로 변경(CH3=3채널 ADE9000 사용 여부, HWV1=SSP1 3CS 배선+SPIFI NOR Flash 하드웨어)
 2026/05/14 : piocfg IOM_DATA 정합, METER_DEF 반영 Meter0 덤프 순서, DATETIME 무인자 조회/6인자 설정(FS·SD_File), initPQHeader M0 직렬(0~2)·M1/M2 제거, M0 REALTIME·M1/M2 HIGH, meter_scan_2 PQM 슬라이스+CH3 M1↔M2 RR, FWUPDATE 신설
 2026/05/14 : Cursor 프로젝트 규칙 추가(.cursor/rules/fwupdate-log.mdc) — 이후 Cursor에서 코드 변경 시 FWUPDATE 한 줄 요약

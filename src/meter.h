@@ -1815,22 +1815,6 @@ typedef struct {
 	MGEM_SETTING    db;
 } MGEM_DATA;
 
-// Feeder Data
-typedef struct {
-	uint16_t type;
-	uint16_t status;
-	float	U, I, Iz;
-	float	P, Q, S, PF;
-	float	THD, Uub, Iub;
-	uint32_t kwh[3];
-	uint32_t _r[2];
-} FEEDER_DATA;
-
-
-typedef struct {
-	uint16_t	nfeeder;
-	FEEDER_DATA	feeder[54];
-} MGEM3500_DATA;
 
 typedef struct {
 	uint32_t 	eh;			// kWH, kVarH, kVAh(import, export)
@@ -1847,6 +1831,97 @@ typedef struct {
 	float		temp;
 	uint16_t 	_r[106];
 } SIMPLE_DATA;
+
+/* ---------------------------------------------------------------------------
+ * Simple map — memorymap/SV300 memory map_260626.xlsx '#1,2,3 Simple' 시트
+ *  Modbus FC 3,4 / base 50000 / word(uint16_t) 단위 주소
+ *
+ *   50000              SMP_COMMON     common     20w
+ *   50020 + 80*n       SMP_CHANNEL    ch[n]      80w  × MAX_CH
+ *   50740 + 246*n      SMP_HARMONICS  harm[n]   246w  × MAX_CH
+ *   52954              end
+ *
+ *  1P: #1~#9 사용, 3P: #1~#3 사용 (사용 안 하는 채널은 0)
+ *  값은 '#1~3CH modbus' 시트 = METER_DEF(meter[n]) 에서 복사해 채운다.
+ *  주석의 <- 는 복사 원본 필드.
+ * --------------------------------------------------------------------------- */
+#define	ADD_SIMPLE_MAP		50000
+#define	SMP_COMMON_WORDS	20
+#define	SMP_CH_WORDS		80
+#define	SMP_HARM_WORDS		246
+#define	SMP_HARM_ORDER		41		/* 1~41차 */
+
+typedef struct {
+	uint32_t	utc;			// 50000 Time Stamp		<- meter.utc
+	uint16_t	heartBit;		// 50002 Heatbit		<- info.HeartBit
+	uint16_t	hwModel;		// 50003				<- info.hwModel
+	uint16_t	hwVer;			// 50004				<- info.hwVer
+	uint16_t	fwVer;			// 50005				<- info.fwVer
+	uint16_t	fwBuildYear;	// 50006				<- info.fwBuildYear
+	uint16_t	fwBuildMon;		// 50007				<- info.fwBuildMon
+	uint16_t	fwBuildDay;		// 50008				<- info.fwBuildDay
+	uint16_t	serialNum;		// 50009				<- info.sn[]
+	uint16_t	status;			// 50010 Status
+	uint16_t	_r0;			// 50011
+	float		temp;			// 50012 Internal Temp	<- meter.Temp
+	uint32_t	_r1[3];			// 50014 ~ 50019
+} SMP_COMMON;					// 20w
+
+typedef struct {
+	uint16_t	cbType;			// +0  CB Type
+	uint16_t	cbStatus;		// +1  CB Status
+	uint32_t	_r0;			// +2
+	float		Freq;			// +4  Frequency		<- meter.Freq
+	float		U[3];			// +6  U1,U2,U3			<- meter.U[0..2]
+	float		Upp[3];			// +12 U12,U23,U31		<- meter.Upp[0..2]
+	float		I[3];			// +18 I1,I2,I3			<- meter.I[0..2]
+	float		In;				// +24 누설전류			<- meter.In
+	float		P[3];			// +26 P1,P2,P3			<- meter.P[0..2]
+	float		Ptot;			// +32 P total			<- meter.P[3]
+	float		Qtot;			// +34 Q total			<- meter.Q[3]
+	float		Stot;			// +36 S total			<- meter.S[3]
+	float		PFtot;			// +38 PF total			<- meter.PF[3]
+	uint32_t	kWh_imp;		// +40					<- egy.Ereg32[EGY_PERIOD_TOTAL]      kWh/import
+	uint32_t	kWh_imp_thisM;	// +42					<- egy.Ereg32[EGY_PERIOD_THIS_MONTH] kWh/import
+	uint32_t	kWh_imp_lastM;	// +44					<- egy.Ereg32[EGY_PERIOD_LAST_MONTH] kWh/import
+	uint32_t	kVARh_imp;		// +46					<- egy.Ereg32[EGY_PERIOD_TOTAL]      kvarh/import
+	uint32_t	kVAh;			// +48					<- egy.Ereg32[EGY_PERIOD_TOTAL]      kVAh
+	float		Uunb;			// +50 Volt. Unbalance	<- meter.Ubal[0]
+	float		Iunb;			// +52 Current Unbalance<- meter.Ibal[0]
+	float		THD_U[3];		// +54 THD V1,V2,V3		<- meter.THD_U[0..2]
+	float		THD_I[3];		// +60 THD I1,I2,I3		<- meter.THD_I[0..2]
+	float		TDD_I[3];		// +66 TDD I1,I2,I3		<- meter.TDD_I[0..2]
+	float		_r1[4];			// +72 ~ +79
+} SMP_CHANNEL;					// 80w
+
+/* Harmonics by order — 시트 TYPE S16, 원본 hd.U/hd.I 는 [3][64] 중 1~41차만 복사 */
+typedef struct {
+	int16_t		U[3][SMP_HARM_ORDER];	// +0   Harmonics V1,V2,V3	<- hd.U[0..2][0..40]
+	int16_t		I[3][SMP_HARM_ORDER];	// +123 Harmonics I1,I2,I3	<- hd.I[0..2][0..40]
+} SMP_HARMONICS;							// 246w
+
+typedef struct {
+	SMP_COMMON		common;		// 50000
+	SMP_CHANNEL		ch[MAX_CH];	// 50020
+	SMP_HARMONICS	harm[MAX_CH];	// 50740
+} SMP_MAP;						// 2954w
+
+/* 패딩으로 워드 배치가 어긋나면 컴파일 에러 */
+typedef char smp_map_layout_check[
+	(sizeof(SMP_MAP) == (SMP_COMMON_WORDS + MAX_CH * (SMP_CH_WORDS + SMP_HARM_WORDS)) * 2)
+	? 1 : -1];
+
+/* 논리 피더(pt[f]) → 물리 미터/CT슬롯 배정
+ *  단상(IS_WM_1LN1CT)은 미터 하나를 CT 슬롯 0/1/2로 쪼개 쓰고,
+ *  그 외 활성 배선은 미터를 통째로 쓴다. 전압은 wiring이 지정한 상(vphase).
+ *  meter 인덱스가 물리 미터 수(METER_CH_COUNT)를 넘으면 valid=0 (배정 불가). */
+typedef struct {
+	uint8_t	meter;		/* 물리 미터 인덱스 */
+	uint8_t	slot;		/* CT 슬롯 0~2 (전류상) */
+	int8_t	vphase;		/* 전압상 0~2(L1/L2/L3), 3상 피더는 -1 */
+	uint8_t	is3ph;		/* 1: 미터 통째(3상/2element) */
+	uint8_t	valid;		/* 1: meter < METER_CH_COUNT */
+} FEEDER_MAP;
 
 
 //typedef struct {
@@ -2071,6 +2146,8 @@ extern void getFloatStr(float v, char *pbuf);
 extern void getDoubleStr(double v, char *pbuf);
 
 extern SIMPLE_DATA	*psmap;
+extern SMP_MAP		smpMapBuf[2];
+extern SMP_MAP		* volatile psmpMap;
 
 extern METER_DEF	meter[];
 extern ENERGY_NVRAM egyNvr;
@@ -2114,6 +2191,8 @@ extern FAST_RMS_BUF rmsWin[METER_CH_COUNT];
 extern DAQ_BUF	daq;
 
 extern void copySummary(void);
+extern int  buildFeederMap(FEEDER_MAP map[MAX_CH]);	/* returns 배정된 유효 피더 수 */
+extern void copySimpleMap(void);					/* SMP_MAP(psmpMap) 갱신 */
 
 extern int loadSettings(SETTINGS	*pdb);
 extern int saveSettings(SETTINGS	*pdb);

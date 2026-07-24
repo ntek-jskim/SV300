@@ -12,10 +12,10 @@
 #include "crc.h"
 #include "alarm.h"
 
-#define	FW_VER	0001
+#define	FW_VER	0002
 #define	FW_BUILD_YEAR 26
 #define	FW_BUILD_MON  7
-#define	FW_BUILD_DAY  16
+#define	FW_BUILD_DAY  24
 
 #define	SQRT_2	 1.414213562 
 
@@ -34,6 +34,11 @@ ADE9000_REG ade9000[2] __attribute__ ((section ("EXT_RAM"), zero_init));
 
 SIMPLE_DATA	smap __attribute__ ((section ("EXT_RAM"), zero_init));
 SIMPLE_DATA	*psmap=&smap;
+
+/* 더블 버퍼: copySimpleMap()이 뒷버퍼를 채운 뒤 psmpMap을 원자적으로 교체.
+ *  읽는 쪽(Modbus)은 항상 완결된 스냅샷만 봄 → float/에너지 torn read 방지. */
+SMP_MAP		smpMapBuf[2] __attribute__ ((section ("EXT_RAM"), zero_init));
+SMP_MAP		* volatile psmpMap=&smpMapBuf[0];
 
 METER_CAL	*pcal=&meterCal;
 
@@ -988,6 +993,55 @@ static void recreate_settings_dat(const char *banner)
 		if (banner != NULL)
 			printf("%s\n", banner);
 	}
+}
+
+/* pdb->pt[0..feeder_cnt-1].wiring 을 순차 스캔해 논리 피더를 물리 미터/CT슬롯에 배정.
+ *  단상(IS_WM_1LN1CT)은 미터 하나의 CT 슬롯 0/1/2를 순차 소비, 이미 쓴 슬롯이면 다음 미터로.
+ *  그 외 활성 배선은 미터를 통째로 사용. meter >= METER_CH_COUNT 이면 valid=0(초과분 미배정).
+ *  반환: 유효 배정된 피더 수. */
+int buildFeederMap(FEEDER_MAP map[MAX_CH])
+{
+	int f, nvalid=0;
+	int nfeeder = pdb->feeder_cnt;
+	int meterIdx = -1;		/* 현재 미터 인덱스 */
+	int slot = 3;			/* 현재 단상 미터에서 다음 CT 슬롯(3=열린 미터 없음) */
+	int curSingle = 0;
+
+	if (nfeeder > MAX_CH)
+		nfeeder = MAX_CH;
+
+	memset(map, 0, sizeof(FEEDER_MAP) * MAX_CH);
+
+	for (f = 0; f < nfeeder; f++) {
+		uint16_t wm = pdb->pt[f].wiring;
+
+		if (IS_WM_1LN1CT(wm)) {
+			if (!curSingle || slot >= 3) {
+				meterIdx++;
+				curSingle = 1;
+				slot = 0;
+			}
+			map[f].meter  = (uint8_t)meterIdx;
+			map[f].slot   = (uint8_t)slot;
+			map[f].vphase = (int8_t)(wm - WM_1LN1CT_L1);	/* 0~2 */
+			map[f].is3ph  = 0;
+			slot++;
+		}
+		else {	/* 3상/2element 등 — 미터 통째 */
+			meterIdx++;
+			curSingle = 0;
+			slot = 3;
+			map[f].meter  = (uint8_t)meterIdx;
+			map[f].slot   = 0;
+			map[f].vphase = -1;
+			map[f].is3ph  = 1;
+		}
+
+		map[f].valid = (meterIdx < METER_CH_COUNT) ? 1 : 0;
+		if (map[f].valid)
+			nvalid++;
+	}
+	return nvalid;
 }
 
 int loadSettings(SETTINGS	*pdb)
@@ -4251,11 +4305,12 @@ int checkMaxMinItv(int id) {
 	}	
 }
 
-void PostScan_Task(void *arg) 
+void PostScan_Task(void *arg)
 {
 	int id=0;
    	uint32_t notificationValue;
-	
+	int smpDiv=0;
+
 	_enableTaskMonitor(Tid_PostScan, 50);
 	
 	while(pcntl->runFlag) {
@@ -4337,6 +4392,12 @@ void PostScan_Task(void *arg)
 			}
 		}
 		Board_LED_Set(1, ledAlmCount);
+
+		// SMP_MAP(#1,2,3 Simple) 갱신: 100ms 웨이크 × 5 = 500ms
+		if (++smpDiv >= 5) {
+			smpDiv = 0;
+			copySimpleMap();
+		}
 	}
 	
 	// reboot가 set되면 

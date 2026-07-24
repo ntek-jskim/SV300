@@ -472,6 +472,16 @@ extern ADE9000_REG ade9000[];
 #define	AD9X_VARTHR 0x421
 #define	AD9X_VATHR 0x422
 
+/* ADC_REDIRECT (0x424): 각 연산 채널이 읽을 물리 ADC 재지정 (32-bit)
+ *  필드 3bit씩: [2:0]IA [5:3]IB [8:6]IC [11:9]IN [14:12]VA [17:15]VB [20:18]VC
+ *  코드: 0=IA 1=IB 2=IC 3=IN 4=VA 5=VB 6=VC 7=own(자기채널). reset=0x001FFFFF */
+#define	AD9X_ADC_REDIRECT	0x424
+#define	ADC_RDR_DEFAULT		0x001FFFFFu	/* 전 필드 own */
+#define	ADC_RDR_VSH(slot)	(12 + 3*(slot))	/* slot0->VA_DIN, 1->VB_DIN, 2->VC_DIN */
+#define	ADC_VCODE_L1		4u	/* L1 전압 = VA ADC */
+#define	ADC_VCODE_L2		5u	/* L2 전압 = VB ADC */
+#define	ADC_VCODE_L3		6u	/* L3 전압 = VC ADC */
+
 #define	AD9X_PART_ID 0x472
 
 #define	AD9X_RUN	0x480
