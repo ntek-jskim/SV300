@@ -90,7 +90,11 @@
 //   <o>Device Size <0x10000-0xFFFFF000:0x8000>
 //   <i>Define the size of SPI Flash device in bytes
 //   <i>Default: 0x100000 (1MB)
-#define SF0_SIZE    0x0200000
+#ifdef HWV2
+#define SF0_SIZE    0x1000000	/* MX25L12835F 128Mbit(16MB) */
+#else
+#define SF0_SIZE    0x0200000	/* MX25L1636E 16Mbit(2MB) */
+#endif
 
 //   <o>Content of Erased Memory <0=>0x00 <0xFF=>0xFF
 //   <i>Define the initial value for erased Flash data

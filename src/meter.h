@@ -14,6 +14,7 @@
 #define	SYS_DIR	"\\system"
 #define	LOG_PQ_DIR "\\log_pq"
 #define	LOG_TREND_DIR	"\\log_trend"
+#define	LOG_EGY_DIR "\\log_egy"		/* HWV2: 일단위 에너지 아카이브 */
 #define	TRG_PQ_DIR "\\trg_pq"
 #define	TRG_TRANSIENT_DIR "\\trg_tvc"
 #define	FW_DIR "\\firmware"
@@ -44,6 +45,7 @@
 
 #define	ENERGY_LOG_FILE0	CONCAT(SYS_DIR, "\\egy_log0.d")
 #define	ENERGY_LOG_FILE1	CONCAT(SYS_DIR, "\\egy_log1.d")
+#define	EGY_ARCH_FILE		CONCAT(LOG_EGY_DIR, "\\e")	/* HWV2: e<YYYYMMDD>_m{id}.d */
 
 #define	MAXMIN_FILE	CONCAT(SYS_DIR, "\\maxmin.d")
 #define	ALARM_ST_FILE CONCAT(SYS_DIR, "\\astat.d")
@@ -66,13 +68,21 @@
 
 #define	F_INIT	"init.ini"
 
-// SPI Flash(2MB) 운용을 위한 로그 예산(바이트)
+// SPI Flash 로그 예산(바이트). HWV2=MX25L12835F 16MB, 기본=MX25L1636E 2MB
+#ifdef HWV2
+/* 16MB: PQ/Trend/에너지 모두 약 35일 보존
+ *  PQ    ~11.1MB(10분×3CH×35일), Trend ~2.77MB(15분×4그룹×35일), 에너지 아카이브 ~42KB */
+#define	FLASH_LOG_BUDGET_PQ		(11500UL * 1024UL)
+#define	FLASH_LOG_BUDGET_TREND	(3000UL * 1024UL)
+#define	FLASH_LOG_BUDGET_EGY	(256UL * 1024UL)	/* e<date>_m{id}.d 일단위 35일+여유 */
+#else
 #if (METER_CH_COUNT > 1)
 #define	FLASH_LOG_BUDGET_PQ		(1400UL * 1024UL)	/* 3CH: ql/qw × M0~M2 */
 #else
 #define	FLASH_LOG_BUDGET_PQ		(800UL * 1024UL)
 #endif
 #define	FLASH_LOG_BUDGET_TREND	(320UL * 1024UL)
+#endif
 
 // trdTime[] 인덱스 4 => 10분
 #define	TREND_DEFAULT_INTERVAL_INDEX	4

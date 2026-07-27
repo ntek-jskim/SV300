@@ -3646,6 +3646,92 @@ int storeMaxMin() {
 	return 0;	
 }
 
+#ifdef HWV2
+/* HWV2: 완료된 하루의 에너지 로그를 일단위 파일(\log_egy\e<YYYYMMDD>_m<id>.d)로 아카이브.
+ *  예산(FLASH_LOG_BUDGET_EGY) 초과 시 가장 오래된(날짜 최소) 파일부터 삭제 → 약 35일 보존. */
+static unsigned long egyArchNameKey(const char *name) {
+	unsigned long key = 0;
+	int i;
+	/* name = "e20260628_m1.d" → 'e' 다음 8자리 YYYYMMDD */
+	for (i = 1; i <= 8 && name[i] >= '0' && name[i] <= '9'; i++)
+		key = key * 10 + (unsigned long)(name[i] - '0');
+	return key;
+}
+
+static int findOldestEgyArch(char *oldestName, uint32_t *totalSize) {
+	FINFO info;
+	int found = 0;
+	unsigned long oldestKey = 0xFFFFFFFFUL;
+	char mask[] = CONCAT(LOG_EGY_DIR, "\\e*.d");
+
+	*totalSize = 0;
+	info.fileID = 0;
+	while (ffind(mask, &info) == 0) {
+		unsigned long key = egyArchNameKey((const char *)info.name);
+		*totalSize += info.size;
+		if (!found || key < oldestKey) {
+			oldestKey = key;
+			strcpy(oldestName, (const char *)info.name);
+			found = 1;
+		}
+	}
+	return found;
+}
+
+static void trimEgyArchBudget(void) {
+	char oldestName[64], path[96];
+	uint32_t total = 0;
+	int res;
+
+	while (findOldestEgyArch(oldestName, &total)) {
+		if (total <= FLASH_LOG_BUDGET_EGY)
+			break;
+		sprintf(path, "%s\\%s", LOG_EGY_DIR, oldestName);
+#ifdef USE_CMSIS_RTOS2
+		res = fdelete(path, NULL);
+#else
+		res = fdelete(path);
+#endif
+		printf("trimEgyArch: delete %s (total=%u, res=%d)\n", path, total, res);
+		if (res != 0)
+			break;
+	}
+}
+
+static void archiveEnergyLogDay(int id, ENERGY_LOG *pDay) {
+	char path[96];
+	struct tm ltm;
+	uint32_t ts;
+	FILE *fp;
+
+	if (pDay == NULL || pDay->ts == 0)
+		return;
+
+	ts = pDay->ts;
+	uLocalTime(&ts, &ltm);
+
+	fsFileLock();
+	/* 디렉터리 확보 */
+	fp = fopen(CONCAT(LOG_EGY_DIR, TEMP_FILE), "ab");
+	if (fp != NULL)
+		fclose(fp);
+
+	sprintf(path, "%s%04d%02d%02d_m%d.d", EGY_ARCH_FILE,
+	        ltm.tm_year, ltm.tm_mon, ltm.tm_mday, id);
+	fp = fopen(path, "wb");
+	if (fp == NULL) {
+		trimEgyArchBudget();
+		fp = fopen(path, "wb");
+	}
+	if (fp != NULL) {
+		fwrite(pDay, sizeof(ENERGY_LOG), 1, fp);
+		fclose(fp);
+	}
+	trimEgyArchBudget();
+	fsFileUnlock();
+}
+#endif	/* HWV2 */
+
 int putEnergyLog(int id, int hix)
 {
 	int wF = 0;
@@ -3675,6 +3761,10 @@ int putEnergyLog(int id, int hix)
 		meter[id].cntl.egyTs1D = meter[id].cntl.tod.tm_mday;
 
 		memcpy(&pegylog[1], peLog, sizeof(ENERGY_LOG));
+#ifdef HWV2
+		/* 완료된 하루를 일단위 아카이브에 보존(약 35일) */
+		archiveEnergyLogDay(id, &pegylog[1]);
+#endif
 		memset(peLog, 0, sizeof(ENERGY_LOG));
 		peLog->ts = meter[id].cntl.egyStartTs1D = sysTick1s;
 
