@@ -158,3 +158,4 @@
 2026/07/31 : board_sysinit.c — SPIFI 6핀 FUNC3 구성 복원, 7번핀 RESET#/QE 처리는 드라이버 Init()에서 수행함을 주석화
 2026/07/31 : FS.c — 미포맷 신칩 finit=1도 포맷하도록 조건 수정(retv!=0), init_directory에 s_fsMounted 가드 및 fclose(NULL) 방지(FS 미마운트 시 HardFault BFAR=0xFE47004A 원인 제거)
 2026/07/31 : meter.c loadDemand — 두 블록 fread 성공 + dm.magic(0x1234) 검증, 손상/부분기록 시 기본값 재생성(무한 재부팅 방지)
+2026/07/31 : keil/SV300.uvproj — 플래시 호환 위해 3CH 타깃 분리: SV300_3CH(2MB, HWV2 없음) / SV300_3CH_16M(16MB, HWV2). 구형 MX25L1636E 유닛은 SV300_3CH, 신규 MX25L12835F 유닛은 SV300_3CH_16M 빌드. (부트로더 SV300_boot/SV300_boot_16M 와 대응)
