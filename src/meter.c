@@ -3142,15 +3142,25 @@ void loadDemand() {
 
 	fsFileLock();
 	for (id = 0; id < METER_CH_COUNT; id++) {
+		int valid = 0;
+
 		if (id == 0) sprintf(path, "%s", DEMAND_FILE);
 		else sprintf(path, "%s\\demand.d%d", SYS_DIR, id);
 		fp = fopen(path, "rb");
 		if (fp != NULL) {
-			fread(&meter[id].dm, sizeof(DEMAND), 1, fp);
-			fread(&meter[id].dlog, sizeof(DEMAND_LOG), 1, fp);
+			/* 두 블록 모두 정상 read + magic 일치해야 유효 (storeDemand는 파일 crc를
+			 *  갱신하지 않아 crc는 stale 가능 → 안정 센티넬 magic으로만 검증) */
+			if (fread(&meter[id].dm,   sizeof(DEMAND),     1, fp) == 1 &&
+			    fread(&meter[id].dlog, sizeof(DEMAND_LOG), 1, fp) == 1 &&
+			    meter[id].dm.magic == 0x1234) {
+				valid = 1;
+			}
 			fclose(fp);
-			continue;
 		}
+		if (valid)
+			continue;
+
+		/* 파일 없음 또는 손상 → 기본값으로 재생성 */
 		memset(&meter[id].dm, 0, sizeof(DEMAND));
 		memset(&meter[id].dlog, 0, sizeof(DEMAND_LOG));
 		meter[id].dm.magic = 0x1234;
@@ -3161,7 +3171,7 @@ void loadDemand() {
 		fwrite(&meter[id].dm, sizeof(DEMAND), 1, fp);
 		fwrite(&meter[id].dlog, sizeof(DEMAND_LOG), 1, fp);
 		fclose(fp);
-		printf("[[Create Demand File(%s)]]\n", path);
+		printf("[[Create/Reset Demand File(%s)]]\n", path);
 	}
 	fsFileUnlock();
 }

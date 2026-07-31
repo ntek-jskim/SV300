@@ -153,3 +153,8 @@
 2026/07/10 : modbus.c·meter.h — P1 설정(device id/comm/PT/CT/ETC/IOM, 7110~7445) R/W 지원(writeMemCb·writeMultiMem에 MBAD_P1_SETTING 분기), save settings로 db 반영
 2026/07/10 : ade9000.c readWFB_Data — WFB 절반 선택을 (page+1)&15 기반으로 수정(스캔 지연 시 쓰는 중인 절반을 읽어 전압·전류 동시 torn 발생하던 버그)
 2026/07/15 : fft_radix2_czt.c FFT_Task 고조파 통합 — M0~M2 동일 전압 입력 전제로 전압 고조파(U/Upp) FFT는 M0에서만 수행, M1/M2는 hd.U/hd.Upp·THD_U/THD_Upp·CF_U/CF_Upp를 M0에서 복사(채널당 U·Upp 6-phase FFT ~960ms 절감). I 고조파는 채널별 유지
+2026/07/31 : FS_SPIFI_FlashPrg.c — MX25L12835F(16MB) 신품 대응: 신품(QE=0)은 단일레인 RDID 중 IO3 low가 7번핀 RESET#를 걸어 통신불가(JEDEC ID=00) → Init()에서 IO3를 GPIO-high 강제로 RESET# 해제 후 QE=1(비휘발성) 1회 기록·IO3=SPIFI 복귀하는 자동복구 추가. 진단 print([SPIFI] clk/rc/mfger·program/erase FAIL) 추가
+2026/07/31 : FS_SPIFI_FlashPrg.c — SPIFI 클럭 상한 80→40MHz 제한(소스 180MHz). 80MHz quad에서 발생하던 간헐 부팅 홀딩·program FAIL(0x20003) 해소(타이밍 마진 확보)
+2026/07/31 : board_sysinit.c — SPIFI 6핀 FUNC3 구성 복원, 7번핀 RESET#/QE 처리는 드라이버 Init()에서 수행함을 주석화
+2026/07/31 : FS.c — 미포맷 신칩 finit=1도 포맷하도록 조건 수정(retv!=0), init_directory에 s_fsMounted 가드 및 fclose(NULL) 방지(FS 미마운트 시 HardFault BFAR=0xFE47004A 원인 제거)
+2026/07/31 : meter.c loadDemand — 두 블록 fread 성공 + dm.magic(0x1234) 검증, 손상/부분기록 시 기본값 재생성(무한 재부팅 방지)

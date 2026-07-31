@@ -7,6 +7,7 @@
 
 #include <RTL.h>
 #include <string.h>
+#include <stdio.h>
 #include <File_Config.h>
 #include <LPC43xx.h>
 #include "spifi_rom_api_lpc43.h"
@@ -32,6 +33,19 @@ static void spifi_enable_bus_clock(void)
 	}
 }
 
+/* P3_4(SPIFI_IO3 = MX25L12835F 7번핀 RESET#) SCU 값
+ *  SPIFI: SCU_PINIO_FAST(0xF0: ZIF|EZI|EHS|INACT) | FUNC3(0x3) = 0xF3
+ *  GPIO : EZI(0x40) | FUNC0(0)                                = 0x40 (GPIO1[14]) */
+#define P3_4_SFS_SPIFI	0xF3u
+#define P3_4_SFS_GPIO	0x40u
+#define MX_SR_QE		0x40u	/* Status Register QE bit(6). BP=0, SRWD=0 */
+
+static int32_t spifiRomInit(uint32_t mhz)
+{
+	memset(&s_spifi_obj, 0, sizeof(s_spifi_obj));
+	return s_rom->spifi_init(&s_spifi_obj, 4, S_FULLCLK | S_RCVCLK, mhz);
+}
+
 static BOOL Init(U32 adr, U32 clk)
 {
 	int32_t rc;
@@ -45,17 +59,51 @@ static BOOL Init(U32 adr, U32 clk)
 		return (__FALSE);
 	}
 
-	memset(&s_spifi_obj, 0, sizeof(s_spifi_obj));
-
 	mhz = clk / 1000000UL;
-	if (mhz > 80UL) {
-		mhz = 80UL;
+	/* 신뢰성 우선: quad read/program 타이밍 마진 확보 위해 40MHz로 제한
+	 * (간헐 홀딩·program FAIL 대응. 안정화되면 상향 검토) */
+	if (mhz > 40UL) {
+		mhz = 40UL;
 	}
 	if (mhz < 1UL) {
-		mhz = 60UL;
+		mhz = 40UL;
+	}
+	printf("[SPIFI] clk=%uHz use=%uMHz\n", (unsigned)clk, (unsigned)mhz);
+
+	/* 1) 정상 시도: QE=1(비휘발성)이면 pin7=SIO3라 RESET# 없음 → 성공(quad) */
+	rc = spifiRomInit(mhz);
+
+	/* 2) 실패 = 신품(QE=0): 단일레인 RDID 중 IO3 low가 RESET#를 걸어 통신 불가.
+	 *    IO3를 GPIO-high로 강제해 RESET# 해제 → init → QE=1(1회) → IO3=SPIFI 복귀 → 재init */
+	if (rc != 0) {
+		printf("[SPIFI] init rc=%d -> recover: force RESET# high, set QE\n", (int)rc);
+
+		LPC_SCU->SFSP3_4 = P3_4_SFS_GPIO;		/* P3_4 -> GPIO1[14] */
+		LPC_GPIO_PORT->DIR[1] |= (1UL << 14);
+		LPC_GPIO_PORT->SET[1]  = (1UL << 14);	/* RESET# 강제 high */
+
+		rc = spifiRomInit(mhz);
+		if (rc == 0) {
+			if (s_rom->write_stat != NULL) {
+				s_rom->write_stat(&s_spifi_obj, 1, (uint16_t)MX_SR_QE);	/* QE=1 (비휘발성) */
+				if (s_rom->wait_busy != NULL) {
+					s_rom->wait_busy(&s_spifi_obj, 0);
+				}
+				printf("[SPIFI] QE=1 written (SR=0x%02x)\n", (unsigned)MX_SR_QE);
+			}
+			LPC_SCU->SFSP3_4 = P3_4_SFS_SPIFI;	/* P3_4 -> SPIFI_IO3 복귀 */
+			rc = spifiRomInit(mhz);				/* QE=1 → RESET# 없음, quad OK */
+		}
+		else {
+			printf("[SPIFI] recover init FAILED rc=%d (HW: 납땜/전원/칩)\n", (int)rc);
+		}
 	}
 
-	rc = s_rom->spifi_init(&s_spifi_obj, 4, S_FULLCLK | S_RCVCLK, mhz);
+	printf("[SPIFI] rc=%d mfger=%02x type=%02x id=%02x devSize=0x%08x memSize=0x%08x\n",
+	       (int)rc,
+	       (unsigned)s_spifi_obj.mfger, (unsigned)s_spifi_obj.devType, (unsigned)s_spifi_obj.devID,
+	       (unsigned)s_spifi_obj.devSize, (unsigned)s_spifi_obj.memSize);
+
 	if (rc != 0) {
 		return (__FALSE);
 	}
@@ -104,6 +152,8 @@ static BOOL ProgramPage(U32 adr, U32 sz, U8 *buf)
 	s_rom->cancel_mem_mode(&s_spifi_obj);
 	rc = s_rom->spifi_program(&s_spifi_obj, (char *)buf, &opers);
 	s_rom->set_mem_mode(&s_spifi_obj);
+	if (rc != 0)
+		printf("[SPIFI] program FAIL adr=0x%08x sz=%u rc=%d\n", (unsigned)adr, (unsigned)sz, (int)rc);
 	return (rc == 0) ? (__TRUE) : (__FALSE);
 }
 
@@ -127,6 +177,8 @@ static BOOL EraseSector(U32 adr)
 	s_rom->cancel_mem_mode(&s_spifi_obj);
 	rc = s_rom->spifi_erase(&s_spifi_obj, &opers);
 	s_rom->set_mem_mode(&s_spifi_obj);
+	if (rc != 0)
+		printf("[SPIFI] erase FAIL adr=0x%08x rc=%d\n", (unsigned)base, (int)rc);
 	return (rc == 0) ? (__TRUE) : (__FALSE);
 }
 

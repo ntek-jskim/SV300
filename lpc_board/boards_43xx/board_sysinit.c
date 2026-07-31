@@ -57,11 +57,15 @@ STATIC const struct CLK_BASE_STATES InitClkStates[] = {
 };
 
 #ifdef NOSDMEM
-/* SPIFI: MX25L1636E 등 외부 Flash — P3_3..P3_8, FUNC3 (LPC4357 UM, CH3 회로) */
+/* SPIFI: 외부 NOR — P3_3..P3_8, FUNC3 (LPC4357 UM, CH3 회로).
+ * MX25L12835F는 7번핀 = RESET#(구형 MX25L1636E는 HOLD#). QE=1이면 RESET#/WP# 기능이
+ * 해제되어 pin7=SIO3, pin3=SIO2로 quad 사용 가능. QE 미설정 신품은 초기 단일레인 RDID에서
+ * IO3 low가 RESET#를 걸어 통신 불가(JEDEC ID=00) → SPIFI 드라이버 Init()에서 IO3를 1회
+ * GPIO-high로 강제해 QE=1(비휘발성) 설정 후 IO3=SPIFI로 복귀한다. (FS_SPIFI_FlashPrg.c) */
 STATIC const PINMUX_GRP_T spifipinmuxing[] = {
 	{0x3, 3,  (SCU_PINIO_FAST | SCU_MODE_FUNC3)},	/* P3_3  SPIFI_SCK  */
-	{0x3, 4,  (SCU_PINIO_FAST | SCU_MODE_FUNC3)},	/* P3_4  SPIFI_IO3 */
-	{0x3, 5,  (SCU_PINIO_FAST | SCU_MODE_FUNC3)},	/* P3_5  SPIFI_IO2 */
+	{0x3, 4,  (SCU_PINIO_FAST | SCU_MODE_FUNC3)},	/* P3_4  SPIFI_IO3 (신칩 RESET#, QE=1→SIO3) */
+	{0x3, 5,  (SCU_PINIO_FAST | SCU_MODE_FUNC3)},	/* P3_5  SPIFI_IO2 (WP#) */
 	{0x3, 6,  (SCU_PINIO_FAST | SCU_MODE_FUNC3)},	/* P3_6  SPIFI_IO1 */
 	{0x3, 7,  (SCU_PINIO_FAST | SCU_MODE_FUNC3)},	/* P3_7  SPIFI_IO0 */
 	{0x3, 8,  (SCU_PINIO_FAST | SCU_MODE_FUNC3)}	/* P3_8  SPIFI_CS# */

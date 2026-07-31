@@ -938,8 +938,9 @@ void init_card (void) {
     }
 
     retv = finit (NULL);
-    if (retv != 0 && retv != 1) {
-      /* 미포맷 등 — SD 경로와 동일하게 한 번 포맷 시도 */
+    /* 임베디드 NOR(SPIFI)은 카드처럼 "삽입 대기"가 없다. 새/blank 칩은 finit=1(미포맷)을
+     *  반환하므로 finit!=0 이면 한 번 포맷 시도 (retv==1 제외하면 새 칩이 영영 포맷 안 됨) */
+    if (retv != 0) {
       printf ("\nSPI Flash: finit=%u, try FORMAT\n", (unsigned)retv);
       strcpy (&in_line[0], "KEIL\r\n");
       cmd_format (&in_line[0]);
@@ -1053,54 +1054,62 @@ void init_directory() {
 	uint32_t init=0;
 	char path[64];
 	
+	/* FS 미마운트(finit 실패) 시 fopen이 NULL → fclose(NULL)로 HardFault 나므로 진입 차단 */
+	if (!s_fsMounted) {
+		printf("{{FS not mounted - skip directory init}}\n");
+		return;
+	}
+
 	sprintf(path, "init.ini");
 	fp = fopen(path, "rb");
 	if (fp == NULL) {
 		printf("{{Can't open Init File(%s)}}\n", path);
-		
+
 		fp = fopen(CONCAT(SYS_DIR, TEMP_FILE), "wb");
-		fclose(fp);
+		if (fp) fclose(fp);
 		printf("[[Create Directory(%s)]]\n", CONCAT(SYS_DIR, TEMP_FILE));
-		
+
 		fp = fopen(CONCAT(LOG_PQ_DIR, TEMP_FILE), "wb");
-		fclose(fp);
+		if (fp) fclose(fp);
 		printf("[[Create Directory(%s)]]\n", CONCAT(LOG_PQ_DIR, TEMP_FILE));
-		
+
 		fp = fopen(CONCAT(LOG_TREND_DIR, TEMP_FILE), "wb");
-		fclose(fp);
+		if (fp) fclose(fp);
 		printf("[[Create Directory(%s)]]\n", CONCAT(LOG_TREND_DIR, TEMP_FILE));
-		
+
 		fp = fopen(CONCAT(TRG_PQ_DIR, TEMP_FILE), "wb");
-		fclose(fp);
+		if (fp) fclose(fp);
 		printf("[[Create Directory(%s)]]\n", CONCAT(TRG_PQ_DIR, TEMP_FILE));
-		
+
 		fp = fopen(CONCAT(TRG_TRANSIENT_DIR, TEMP_FILE), "wb");
-		fclose(fp);
+		if (fp) fclose(fp);
 		printf("[[Create Directory(%s)]]\n", CONCAT(TRG_TRANSIENT_DIR, TEMP_FILE));
-		
+
 		fp = fopen(CONCAT(FW_DIR, TEMP_FILE), "wb");
-		fclose(fp);		
+		if (fp) fclose(fp);
 		printf("[[Create Directory(%s)]]\n", CONCAT(FW_DIR, TEMP_FILE));
-		
+
 		fp = fopen(CONCAT(ALARM_DIR, TEMP_FILE), "wb");
-		fclose(fp);
+		if (fp) fclose(fp);
 		printf("[[Create Directory(%s)]]\n", CONCAT(ALARM_DIR, TEMP_FILE));
-		
+
 		fp = fopen(CONCAT(EVENT_DIR, TEMP_FILE), "wb");
-		fclose(fp);			
+		if (fp) fclose(fp);
 		printf("[[Create Directory(%s)]]\n", CONCAT(EVENT_DIR, TEMP_FILE));
-		
+
 		init=1;
 		fp = fopen(F_INIT, "wb");
-		fwrite(&init, sizeof(init), 1, fp);
-		fclose(fp);
-		
+		if (fp) {
+			fwrite(&init, sizeof(init), 1, fp);
+			fclose(fp);
+		}
+
 		printf("[[Create System Directory, init=%d...]]\n", init);
-	}	
+	}
 	else {
 		fread(&init, sizeof(int), 1, fp);
 		fclose(fp);
-		
+
 		printf("[[Init Mode = %d\n", init);
 	}
 }
