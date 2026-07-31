@@ -146,6 +146,13 @@ bool Board_LED_Test(uint8_t LEDNumber);
  */
 void Board_LED_Toggle(uint8_t LEDNumber);
 
+/* SV300 Board LED 인덱스 (Board_LED_Toggle/On/Off/Set) — 매핑은 src/debug.c _LED_GPIO[] */
+#define	LED_RUN		0	/* RUN 하트비트 */
+#define	LED_STS		1	/* STS 상태 */
+#define	LED_COMM	2	/* COMM 통신 */
+#define	LED_RSTP_L	3	/* LEFT RSTP OK */
+#define	LED_RSTP_R	4	/* RIGHT RSTP OK */
+
 /**
  * @brief	Turn on Board LCD Backlight
  * @param	Intensity	: Backlight intensity (0 = off, >=1 = on)

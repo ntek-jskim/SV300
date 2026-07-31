@@ -2450,6 +2450,9 @@ void checkPqEvent(int id) {
 	}
 		
 	
+	/* METERING.meterStatus: 전압 영점교차(ZX) 검출 시 1(ONLINE), 미검출 시 0(OFFLINE) */
+	meter[id].meter.meterStatus = meter[id].cntl.online;
+
 	// sag, swell 발생 복귀 mask 생성
 	meter[id].cntl.sagMask = meter[id].cntl.sagRetMask = meter[id].cntl.swellMask = meter[id].cntl.swellRetMask = 0;
 	meter[id].cntl.ocMask  = 0;
@@ -2878,8 +2881,8 @@ void meter_scan(uint8_t id)
 	// Energy READY, period = 1s
 	if (stat0 & (1<<0)) {
 		readEnergy(id);
-		Board_LED_Toggle(1);	
-	}			
+		Board_LED_Toggle(LED_STS);
+	}
 	// capture Wave Form
 	if (stat0 & (1<<17)) {
 		//(id ==0) ? readWFB_Data(id) : readWFB8k_Data(id);

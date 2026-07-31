@@ -37,7 +37,6 @@ int	writeSingleMem(uint16_t start, uint16_t cmd);
 int	writeMultiMem(uint16_t start, uint16_t count, uint8_t *prx);
 uint16_t 	gencrc_modbus(uint8_t * ptr, int len);
 void cmd_reboot(char *par);
-void copySummary(void);
 //int modbusSlvChkFrame(uint8_t fc, uint16_t start, uint16_t count, uint8_t *perrCode);
 //int makeExceptFrame(uint8_t addr, uint8_t fc, uint8_t errCode, uint8_t *pBuf);
 //int writeMem(uint8_t *prx, uint8_t *ptx, uint16_t start, uint16_t count);
@@ -165,33 +164,6 @@ void init_smb(void)
 //	return (inx+size);
 //}
 
-void copySummary(void)
-{
-	int 	i,j,k,fr=0;
-	int chCount = (int)(sizeof(psmap->ch) / sizeof(psmap->ch[0]));
-	if (chCount > METER_CH_COUNT) {
-		chCount = METER_CH_COUNT;
-	}
-
-	for(i=0; i<chCount; i++) {
-		psmap->ch[i].eh = EGY_TOTAL(meter[i].egy.Ereg32[0], EGY_MODE_KWH, EGY_SIGN_IMPORT);
-		psmap->ch[i].P = meter[i].meter.P[3];
-
-		for(j=0; j<3; j++) {
-			psmap->ch[i].U[j] = meter[i].meter.U[j];
-			psmap->ch[i].I[j] = meter[i].meter.I[j];
-		}
-		psmap->ch[i].Ig = meter[i].meter.Ig;				// Ig
-
-		for(j=0; j<3; j++) {
-			psmap->ch[i].THD_U[j] = meter[i].meter.THD_U[j];
-			psmap->ch[i].THD_I[j] = meter[i].meter.THD_I[j];
-			psmap->ch[i].TDD_I[j] = meter[i].meter.TDD_I[j];
-		}
-	}
-}
-
-
 /* SMP_MAP(psmpMap) 갱신 — memorymap '#1,2,3 Simple' 시트.
  *  buildFeederMap()으로 논리 피더 ch[f]를 물리 미터/CT슬롯에 배정해 복사.
  *  단상 피더: ADC_REDIRECT로 전압이 이미 해당 상으로 정합 → 슬롯 인덱스 하나로 U/I/P 읽음.
@@ -229,6 +201,9 @@ static void smpFill3ph(SMP_CHANNEL *d, SMP_HARMONICS *h, int m)
 		d->THD_I[j] = pm->THD_I[j];
 		d->TDD_I[j] = pm->TDD_I[j];
 	}
+	d->U[3]   = pm->U[3];		/* 상전압 평균 */
+	d->Upp[3] = pm->Upp[3];		/* 선간전압 평균 */
+	d->I[3]   = pm->I[3];		/* 상전류 평균 (cbStatus 판정 기준) */
 	d->In    = pm->In;
 	d->Ptot  = pm->P[3];
 	d->Qtot  = pm->Q[3];
@@ -250,24 +225,29 @@ static void smpFill3ph(SMP_CHANNEL *d, SMP_HARMONICS *h, int m)
 		}
 }
 
-static void smpFill1ph(SMP_CHANNEL *d, SMP_HARMONICS *h, int m, int slot)
+/* 단상 피더: 측정 원본은 CT 슬롯(slot), 저장 위치는 wiring 상(vphase).
+ *  WM_1LN1CT_L1→[0], L2→[1], L3→[2] 자리에 저장(나머지 상 인덱스는 0 유지). */
+static void smpFill1ph(SMP_CHANNEL *d, SMP_HARMONICS *h, int m, int slot, int vphase)
 {
 	METERING *pm = &meter[m].meter;
 	ENERGY_REG32 *e = meter[m].egy.Ereg32;
 	int o;
+	int p = vphase;				/* 목적지 상 인덱스 0/1/2 */
 
 	d->Freq  = pm->Freq;
-	d->U[0]  = pm->U[slot];		/* redirect로 U[slot]가 해당 상 전압 */
-	d->I[0]  = pm->I[slot];
-	d->P[0]  = pm->P[slot];
+	d->U[p]  = pm->U[slot];		/* redirect로 U[slot]가 해당 상 전압 */
+	d->I[p]  = pm->I[slot];
+	d->P[p]  = pm->P[slot];
 	d->Ptot  = pm->P[slot];
 	d->Qtot  = pm->Q[slot];
 	d->Stot  = pm->S[slot];
 	d->PFtot = pm->PF[slot];
-	d->THD_U[0] = pm->THD_U[slot];
-	d->THD_I[0] = pm->THD_I[slot];
-	d->TDD_I[0] = pm->TDD_I[slot];
-	/* Upp/U[1..2]/I[1..2]/P[1..2]/In/Uunb/Iunb 는 0 유지 */
+	d->THD_U[p] = pm->THD_U[slot];
+	d->THD_I[p] = pm->THD_I[slot];
+	d->TDD_I[p] = pm->TDD_I[slot];
+	d->U[3] = pm->U[slot];		/* 단상: 해당 상전압이 곧 평균 */
+	d->I[3] = pm->I[slot];		/* 단상: 해당 상전류가 곧 평균 (cbStatus 기준) */
+	/* Upp[3](선간전압 평균)·나머지 상 인덱스·In/Uunb/Iunb 는 0 유지 */
 
 	d->kWh_imp       = EGY_PHASE(e[EGY_PERIOD_TOTAL],      EGY_MODE_KWH,   EGY_SIGN_IMPORT, slot);
 	d->kWh_imp_thisM = EGY_PHASE(e[EGY_PERIOD_THIS_MONTH], EGY_MODE_KWH,   EGY_SIGN_IMPORT, slot);
@@ -276,8 +256,8 @@ static void smpFill1ph(SMP_CHANNEL *d, SMP_HARMONICS *h, int m, int slot)
 	d->kVAh          = EGY_PHASE(e[EGY_PERIOD_TOTAL],      EGY_MODE_KVAH,  EGY_SIGN_IMPORT, slot);
 
 	for (o = 0; o < SMP_HARM_ORDER; o++) {
-		h->U[0][o] = (int16_t)meter[m].hd.U[slot][o];
-		h->I[0][o] = (int16_t)meter[m].hd.I[slot][o];
+		h->U[p][o] = (int16_t)meter[m].hd.U[slot][o];
+		h->I[p][o] = (int16_t)meter[m].hd.I[slot][o];
 	}
 }
 
@@ -305,7 +285,12 @@ void copySimpleMap(void)
 		if (map[f].is3ph)
 			smpFill3ph(d, h, map[f].meter);
 		else
-			smpFill1ph(d, h, map[f].meter, map[f].slot);
+			smpFill1ph(d, h, map[f].meter, map[f].slot, map[f].vphase);
+
+		/* cbType = 이 피더의 wiring 설정 */
+		d->cbType = pdb->pt[f].wiring;
+		/* cbStatus = 평균 상전류(I[3])가 시동전류 이상이면 1(ONLINE), 아니면 0(OFFLINE) */
+		d->cbStatus = (d->I[3] >= meter[map[f].meter].cntl.I_start) ? 1 : 0;
 	}
 
 	/* 완결된 스냅샷을 원자적으로 발행 (volatile 포인터 단일 스토어) */

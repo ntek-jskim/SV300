@@ -820,7 +820,7 @@ void Shell_Task(void *arg)
 	   taskMonitor();
 	   if (++i >= 10) {
 	   		pInfo->HeartBit++;
-		  	Board_LED_Toggle(0);
+		  	Board_LED_Toggle(LED_RUN);
 		  	i = 0;
 	   }
 
@@ -834,14 +834,16 @@ void Shell_Task(void *arg)
 	   if(ts1s != sysTick1s) {
 			ts1s = sysTick1s;
 			for(j=1; j<3; j++) {
+				/* j=1 → LED_RSTP_L(3, LEFT), j=2 → LED_RSTP_R(4, RIGHT). 에러 시 점등 */
+				int ledRstp = LED_RSTP_L + (j-1);
 				val = getRstpState(j);
 				if(val == 1) {
 					pInfo->RSTP_sts[j-1] = STS_ERROR;
-					Board_LED_On(j+3);
+					Board_LED_On(ledRstp);
 				}
 				else {
 					pInfo->RSTP_sts[j-1] = STS_OK;
-					Board_LED_Off(j+3);
+					Board_LED_Off(ledRstp);
 				}
 
 //				val = getRstpState(j);

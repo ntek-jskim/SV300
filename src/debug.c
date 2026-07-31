@@ -260,12 +260,19 @@ int_t fputc(int_t c, FILE *stream)
 //	{0xf, 11, (SCU_MODE_FUNC4 | SCU_MODE_PULLDOWN)},
 //};
 
+/* Board LED 매핑 — Board_LED_Toggle/On/Off/Set(ix) 의 ix 인덱스
+ *  0: RUN           (P7.22) 하트비트
+ *  1: STS           (P7.23) 상태
+ *  2: COMM          (P7.24) 통신
+ *  3: LEFT RSTP OK  (P6.29) 좌측 RSTP 정상
+ *  4: RIGHT RSTP OK (P6.30) 우측 RSTP 정상
+ *  (명명 상수는 board_api.h 의 LED_RUN/LED_STS/… 참조) */
 const uint32_t _LED_GPIO[][2] = {
-	{7, 22},
-	{7, 23},
-	{7, 24},
-	{6, 29},
-	{6, 30}
+	{7, 22},	// 0: LED_RUN
+	{7, 23},	// 1: LED_STS
+	{7, 24},	// 2: LED_COMM
+	{6, 29},	// 3: LED_RSTP_L (LEFT RSTP OK)
+	{6, 30}		// 4: LED_RSTP_R (RIGHT RSTP OK)
 };
 
 const uint32_t _ETC_GPIO[][2] = {

@@ -1826,30 +1826,14 @@ typedef struct {
 } MGEM_DATA;
 
 
-typedef struct {
-	uint32_t 	eh;			// kWH, kVarH, kVAh(import, export)
-	float		P;	
-	float 		U[3];	
-	float		I[3], Ig; 	// In: Neutal Current(measured), Isum: Neutral Current(Calculated)
-	float 		THD_U[3];
-	float 		THD_I[3], TDD_I[3];
-	uint16_t 	_r[10];
-} CH_DATA;
-
-typedef struct {
-	CH_DATA	    ch[2];
-	float		temp;
-	uint16_t 	_r[106];
-} SIMPLE_DATA;
-
 /* ---------------------------------------------------------------------------
  * Simple map — memorymap/SV300 memory map_260626.xlsx '#1,2,3 Simple' 시트
  *  Modbus FC 3,4 / base 50000 / word(uint16_t) 단위 주소
  *
  *   50000              SMP_COMMON     common     20w
- *   50020 + 80*n       SMP_CHANNEL    ch[n]      80w  × MAX_CH
- *   50740 + 246*n      SMP_HARMONICS  harm[n]   246w  × MAX_CH
- *   52954              end
+ *   50020 + 90*n       SMP_CHANNEL    ch[n]      90w  × MAX_CH
+ *   50830 + 246*n      SMP_HARMONICS  harm[n]   246w  × MAX_CH
+ *   53044              end
  *
  *  1P: #1~#9 사용, 3P: #1~#3 사용 (사용 안 하는 채널은 0)
  *  값은 '#1~3CH modbus' 시트 = METER_DEF(meter[n]) 에서 복사해 채운다.
@@ -1857,7 +1841,7 @@ typedef struct {
  * --------------------------------------------------------------------------- */
 #define	ADD_SIMPLE_MAP		50000
 #define	SMP_COMMON_WORDS	20
-#define	SMP_CH_WORDS		80
+#define	SMP_CH_WORDS		90
 #define	SMP_HARM_WORDS		246
 #define	SMP_HARM_ORDER		41		/* 1~41차 */
 
@@ -1881,28 +1865,28 @@ typedef struct {
 	uint16_t	cbType;			// +0  CB Type
 	uint16_t	cbStatus;		// +1  CB Status
 	uint32_t	_r0;			// +2
-	float		Freq;			// +4  Frequency		<- meter.Freq
-	float		U[3];			// +6  U1,U2,U3			<- meter.U[0..2]
-	float		Upp[3];			// +12 U12,U23,U31		<- meter.Upp[0..2]
-	float		I[3];			// +18 I1,I2,I3			<- meter.I[0..2]
-	float		In;				// +24 누설전류			<- meter.In
-	float		P[3];			// +26 P1,P2,P3			<- meter.P[0..2]
-	float		Ptot;			// +32 P total			<- meter.P[3]
-	float		Qtot;			// +34 Q total			<- meter.Q[3]
-	float		Stot;			// +36 S total			<- meter.S[3]
-	float		PFtot;			// +38 PF total			<- meter.PF[3]
-	uint32_t	kWh_imp;		// +40					<- egy.Ereg32[EGY_PERIOD_TOTAL]      kWh/import
-	uint32_t	kWh_imp_thisM;	// +42					<- egy.Ereg32[EGY_PERIOD_THIS_MONTH] kWh/import
-	uint32_t	kWh_imp_lastM;	// +44					<- egy.Ereg32[EGY_PERIOD_LAST_MONTH] kWh/import
-	uint32_t	kVARh_imp;		// +46					<- egy.Ereg32[EGY_PERIOD_TOTAL]      kvarh/import
-	uint32_t	kVAh;			// +48					<- egy.Ereg32[EGY_PERIOD_TOTAL]      kVAh
-	float		Uunb;			// +50 Volt. Unbalance	<- meter.Ubal[0]
-	float		Iunb;			// +52 Current Unbalance<- meter.Ibal[0]
-	float		THD_U[3];		// +54 THD V1,V2,V3		<- meter.THD_U[0..2]
-	float		THD_I[3];		// +60 THD I1,I2,I3		<- meter.THD_I[0..2]
-	float		TDD_I[3];		// +66 TDD I1,I2,I3		<- meter.TDD_I[0..2]
-	float		_r1[4];			// +72 ~ +79
-} SMP_CHANNEL;					// 80w
+	float		Freq;			// +4  Frequency			<- meter.Freq
+	float		U[4];			// +6  U1,U2,U3,평균		<- meter.U[0..3] (U[3]=상전압 평균)
+	float		Upp[4];			// +14 U12,U23,U31,평균		<- meter.Upp[0..3] (Upp[3]=선간전압 평균)
+	float		I[4];			// +22 I1,I2,I3,평균		<- meter.I[0..3] (I[3]=상전류 평균, cbStatus 기준)
+	float		In;				// +30 누설전류			<- meter.In
+	float		P[3];			// +32 P1,P2,P3			<- meter.P[0..2]
+	float		Ptot;			// +38 P total			<- meter.P[3]
+	float		Qtot;			// +40 Q total			<- meter.Q[3]
+	float		Stot;			// +42 S total			<- meter.S[3]
+	float		PFtot;			// +44 PF total			<- meter.PF[3]
+	uint32_t	kWh_imp;		// +46					<- egy.Ereg32[EGY_PERIOD_TOTAL]      kWh/import
+	uint32_t	kWh_imp_thisM;	// +48					<- egy.Ereg32[EGY_PERIOD_THIS_MONTH] kWh/import
+	uint32_t	kWh_imp_lastM;	// +50					<- egy.Ereg32[EGY_PERIOD_LAST_MONTH] kWh/import
+	uint32_t	kVARh_imp;		// +52					<- egy.Ereg32[EGY_PERIOD_TOTAL]      kvarh/import
+	uint32_t	kVAh;			// +54					<- egy.Ereg32[EGY_PERIOD_TOTAL]      kVAh
+	float		Uunb;			// +56 Volt. Unbalance	<- meter.Ubal[0]
+	float		Iunb;			// +58 Current Unbalance<- meter.Ibal[0]
+	float		THD_U[3];		// +60 THD V1,V2,V3		<- meter.THD_U[0..2]
+	float		THD_I[3];		// +66 THD I1,I2,I3		<- meter.THD_I[0..2]
+	float		TDD_I[3];		// +72 TDD I1,I2,I3		<- meter.TDD_I[0..2]
+	float		_r1[6];			// +78 ~ +89
+} SMP_CHANNEL;					// 90w
 
 /* Harmonics by order — 시트 TYPE S16, 원본 hd.U/hd.I 는 [3][64] 중 1~41차만 복사 */
 typedef struct {
@@ -1912,9 +1896,9 @@ typedef struct {
 
 typedef struct {
 	SMP_COMMON		common;		// 50000
-	SMP_CHANNEL		ch[MAX_CH];	// 50020
-	SMP_HARMONICS	harm[MAX_CH];	// 50740
-} SMP_MAP;						// 2954w
+	SMP_CHANNEL		ch[MAX_CH];	// 50020 + 90*n
+	SMP_HARMONICS	harm[MAX_CH];	// 50830 + 246*n
+} SMP_MAP;						// 3044w (50000~53043)
 
 /* 패딩으로 워드 배치가 어긋나면 컴파일 에러 */
 typedef char smp_map_layout_check[
@@ -2155,7 +2139,6 @@ extern const float _pi;
 extern void getFloatStr(float v, char *pbuf);
 extern void getDoubleStr(double v, char *pbuf);
 
-extern SIMPLE_DATA	*psmap;
 extern SMP_MAP		smpMapBuf[2];
 extern SMP_MAP		* volatile psmpMap;
 

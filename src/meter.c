@@ -32,9 +32,6 @@ ADE9000_REG ade9000[3] __attribute__ ((section ("EXT_RAM"), zero_init));
 ADE9000_REG ade9000[2] __attribute__ ((section ("EXT_RAM"), zero_init));
 #endif
 
-SIMPLE_DATA	smap __attribute__ ((section ("EXT_RAM"), zero_init));
-SIMPLE_DATA	*psmap=&smap;
-
 /* 더블 버퍼: copySimpleMap()이 뒷버퍼를 채운 뒤 psmpMap을 원자적으로 교체.
  *  읽는 쪽(Modbus)은 항상 완결된 스냅샷만 봄 → float/에너지 torn read 방지. */
 SMP_MAP		smpMapBuf[2] __attribute__ ((section ("EXT_RAM"), zero_init));
@@ -4003,6 +4000,26 @@ static void getEventFifoFileName(int id, char *path) {
 	}
 }
 
+/* 이벤트 FIFO 헤더 검증 — 손상 파일의 head.count가 고정배열 elog[]에 OOB 쓰기를
+ *  유발해 부팅 HardFault/무한 홀딩되는 것을 방지. loadAlarmLog/alarmFifoHeaderOk 와 동일.
+ *  writer magic: meter.c 'ff' 경로 = 0x1234abcd */
+#define EVENT_FIFO_MAGIC	0x1234abcd
+static int eventFifoHeaderOk(const EVENT_U *elog, long fsize)
+{
+	int n;
+
+	if (elog == NULL || fsize < (long)sizeof(EVENT_U))
+		return 0;
+	if (elog->head.magic != EVENT_FIFO_MAGIC)
+		return 0;
+	n = elog->head.count;
+	if (n < 0 || n > N_EVENT_FIFO)
+		return 0;
+	if (elog->head.fr < 0 || elog->head.fr > N_EVENT_FIFO)
+		return 0;
+	return (fsize >= (long)sizeof(EVENT_U) * (long)(1 + n));
+}
+
 int loadEventFifo(int id)
 {
 	FILE *fp;
@@ -4015,19 +4032,57 @@ int loadEventFifo(int id)
 		return -1;
 
 	pEvtFifo = &meter[id].eventFifo;
-	memset(pEvtFifo, 0, sizeof(*pEvtFifo));
 
 	getEventFifoFileName(id, path);
+	fsFileLock();
+	memset(pEvtFifo, 0, sizeof(*pEvtFifo));
 	fp = fopen(path, "rb");
 	if (fp != NULL) {
-		fread(&elog, sizeof(EVENT_U), 1, fp);
-		for (i = 0; i < elog.head.count; i++) {
-			fread(&pEvtFifo->elog[i], sizeof(EVENT_U), 1, fp);
-			pEvtFifo->fr++;
-			pEvtFifo->count++;
+		long fsize;
+
+		if (fseek(fp, 0, SEEK_END) == 0) {
+			fsize = ftell(fp);
+			rewind(fp);
+		} else {
+			fsize = -1;
 		}
-		fclose(fp);
+		if (fread(&elog, sizeof(elog), 1, fp) != 1 ||
+		    !eventFifoHeaderOk(&elog, fsize)) {
+			/* 손상 헤더 → 파일 삭제 + RAM 초기화 (무한 부팅행 방지) */
+			fclose(fp);
+#ifdef USE_CMSIS_RTOS2
+			(void)fdelete(path, NULL);
+#else
+			(void)fdelete(path);
+#endif
+			memset(pEvtFifo, 0, sizeof(*pEvtFifo));
+			printf("---> purge invalid event fifo M%d: %s\n", id, path);
+		}
+		else {
+			int n = elog.head.count;
+
+			for (i = 0; i < n; i++) {
+				if (fread(&pEvtFifo->elog[i], sizeof(EVENT_U), 1, fp) != 1)
+					break;
+			}
+			if (i != n) {
+				fclose(fp);
+#ifdef USE_CMSIS_RTOS2
+				(void)fdelete(path, NULL);
+#else
+				(void)fdelete(path);
+#endif
+				memset(pEvtFifo, 0, sizeof(*pEvtFifo));
+				printf("---> purge truncated event fifo M%d: %s\n", id, path);
+			}
+			else {
+				pEvtFifo->count = (uint16_t)n;
+				pEvtFifo->fr = (uint16_t)n;
+				fclose(fp);
+			}
+		}
 	}
+	fsFileUnlock();
 
 	fetchEvent(id, 3);
 	fetchItic(id, 3);
@@ -4481,7 +4536,7 @@ void PostScan_Task(void *arg)
 				storeMaxMin();
 			}
 		}
-		Board_LED_Set(1, ledAlmCount);
+		Board_LED_Set(LED_STS, ledAlmCount);
 
 		// SMP_MAP(#1,2,3 Simple) 갱신: 100ms 웨이크 × 5 = 500ms
 		if (++smpDiv >= 5) {
