@@ -80,6 +80,7 @@
 #endif   // NXP   
 #include "debug.h"
 #include "proxy.h"
+#include "web.h"
 
 
 #if 1	// IP Scan Listener(cskang)
@@ -748,6 +749,9 @@ void init(void)
       TRACE_ERROR("Failed to start FTP server!\r\n");
    }	 
 #endif	// _FTP_SERVER
+
+   //Start the web dashboard (CycloneTCP HTTP server, port 80, LOW priority)
+   webServerStart(&netInterface[0]);
 
 
    //Set task parameters

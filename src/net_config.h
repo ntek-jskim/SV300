@@ -183,4 +183,11 @@
 //SNMP MIB module support
 #define SNMP_MIB_SUPPORT ENABLED
 
+//HTTP server support (web dashboard) — 정적자산은 S0:(SPI Flash) FS에서 서빙
+#define HTTP_SERVER_SUPPORT ENABLED
+//파일시스템 정적 서빙(fs_port_rl_fs → S0:) 활성
+#define HTTP_SERVER_FS_SUPPORT ENABLED
+//동시 접속 수(RAM 절약: 2). 커넥션당 buffer(HTTP_SERVER_BUFFER_SIZE) 사용
+#define HTTP_SERVER_MAX_CONNECTIONS 2
+
 #endif

@@ -994,6 +994,31 @@
               <FilePath>..\cyclone_driver\cyclone_tcp\ftp\ftp_server_commands.c</FilePath>
             </File>
             <File>
+              <FileName>http_server.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_tcp\http\http_server.c</FilePath>
+            </File>
+            <File>
+              <FileName>http_server_misc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_tcp\http\http_server_misc.c</FilePath>
+            </File>
+            <File>
+              <FileName>http_server_auth.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_tcp\http\http_server_auth.c</FilePath>
+            </File>
+            <File>
+              <FileName>http_common.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_tcp\http\http_common.c</FilePath>
+            </File>
+            <File>
+              <FileName>mime.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_tcp\http\mime.c</FilePath>
+            </File>
+            <File>
               <FileName>ftp_server_control.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\cyclone_driver\cyclone_tcp\ftp\ftp_server_control.c</FilePath>
@@ -1937,6 +1962,11 @@
               <FileName>meter.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\src\meter.c</FilePath>
+            </File>
+            <File>
+              <FileName>web.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\web.c</FilePath>
             </File>
             <File>
               <FileName>ssplib.c</FileName>
@@ -3056,6 +3086,31 @@
               <FilePath>..\cyclone_driver\cyclone_tcp\ftp\ftp_server_commands.c</FilePath>
             </File>
             <File>
+              <FileName>http_server.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_tcp\http\http_server.c</FilePath>
+            </File>
+            <File>
+              <FileName>http_server_misc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_tcp\http\http_server_misc.c</FilePath>
+            </File>
+            <File>
+              <FileName>http_server_auth.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_tcp\http\http_server_auth.c</FilePath>
+            </File>
+            <File>
+              <FileName>http_common.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_tcp\http\http_common.c</FilePath>
+            </File>
+            <File>
+              <FileName>mime.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_tcp\http\mime.c</FilePath>
+            </File>
+            <File>
               <FileName>ftp_server_control.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\cyclone_driver\cyclone_tcp\ftp\ftp_server_control.c</FilePath>
@@ -3999,6 +4054,11 @@
               <FileName>meter.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\src\meter.c</FilePath>
+            </File>
+            <File>
+              <FileName>web.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\web.c</FilePath>
             </File>
             <File>
               <FileName>ssplib.c</FileName>
@@ -5118,6 +5178,31 @@
               <FilePath>..\cyclone_driver\cyclone_tcp\ftp\ftp_server_commands.c</FilePath>
             </File>
             <File>
+              <FileName>http_server.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_tcp\http\http_server.c</FilePath>
+            </File>
+            <File>
+              <FileName>http_server_misc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_tcp\http\http_server_misc.c</FilePath>
+            </File>
+            <File>
+              <FileName>http_server_auth.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_tcp\http\http_server_auth.c</FilePath>
+            </File>
+            <File>
+              <FileName>http_common.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_tcp\http\http_common.c</FilePath>
+            </File>
+            <File>
+              <FileName>mime.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_tcp\http\mime.c</FilePath>
+            </File>
+            <File>
               <FileName>ftp_server_control.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\cyclone_driver\cyclone_tcp\ftp\ftp_server_control.c</FilePath>
@@ -6061,6 +6146,11 @@
               <FileName>meter.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\src\meter.c</FilePath>
+            </File>
+            <File>
+              <FileName>web.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\web.c</FilePath>
             </File>
             <File>
               <FileName>ssplib.c</FileName>
