@@ -260,7 +260,11 @@ static error_t serveIndex(HttpConnection *c)
  *----------------------------------------------------------------------------*/
 static error_t webRequestCallback(HttpConnection *c, const char_t *uri)
 {
-	if (!strcmp(uri, "/") || !strcmp(uri, "/index.html") || !strcmp(uri, "/index.htm"))
+	/* CycloneTCP(http_server_misc.c)는 "/" 를 defaultDocument("index.html", 슬래시 없음)로
+	 * 치환해 콜백에 넘긴다. 그래서 루트는 "index.html"(슬래시 없음)로도 매칭해야 한다. */
+	if (!strcmp(uri, "/") ||
+	    !strcmp(uri, "index.html") || !strcmp(uri, "/index.html") ||
+	    !strcmp(uri, "index.htm")  || !strcmp(uri, "/index.htm"))
 		return serveIndex(c);
 
 	if (!strncmp(uri, "/device.cgx",  11)) return cgiDevice(c);
