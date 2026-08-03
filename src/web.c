@@ -307,7 +307,7 @@ static void webMdnsStart(NetInterface *interface)
 		printf("[WEB] mDNS start failed (%d)\n", (int)e);
 		return;
 	}
-	printf("[WEB] mDNS: http://%s.local/\n", host);
+	printf("[WEB] mDNS: http://%s.local:60080/\n", host);
 }
 
 /*----------------------------------------------------------------------------
@@ -321,7 +321,7 @@ void webServerStart(NetInterface *interface)
 
 	httpServerGetDefaultSettings(&s);
 	s.interface      = interface;
-	s.port           = 80;
+	s.port           = 60080;  /* 사내 보안에이전트가 80·8080(표준 HTTP포트) 차단 → 고포트 우회 */
 	s.maxConnections = HTTP_SERVER_MAX_CONNECTIONS;
 	s.connections    = webConns;
 	strcpy(s.rootDirectory, "/");          /* 정적파일은 S0: 루트에서 서빙 */
@@ -343,7 +343,7 @@ void webServerStart(NetInterface *interface)
 		printf("[WEB] start failed (%d)\n", (int)e);
 		return;
 	}
-	printf("[WEB] HTTP dashboard on :80\n");
+	printf("[WEB] HTTP dashboard on :60080\n");
 
 	/* mDNS 등록 — http://sv300-xxxxxx.local/ 접속 지원 */
 	webMdnsStart(interface);
