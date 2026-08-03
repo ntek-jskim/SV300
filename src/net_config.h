@@ -189,7 +189,10 @@
 #define HTTP_SERVER_SUPPORT ENABLED
 //파일시스템 정적 서빙(fs_port_rl_fs → S0:) 활성
 #define HTTP_SERVER_FS_SUPPORT ENABLED
-//동시 접속 수(RAM 절약: 2). 커넥션당 buffer(HTTP_SERVER_BUFFER_SIZE) 사용
-#define HTTP_SERVER_MAX_CONNECTIONS 2
+//동시 접속 수 — 브라우저는 페이지당 여러 연결을 병렬/preconnect 하므로 4로.
+//(2면 초과분이 backlog를 넘어 ERR_CONNECTION_REFUSED 발생) 커넥션당 buffer 사용.
+#define HTTP_SERVER_MAX_CONNECTIONS 4
+//리스너 대기 큐 — 활성(4) 외 대기 SYN 수용. 브라우저 preconnect 흡수용.
+#define HTTP_SERVER_BACKLOG 8
 
 #endif
