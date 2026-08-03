@@ -24,7 +24,7 @@
 //   <i> Define max. number of tasks that will run at the same time.
 //   <i> Default: 6
 #ifndef OS_TASKCNT
- #define OS_TASKCNT     22
+ #define OS_TASKCNT     28	/* 22→28: 웹서버 태스크(HTTP 리스너+커넥션 2) 추가분 + 여유 */
 #endif
 
 //   <o>Number of tasks with user-provided stack <0-250>
