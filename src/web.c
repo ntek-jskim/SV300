@@ -14,6 +14,7 @@
 
 #include "core/net.h"
 #include "http/http_server.h"
+#include "mdns/mdns_responder.h"
 
 #include "web.h"
 #include "meter.h"
@@ -22,6 +23,7 @@ extern METER_DEF meter[];
 
 static HttpServerContext webCtx;
 static HttpConnection    webConns[HTTP_SERVER_MAX_CONNECTIONS];
+static MdnsResponderContext webMdns;
 
 /*----------------------------------------------------------------------------
  * 임베디드 대시보드 (self-contained: 인라인 CSS/JS, 외부 의존 없음)
@@ -272,6 +274,39 @@ static error_t webRequestCallback(HttpConnection *c, const char_t *uri)
 }
 
 /*----------------------------------------------------------------------------
+ * mDNS responder — IP 없이 http://sv300-<MAC하위3바이트>.local/ 로 접속.
+ *  (CycloneTCP mdnsResponder: 소스는 이미 빌드에 포함, MDNS_RESPONDER_SUPPORT로 활성.
+ *   IP 미할당 시점에 시작해도 내부 FSM이 링크/주소 변화에 맞춰 probe/announce 처리)
+ *----------------------------------------------------------------------------*/
+static void webMdnsStart(NetInterface *interface)
+{
+	MdnsResponderSettings s;
+	MacAddr mac;
+	char host[24];
+	error_t e;
+
+	mdnsResponderGetDefaultSettings(&s);
+	s.interface = interface;
+	e = mdnsResponderInit(&webMdns, &s);
+	if (e) {
+		printf("[WEB] mDNS init failed (%d)\n", (int)e);
+		return;
+	}
+
+	mac = interface->macAddr;
+	snprintf(host, sizeof(host), "sv300-%02x%02x%02x",
+		mac.b[3], mac.b[4], mac.b[5]);
+	mdnsResponderSetHostname(&webMdns, host);
+
+	e = mdnsResponderStart(&webMdns);
+	if (e) {
+		printf("[WEB] mDNS start failed (%d)\n", (int)e);
+		return;
+	}
+	printf("[WEB] mDNS: http://%s.local/\n", host);
+}
+
+/*----------------------------------------------------------------------------
  * 서버 기동 — FTP 서버 패턴 미러링. 계측 우선 위해 LOW 우선순위.
  *----------------------------------------------------------------------------*/
 void webServerStart(NetInterface *interface)
@@ -305,4 +340,7 @@ void webServerStart(NetInterface *interface)
 		return;
 	}
 	printf("[WEB] HTTP dashboard on :80\n");
+
+	/* mDNS 등록 — http://sv300-xxxxxx.local/ 접속 지원 */
+	webMdnsStart(interface);
 }

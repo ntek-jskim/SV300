@@ -175,8 +175,10 @@
 
 #define MODBUS_SERVER_MAX_CONNECTIONS	10
 
-//LLMNR responder support
+//LLMNR responder support (구형 Windows 이름해석)
 #define LLMNR_RESPONDER_SUPPORT ENABLED
+//mDNS responder support (macOS/iOS/Linux/Win10+ — http://sv300-xxxxxx.local/)
+#define MDNS_RESPONDER_SUPPORT ENABLED
 
 //SNMP agent support
 #define SNMP_AGENT_SUPPORT ENABLED
