@@ -419,7 +419,7 @@ static error_t apiCommand(HttpConnection *c)
 
 /*============================ Setup: 레지스터 R/W ==========================*/
 /* JSON 본문에서 정수/문자열 값 추출(간이 파서) */
-static long jsonNum(const char *body, const char *key)
+static unsigned long jsonNum(const char *body, const char *key)
 {
 	char pat[20];
 	const char *p;
@@ -428,7 +428,18 @@ static long jsonNum(const char *body, const char *key)
 	if (!p) return 0;
 	p = strchr(p + strlen(pat), ':');
 	if (!p) return 0;
-	return strtol(p + 1, NULL, 10);
+	return strtoul(p + 1, NULL, 10);   /* u32 및 음수(2's complement wrap) 처리 */
+}
+
+/* 쿼리스트링 정수 파라미터(없으면 -1) */
+static int qparam(const char *qs, const char *key)
+{
+	char pat[16];
+	const char *p;
+	snprintf(pat, sizeof(pat), "%s=", key);
+	p = strstr(qs ? qs : "", pat);
+	if (!p) return -1;
+	return atoi(p + strlen(pat));
 }
 
 static uint16_t rdReg(uint16_t a) { uint16_t v = 0; readMemCb(a, &v); return v; }
@@ -526,18 +537,41 @@ static error_t apiGeneral(HttpConnection *c)
 	return httpCloseStream(c);
 }
 
+/* GET /api/regs?addr=A&n=N — 원시 워드 블록(PT/CT/IO는 클라이언트에서 디코드) */
+static error_t apiRegs(HttpConnection *c)
+{
+	char b[48];
+	int addr = qparam(c->request.queryString, "addr");
+	int n    = qparam(c->request.queryString, "n");
+	int i;
+
+	if (addr < 0 || n <= 0 || n > 160)
+		return webJsonStatus(c, 400, "{\"ok\":false,\"error\":\"range\"}");
+
+	if (beginJson(c)) return ERROR_WRITE_FAILED;
+	snprintf(b, sizeof(b), "{\"ok\":true,\"addr\":%d,\"words\":[", addr);
+	w(c, b);
+	for (i = 0; i < n; i++) {
+		snprintf(b, sizeof(b), "%s%u", i ? "," : "", rdReg((uint16_t)(addr + i)));
+		w(c, b);
+	}
+	w(c, "]}");
+	return httpCloseStream(c);
+}
+
 /* POST /api/setreg  {addr,type,val} — admin, 단일/2워드 레지스터 쓰기 */
 static error_t apiSetReg(HttpConnection *c)
 {
 	char body[128], type[8];
-	long addr, val;
+	long addr;
+	unsigned long val;
 	int r;
 
 	if (webRole(c) != ROLE_ADMIN)
 		return webJsonStatus(c, 403, "{\"ok\":false,\"error\":\"admin only\"}");
 
 	webReadBody(c, body, sizeof(body));
-	addr = jsonNum(body, "addr");
+	addr = (long)jsonNum(body, "addr");
 	val  = jsonNum(body, "val");
 	{ /* type 문자열 추출 */
 		char *p = strstr(body, "\"type\"");
@@ -614,6 +648,7 @@ static const char INDEX_HTML[] =
 "input:focus,select:focus{outline:none;border-color:var(--accent)}\n"
 ".btn{padding:9px 16px;border:1px solid var(--line);background:var(--panel2);color:var(--fg);border-radius:8px;cursor:pointer;font-size:14px}\n"
 ".btn:hover{border-color:var(--accent)}.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}.btn:disabled{opacity:.4;cursor:not-allowed}\n"
+".btn.warn{background:var(--warn);border-color:var(--warn);color:#1a212b;font-weight:600}\n"
 ".alert.err{background:#3a1620;color:#fca5a5;border:1px solid #5b2230;padding:10px 12px;border-radius:8px;margin:10px 0}\n"
 ".hint{color:var(--muted);font-size:12px;margin-top:14px}\n"
 /* dashboard */
@@ -880,10 +915,15 @@ static const char INDEX_HTML[] =
 /* setup */
 "var OPT={va_type:{0:'RMS (S=VA)',1:'Vector'},pf_sign:{0:'IEC',1:'IEEE'},minmax_reset:{0:'Daily',1:'Weekly',2:'Monthly'},timezone:{'-720':'UTC-12:00','-600':'Hawaii -10:00','-540':'Alaska -09:00','-480':'Pacific -08:00','-420':'Mountain -07:00','-360':'Central -06:00','-300':'Eastern -05:00','-180':'-03:00','0':'UTC +00:00','60':'Berlin +01:00','120':'Athens +02:00','180':'Moscow +03:00','210':'Tehran +03:30','240':'Dubai +04:00','300':'Karachi +05:00','330':'India +05:30','345':'Nepal +05:45','360':'Dhaka +06:00','420':'Bangkok +07:00','480':'Shanghai +08:00','540':'Seoul +09:00','570':'Adelaide +09:30','600':'Sydney +10:00','720':'Auckland +12:00'}};\n"
 "var CARDN=['Device Information','Communication','ETC'],setCur='general';\n"
+"var WM={0:'not used',1:'3P4W',2:'3P3W(2CT)',3:'3P3W(3CT)',4:'1P2W(L1)',5:'1P2W(L2)',6:'1P2W(L3)',7:'1P3W',8:'SIM'};\n"
+"var CT2M={0:'5A',1:'100mA/333mV',2:'Rogowski'},ZCTM={1:'200mV:100mV',2:'200mV:1.5mA',3:'200mV:0.1mA'},DIM={0:'DI',1:'PI'},DIRM={0:'+',1:'-'};\n"
+"var PT_F=[{o:0,l:'Wiring Mode',t:'u16',opt:WM},{o:2,l:'V Nominal',t:'u32'},{o:4,l:'PT1',t:'u32'},{o:6,l:'PT2',t:'u16'}];\n"
+"var CT_F=[{o:0,l:'I Nominal',t:'u16'},{o:1,l:'CT1',t:'u16'},{o:2,l:'CT2',t:'u16',opt:CT2M},{o:3,l:'Turns',t:'u16'},{o:4,l:'Start I',t:'u16'},{o:5,l:'CT1 Dir',t:'u16',opt:DIRM},{o:6,l:'CT2 Dir',t:'u16',opt:DIRM},{o:7,l:'CT3 Dir',t:'u16',opt:DIRM},{o:8,l:'Rogowski',t:'u16'},{o:9,l:'Phase Ofs 1',t:'i16'},{o:10,l:'Phase Ofs 2',t:'i16'},{o:11,l:'Phase Ofs 3',t:'i16'},{o:12,l:'ZCT Type',t:'u16',opt:ZCTM},{o:13,l:'ZCT Scale',t:'u16'}];\n"
+"var CMDS=[{g:'System',l:'Reboot',addr:7456,danger:1,note:'reboot'},{g:'System',l:'Save Settings',addr:7457},{g:'System',l:'Init Settings',addr:7471,danger:2},{g:'System',l:'Set UTC Time',addr:7446,utc:1},{g:'Clear / Reset',l:'Clear PI',addr:7472,danger:1},{g:'Clear / Reset',l:'Clear Demand',addr:7473,tgt:1},{g:'Clear / Reset',l:'Clear Min/Max',addr:7483,tgt:1},{g:'Clear / Reset',l:'Clear Energy',addr:7493,tgt:1,danger:1},{g:'Clear / Reset',l:'Clear Alarm',addr:7503,tgt:1},{g:'Clear / Reset',l:'Clear Event',addr:7513,tgt:1},{g:'Acknowledge',l:'Alarm Ack',addr:7543,tgt:1},{g:'Acknowledge',l:'Event Ack',addr:7553,tgt:1}];\n"
 "function setEnter(){setTab('general');}\n"
 "function setTab(t){setCur=t;['general','pt','ct','iom','command'].forEach(function(x){var e=$('gt-'+x);if(e)e.className='gp-tab'+(x===t?' on':'');});\n"
-" $('setSave').style.display=(t==='general'&&IS_ADMIN)?'':'none';$('setRes').textContent='';\n"
-" if(t==='general'){loadGeneral();}else{$('setBody').innerHTML=\"<p class='stub'>이 탭은 다음 단계에서 제공됩니다.</p>\";$('setNote').textContent='';}}\n"
+" $('setSave').style.display=((t==='general'||t==='pt'||t==='ct'||t==='iom')&&IS_ADMIN)?'':'none';$('setRes').textContent='';reloadSet();}\n"
+"function reloadSet(){var t=setCur;if(t==='general')loadGeneral();else if(t==='pt')loadGroup('pt');else if(t==='ct')loadGroup('ct');else if(t==='iom')loadIO();else if(t==='command')loadCommand();}\n"
 "function fmtV(f){return (f.type==='bool')?(f.val?'On':'Off'):esc(f.val)}\n"
 "function ctlOf(f){var d=\"data-addr='\"+f.addr+\"' data-type='\"+f.type+\"' data-orig='\"+esc(f.val)+\"'\",dis=IS_ADMIN?'':'disabled';\n"
 " if(f.ro)return \"<span class='sv'>\"+fmtV(f)+\"</span><span class='rtag'>R</span>\";\n"
@@ -901,11 +941,36 @@ static const char INDEX_HTML[] =
 " els.forEach(function(el){var v=(el.type==='checkbox')?(el.checked?'1':'0'):el.value;if((''+v)!==el.getAttribute('data-orig'))chg.push({el:el,v:v});});\n"
 " if(!chg.length){setRes('No changes');return;}if(!confirm(chg.length+'개 설정을 저장합니다. 계속?'))return;setRes('Writing...');\n"
 " var i=0;function wr(a,t,v){return j('/api/setreg',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({addr:a,type:t,val:v})});}\n"
-" function next(){if(i>=chg.length){j('/api/savecfg',{method:'POST'}).then(function(){setRes('Saved ('+chg.length+')');loadGeneral();});return;}\n"
+" function next(){if(i>=chg.length){j('/api/savecfg',{method:'POST'}).then(function(){setRes('Saved ('+chg.length+')');reloadSet();});return;}\n"
 "  var it=chg[i++],addr=+it.el.getAttribute('data-addr'),type=it.el.getAttribute('data-type');\n"
 "  if(type==='ip'){var p=(it.v||'0.0.0.0').split('.'),k=0;(function nip(){if(k>=4){next();return;}wr(addr+k,'u16',+(p[k]||0)).then(function(){k++;nip();});})();}\n"
 "  else{wr(addr,type,Math.round(+it.v||0)).then(function(rr){if(rr.s===403){setRes('Admin only');return;}next();});}}\n"
 " next();}\n"
+/* setup: PT/CT/IO/Command */
+"function decodeF(wds,idx,t){if(t==='u32')return((wds[idx]||0)|((wds[idx+1]||0)<<16))>>>0;if(t==='i16'){var v=wds[idx]||0;return v>32767?v-65536:v;}return wds[idx]||0;}\n"
+"function grpCtl(f,addr,val){var d=\"data-addr='\"+addr+\"' data-type='\"+f.t+\"' data-orig='\"+val+\"'\",dis=IS_ADMIN?'':'disabled';\n"
+" if(f.opt){var s=\"<select \"+d+' '+dis+\" onchange='setMark(this)'>\";for(var k in f.opt)s+=\"<option value='\"+k+\"'\"+((''+k)===(''+val)?' selected':'')+'>'+esc(f.opt[k])+'</option>';return s+'</select>';}\n"
+" return \"<input type='number' \"+d+\" value='\"+val+\"' \"+dis+\" oninput='setMark(this)'>\";}\n"
+"function loadGroup(kind){var cfg=(kind==='pt')?{base:7172,step:8,fields:PT_F,ti:'PT'}:{base:7244,step:16,fields:CT_F,ti:'CT'};\n"
+" return j('/api/regs?addr='+cfg.base+'&n='+(cfg.step*9)).then(function(r){if(!r.d.ok){$('setBody').innerHTML=\"<p class='stub'>load error</p>\";return;}var wds=r.d.words,h=\"<div class='setgrid'>\";\n"
+"  for(var s=0;s<9;s++){var sb=cfg.base+s*cfg.step,so=s*cfg.step;h+=\"<div class='setcard'><h3>\"+cfg.ti+' #'+(s+1)+'</h3>';\n"
+"   cfg.fields.forEach(function(f){var val=decodeF(wds,so+f.o,f.t);h+=\"<div class='srow'><span class='sk'>\"+f.l+'</span>'+grpCtl(f,sb+f.o,val)+'</div>';});h+='</div>';}\n"
+"  h+='</div>';$('setBody').innerHTML=h;$('setNote').textContent=IS_ADMIN?'변경 후 Save & Apply(재부팅 없이 저장). 결선/CT비 등은 재부팅 후 완전 적용될 수 있습니다.':'Viewer 모드 - 읽기 전용.';});}\n"
+"function ioRow(l,addr,val,opt){return \"<div class='srow'><span class='sk'>\"+l+'</span>'+grpCtl({t:'u16',opt:opt},addr,val||0)+'</div>';}\n"
+"function loadIO(){return j('/api/regs?addr=7418&n=14').then(function(r){if(!r.d.ok){$('setBody').innerHTML=\"<p class='stub'>load error</p>\";return;}var wds=r.d.words,h=\"<div class='setgrid'>\";\n"
+"  for(var k=0;k<4;k++){h+=\"<div class='setcard'><h3>IO #\"+k+'</h3>'+ioRow('DI Type',7420+k,wds[2+k],DIM)+ioRow('DI Debounce',7424+k,wds[6+k],null)+ioRow('PI Scale',7428+k,wds[10+k],null)+'</div>';}\n"
+"  h+='</div>';$('setBody').innerHTML=h;$('setNote').textContent=IS_ADMIN?'변경 후 Save & Apply(재부팅 없이 저장).':'Viewer 모드 - 읽기 전용.';});}\n"
+"function loadCommand(){var gr={},od=[];CMDS.forEach(function(c){if(!gr[c.g]){gr[c.g]=[];od.push(c.g);}gr[c.g].push(c);});var h='';\n"
+" od.forEach(function(g){h+=\"<div class='setcard'><h3>\"+g+'</h3>';gr[g].forEach(function(c){var gi=CMDS.indexOf(c),id='c'+gi,ctl='';\n"
+"  if(c.utc)ctl=\"<input type='datetime-local' id='u_\"+id+\"' style='width:190px'>\";else if(c.tgt)ctl=\"<select id='t_\"+id+\"' style='width:80px'><option value='0'>ALL</option><option value='1'>#1</option><option value='2'>#2</option><option value='3'>#3</option></select>\";\n"
+"  h+=\"<div class='srow'><span class='sk'>\"+c.l+\"</span><span style='display:flex;gap:8px;align-items:center'>\"+ctl+\"<button class='btn\"+(c.danger?' warn':'')+\"' \"+(IS_ADMIN?'':'disabled')+\" onclick='runCmd(\"+gi+\")'>Run</button></span></div>\";});h+='</div>';});\n"
+" $('setBody').innerHTML=\"<div class='setgrid'>\"+h+'</div>';$('setNote').textContent=IS_ADMIN?'명령은 즉시 실행됩니다. Reboot / Init Settings 주의.':'Viewer 모드 - 실행 불가.';}\n"
+"function cmdDone(r,c){if(r.s===403){alert('Admin only');return;}if(!r.d.ok){alert('명령 실패');return;}setRes(c.l+' 실행됨');if(c.note==='reboot')$('setNote').textContent='재부팅 중... 잠시 후 재접속하세요.';}\n"
+"function runCmd(ci){var c=CMDS[ci],id='c'+ci;\n"
+" if(c.utc){var v=$('u_'+id).value;if(!v){alert('시간을 입력하세요');return;}var ep=Math.floor(new Date(v).getTime()/1000);if(!confirm('Set UTC Time?'))return;j('/api/setreg',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({addr:c.addr,type:'u32',val:ep})}).then(function(r){cmdDone(r,c);});return;}\n"
+" var addr=c.addr+(c.tgt?(+$('t_'+id).value):0),msg=c.l+' 실행?';if(c.danger)msg=c.l+' - '+(c.danger==2?'공장초기화(모든 설정 삭제, 되돌릴 수 없음)':(c.note==='reboot'?'장치가 재부팅됩니다':'되돌릴 수 없습니다'))+'. 계속?';\n"
+" if(!confirm(msg))return;if(c.danger==2&&!confirm('정말 초기화하시겠습니까?'))return;\n"
+" j('/api/setreg',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({addr:addr,type:'u16',val:4660})}).then(function(r){cmdDone(r,c);});}\n"
 /* boot */
 "var _busy=false,_tick=0;\n"
 "function pollLoop(){if(_busy||window.__pollOn===false||cur!=='dash')return;_busy=true;\n"
@@ -957,6 +1022,7 @@ static error_t webRequestCallback(HttpConnection *c, const char_t *uri)
 		if (!strcmp(uri, "/api/dashboard"))    return apiDashboard(c);
 		if (!strcmp(uri, "/api/sv300/events")) return apiEvents(c);
 		if (!strcmp(uri, "/api/general"))      return apiGeneral(c);
+		if (!strncmp(uri, "/api/regs", 9))     return apiRegs(c);
 		return webJsonStatus(c, 404, "{\"ok\":false,\"error\":\"notfound\"}");
 	}
 
