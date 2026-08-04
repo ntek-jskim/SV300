@@ -25,6 +25,7 @@ extern METER_DEF meter[];
 
 /* modbus.c: 레지스터 주소로 R/W (CH1 base 0, CH2 10000, CH3 20000) */
 extern int writeMemCb(uint16_t address, uint16_t value);
+extern int readMemCb(uint16_t address, uint16_t *value);
 
 static HttpServerContext webCtx;
 static HttpConnection    webConns[HTTP_SERVER_MAX_CONNECTIONS];
@@ -416,6 +417,158 @@ static error_t apiCommand(HttpConnection *c)
 	return httpCloseStream(c);
 }
 
+/*============================ Setup: 레지스터 R/W ==========================*/
+/* JSON 본문에서 정수/문자열 값 추출(간이 파서) */
+static long jsonNum(const char *body, const char *key)
+{
+	char pat[20];
+	const char *p;
+	snprintf(pat, sizeof(pat), "\"%s\"", key);
+	p = strstr(body, pat);
+	if (!p) return 0;
+	p = strchr(p + strlen(pat), ':');
+	if (!p) return 0;
+	return strtol(p + 1, NULL, 10);
+}
+
+static uint16_t rdReg(uint16_t a) { uint16_t v = 0; readMemCb(a, &v); return v; }
+
+/* 설정 필드 테이블(General 탭) — 주소는 펌웨어 ground truth(CH1 base) */
+enum { WT_U16, WT_U32, WT_I16, WT_BOOL, WT_IP, WT_STR };
+static const char *wtName(uint8_t t)
+{
+	switch (t) {
+	case WT_U32:  return "u32";
+	case WT_I16:  return "i16";
+	case WT_BOOL: return "bool";
+	case WT_IP:   return "ip";
+	case WT_STR:  return "str";
+	default:      return "u16";
+	}
+}
+
+typedef struct {
+	const char *k, *label;
+	uint16_t    addr;
+	uint8_t     type, card, ro, nw;
+} GField;
+
+/* card: 0=Device Information, 1=Communication, 2=ETC */
+static const GField GEN[] = {
+	{ "name",            "Name",                 7134, WT_STR,  0, 1, 16 },
+	{ "hw_model",        "HW Model",             7086, WT_U16,  0, 1, 0 },
+	{ "hw_version",      "HW Version",           7087, WT_U16,  0, 1, 0 },
+	{ "fw_version",      "FW Version",           7088, WT_U16,  0, 1, 0 },
+	{ "timezone",        "Timezone",             7413, WT_I16,  0, 0, 0 },
+	{ "device_id",       "Device ID",            7110, WT_U16,  1, 0, 0 },
+	{ "tcp_port",        "TCP Port",             7111, WT_U16,  1, 0, 0 },
+	{ "dhcp",            "DHCP",                 7154, WT_BOOL, 1, 0, 0 },
+	{ "ip",              "IP Address",           7114, WT_IP,   1, 0, 0 },
+	{ "subnet",          "Subnet Mask",          7118, WT_IP,   1, 0, 0 },
+	{ "gateway",         "Gateway",              7122, WT_IP,   1, 0, 0 },
+	{ "dns",             "DNS Server",           7126, WT_IP,   1, 0, 0 },
+	{ "sntp",            "SNTP",                 7112, WT_BOOL, 1, 0, 0 },
+	{ "sntp_ip",         "SNTP Server",          7130, WT_IP,   1, 0, 0 },
+	{ "sntp_interval",   "SNTP Interval (min)",  7113, WT_U16,  1, 0, 0 },
+	{ "va_type",         "VA Type",              7388, WT_U16,  2, 0, 0 },
+	{ "pf_sign",         "PF Sign",              7389, WT_U16,  2, 0, 0 },
+	{ "demand_interval", "Demand Interval (min)",7390, WT_U16,  2, 0, 0 },
+	{ "target_demand",   "Target Demand (W)",    7392, WT_U32,  2, 0, 0 },
+	{ "backlight_off",   "Backlight Off (sec)",  7410, WT_U16,  2, 0, 0 },
+	{ "brightness",      "Brightness",           7411, WT_U16,  2, 0, 0 },
+	{ "auto_rotation",   "Auto Rotation",        7412, WT_BOOL, 2, 0, 0 },
+	{ "test_mode",       "Test Mode",            7415, WT_BOOL, 2, 0, 0 },
+	{ "update_interval", "Update Interval (sec)",7416, WT_U16,  2, 0, 0 },
+	{ "minmax_reset",    "Max/Min Reset",        7414, WT_U16,  2, 0, 0 },
+};
+#define GEN_N ((int)(sizeof(GEN) / sizeof(GEN[0])))
+
+/* GET /api/general — 설정 필드 배열(값 포함) */
+static error_t apiGeneral(HttpConnection *c)
+{
+	char b[200], val[72];
+	int i, k;
+
+	if (beginJson(c)) return ERROR_WRITE_FAILED;
+	w(c, "{\"ok\":true,\"fields\":[");
+	for (i = 0; i < GEN_N; i++) {
+		const GField *f = &GEN[i];
+		if (f->type == WT_IP) {
+			snprintf(val, sizeof(val), "\"%u.%u.%u.%u\"",
+				rdReg(f->addr), rdReg(f->addr + 1), rdReg(f->addr + 2), rdReg(f->addr + 3));
+		} else if (f->type == WT_STR) {
+			char s[40];
+			int o = 0;
+			for (k = 0; k < f->nw && o < 38; k++) {
+				uint16_t wd = rdReg(f->addr + k);
+				char c0 = (char)(wd & 0xff), c1 = (char)((wd >> 8) & 0xff);
+				if (c0 < 0x20 || c0 > 0x7e || c0 == '"' || c0 == '\\') { if (c0 == 0) break; c0 = ' '; }
+				s[o++] = c0;
+				if (c1 < 0x20 || c1 > 0x7e || c1 == '"' || c1 == '\\') { if (c1 == 0) break; c1 = ' '; }
+				s[o++] = c1;
+			}
+			s[o] = 0;
+			snprintf(val, sizeof(val), "\"%s\"", s);
+		} else if (f->type == WT_U32) {
+			uint32_t v = rdReg(f->addr) | ((uint32_t)rdReg(f->addr + 1) << 16);
+			snprintf(val, sizeof(val), "%u", v);
+		} else if (f->type == WT_I16) {
+			snprintf(val, sizeof(val), "%d", (int)(int16_t)rdReg(f->addr));
+		} else {
+			snprintf(val, sizeof(val), "%u", rdReg(f->addr));
+		}
+		snprintf(b, sizeof(b),
+			"%s{\"k\":\"%s\",\"label\":\"%s\",\"addr\":%u,\"type\":\"%s\",\"card\":%u,\"ro\":%u,\"val\":%s}",
+			i ? "," : "", f->k, f->label, f->addr, wtName(f->type), f->card, f->ro, val);
+		w(c, b);
+	}
+	w(c, "]}");
+	return httpCloseStream(c);
+}
+
+/* POST /api/setreg  {addr,type,val} — admin, 단일/2워드 레지스터 쓰기 */
+static error_t apiSetReg(HttpConnection *c)
+{
+	char body[128], type[8];
+	long addr, val;
+	int r;
+
+	if (webRole(c) != ROLE_ADMIN)
+		return webJsonStatus(c, 403, "{\"ok\":false,\"error\":\"admin only\"}");
+
+	webReadBody(c, body, sizeof(body));
+	addr = jsonNum(body, "addr");
+	val  = jsonNum(body, "val");
+	{ /* type 문자열 추출 */
+		char *p = strstr(body, "\"type\"");
+		int o = 0; type[0] = 0;
+		if (p) p = strchr(p, ':');
+		if (p) p = strchr(p, '"');
+		if (p) { p++; while (*p && *p != '"' && o < (int)sizeof(type) - 1) type[o++] = *p++; type[o] = 0; }
+	}
+	if (addr <= 0)
+		return webJsonStatus(c, 400, "{\"ok\":false,\"error\":\"addr\"}");
+
+	r = writeMemCb((uint16_t)addr, (uint16_t)(val & 0xffff));
+	if (!strcmp(type, "u32"))
+		writeMemCb((uint16_t)(addr + 1), (uint16_t)((val >> 16) & 0xffff));
+
+	if (beginJson(c)) return ERROR_WRITE_FAILED;
+	w(c, r == 0 ? "{\"ok\":true}" : "{\"ok\":false,\"error\":\"write rejected\"}");
+	return httpCloseStream(c);
+}
+
+/* POST /api/savecfg — admin, save settings(7457) 명령으로 설정 영속화 */
+static error_t apiSaveCfg(HttpConnection *c)
+{
+	if (webRole(c) != ROLE_ADMIN)
+		return webJsonStatus(c, 403, "{\"ok\":false,\"error\":\"admin only\"}");
+	writeMemCb(7457, 0x1234);
+	if (beginJson(c)) return ERROR_WRITE_FAILED;
+	w(c, "{\"ok\":true}");
+	return httpCloseStream(c);
+}
+
 /*============================ 임베디드 SPA =================================*/
 /*  ※ C 이스케이프 최소화: HTML/SVG 속성=작은따옴표, CSS 문자열=작은따옴표, JS=백틱/작은따옴표. */
 static const char INDEX_HTML[] =
@@ -523,6 +676,25 @@ static const char INDEX_HTML[] =
 ".ph{color:var(--muted)}\n"
 ".ph2{color:var(--muted);font-size:13px}\n"
 ".stub{color:var(--muted);padding:30px 4px}\n"
+".gp-head{display:flex;align-items:center;gap:12px;margin:4px 0 10px}\n"
+".gp-head h1{font-size:22px;font-weight:800;margin:0}\n"
+".gp-badge{background:var(--panel2);color:var(--muted);font-size:12px;font-weight:600;padding:4px 12px;border-radius:8px}\n"
+".gp-actions{margin-left:auto;display:flex;gap:10px;align-items:center}\n"
+".gp-tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:16px;flex-wrap:wrap}\n"
+".gp-tab{padding:10px 14px;color:var(--muted);border-bottom:2px solid transparent;cursor:pointer;font-size:14px}\n"
+".gp-tab:hover{color:var(--fg)}.gp-tab.on{color:var(--accent);border-bottom-color:var(--accent);font-weight:700}\n"
+".setgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}\n"
+"@media(max-width:1000px){.setgrid{grid-template-columns:1fr}}\n"
+".setcard{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:0 18px 14px}\n"
+".setcard h3{font-size:15px;font-weight:700;padding:14px 0 10px;margin:0 0 6px;border-bottom:1px solid var(--line)}\n"
+".srow{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;font-size:13px;border-bottom:1px solid var(--line)}\n"
+".srow:last-child{border-bottom:none}.srow .sk{color:var(--muted)}\n"
+".srow .sv{font-family:'Consolas',monospace}\n"
+".srow input,.srow select{width:160px;margin:0;padding:6px 8px;font-size:13px}\n"
+".srow input[type=checkbox]{width:auto}\n"
+".srow .chg{border-color:var(--warn)}\n"
+".rtag{font-size:10px;background:var(--panel2);color:var(--muted);padding:1px 6px;border-radius:5px;margin-left:6px}\n"
+".setnote{color:var(--muted);font-size:12px;margin:12px 2px}\n"
 "</style></head><body>\n"
 /* ---------- login view ---------- */
 "<div id='v-login'>\n"
@@ -612,7 +784,17 @@ static const char INDEX_HTML[] =
 "   </div>\n"
 /* setup page (Phase 2에서 구현) */
 "   <div id='p-setup' style='display:none'>\n"
-"    <div class='card'><h1>Setup</h1><p class='stub'>Main Setting / Channel Setting 화면은 다음 단계에서 제공됩니다.</p></div>\n"
+"    <div class='gp-head'><h1>Settings</h1><span class='gp-badge'>Main Setting</span>\n"
+"     <span class='gp-actions'><button class='btn primary' id='setSave' onclick='saveSet()'>Save &amp; Apply</button><span class='ph2' id='setRes'></span></span></div>\n"
+"    <div class='gp-tabs'>\n"
+"     <a class='gp-tab on' id='gt-general' onclick=\"setTab('general')\">General</a>\n"
+"     <a class='gp-tab' id='gt-pt' onclick=\"setTab('pt')\">PT</a>\n"
+"     <a class='gp-tab' id='gt-ct' onclick=\"setTab('ct')\">CT</a>\n"
+"     <a class='gp-tab' id='gt-iom' onclick=\"setTab('iom')\">IO</a>\n"
+"     <a class='gp-tab' id='gt-command' onclick=\"setTab('command')\">Command</a>\n"
+"    </div>\n"
+"    <div id='setBody'></div>\n"
+"    <div class='setnote' id='setNote'></div>\n"
 "   </div>\n"
 "  </main>\n"
 " </div>\n"
@@ -654,7 +836,8 @@ static const char INDEX_HTML[] =
 "function go(pg){cur=pg;\n"
 " $('p-dash').style.display=pg==='dash'?'':'none';$('p-setup').style.display=pg==='setup'?'':'none';\n"
 " $('nav-dash').className=pg==='dash'?'on':'';$('nav-setup').className=pg==='setup'?'on':'';\n"
-" $('si-dash').className='sitem'+(pg==='dash'?' active':'');$('si-setup').className='sitem'+(pg==='setup'?' active':'');}\n"
+" $('si-dash').className='sitem'+(pg==='dash'?' active':'');$('si-setup').className='sitem'+(pg==='setup'?' active':'');\n"
+" if(pg==='setup')setEnter();}\n"
 "(function(){var t=$('pollToggle');window.__pollOn=true;t.addEventListener('change',function(){window.__pollOn=t.checked;$('pollState').textContent=t.checked?'ON':'OFF';$('pollState').className='poll-state'+(t.checked?'':' off');});})();\n"
 /* dashboard */
 "function dstat(ok){var e=$('dstat');if(ok){e.className='on';e.innerHTML='&#9679; live &#8635; 1s'}else{e.className='bad';e.innerHTML='&#9679; read error'}}\n"
@@ -694,6 +877,35 @@ static const char INDEX_HTML[] =
 " if(!confirm(lbl+' - proceed?'))return;\n"
 " j('/api/sv300/command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cmd:cmd})}).then(function(r){\n"
 "  if(r.s===403){alert('Admin only');return}if(!r.d.ok){alert('Command failed');return}loadEvents();});}\n"
+/* setup */
+"var OPT={va_type:{0:'RMS (S=VA)',1:'Vector'},pf_sign:{0:'IEC',1:'IEEE'},minmax_reset:{0:'Daily',1:'Weekly',2:'Monthly'},timezone:{'-720':'UTC-12:00','-600':'Hawaii -10:00','-540':'Alaska -09:00','-480':'Pacific -08:00','-420':'Mountain -07:00','-360':'Central -06:00','-300':'Eastern -05:00','-180':'-03:00','0':'UTC +00:00','60':'Berlin +01:00','120':'Athens +02:00','180':'Moscow +03:00','210':'Tehran +03:30','240':'Dubai +04:00','300':'Karachi +05:00','330':'India +05:30','345':'Nepal +05:45','360':'Dhaka +06:00','420':'Bangkok +07:00','480':'Shanghai +08:00','540':'Seoul +09:00','570':'Adelaide +09:30','600':'Sydney +10:00','720':'Auckland +12:00'}};\n"
+"var CARDN=['Device Information','Communication','ETC'],setCur='general';\n"
+"function setEnter(){setTab('general');}\n"
+"function setTab(t){setCur=t;['general','pt','ct','iom','command'].forEach(function(x){var e=$('gt-'+x);if(e)e.className='gp-tab'+(x===t?' on':'');});\n"
+" $('setSave').style.display=(t==='general'&&IS_ADMIN)?'':'none';$('setRes').textContent='';\n"
+" if(t==='general'){loadGeneral();}else{$('setBody').innerHTML=\"<p class='stub'>이 탭은 다음 단계에서 제공됩니다.</p>\";$('setNote').textContent='';}}\n"
+"function fmtV(f){return (f.type==='bool')?(f.val?'On':'Off'):esc(f.val)}\n"
+"function ctlOf(f){var d=\"data-addr='\"+f.addr+\"' data-type='\"+f.type+\"' data-orig='\"+esc(f.val)+\"'\",dis=IS_ADMIN?'':'disabled';\n"
+" if(f.ro)return \"<span class='sv'>\"+fmtV(f)+\"</span><span class='rtag'>R</span>\";\n"
+" if(OPT[f.k]){var o=OPT[f.k],s=\"<select \"+d+' '+dis+\" onchange='setMark(this)'>\";for(var k in o)s+=\"<option value='\"+k+\"'\"+((''+k)===(''+f.val)?' selected':'')+'>'+esc(o[k])+'</option>';return s+'</select>';}\n"
+" if(f.type==='bool')return \"<input type='checkbox' \"+d+' '+dis+' '+(f.val?'checked':'')+\" onchange='setMark(this)'>\";\n"
+" var tp=(f.type==='ip'||f.type==='str')?'text':'number';\n"
+" return \"<input type='\"+tp+\"' \"+d+\" value='\"+esc(f.val)+\"' \"+dis+\" oninput='setMark(this)'>\";}\n"
+"function loadGeneral(){return j('/api/general').then(function(r){if(!r.d.ok){$('setBody').innerHTML=\"<p class='stub'>load error</p>\";return;}\n"
+" var cs=[[],[],[]];r.d.fields.forEach(function(f){cs[f.card].push(f)});var h=\"<div class='setgrid'>\";\n"
+" cs.forEach(function(fs,ci){h+=\"<div class='setcard'><h3>\"+CARDN[ci]+'</h3>';fs.forEach(function(f){h+=\"<div class='srow'><span class='sk'>\"+esc(f.label)+'</span>'+ctlOf(f)+'</div>';});h+='</div>';});\n"
+" h+='</div>';$('setBody').innerHTML=h;$('setNote').textContent=IS_ADMIN?'변경 후 Save & Apply. 네트워크(IP/Subnet/Gateway) 변경은 재부팅 후 적용됩니다.':'Viewer 모드 - 읽기 전용.';});}\n"
+"function setMark(el){var v=(el.type==='checkbox')?(el.checked?'1':'0'):el.value;if((''+v)!==el.getAttribute('data-orig'))el.classList.add('chg');else el.classList.remove('chg');}\n"
+"function setRes(m){$('setRes').textContent=m}\n"
+"function saveSet(){var els=document.querySelectorAll('#setBody [data-addr]'),chg=[];\n"
+" els.forEach(function(el){var v=(el.type==='checkbox')?(el.checked?'1':'0'):el.value;if((''+v)!==el.getAttribute('data-orig'))chg.push({el:el,v:v});});\n"
+" if(!chg.length){setRes('No changes');return;}if(!confirm('Write '+chg.length+' setting(s)?'))return;setRes('Writing...');\n"
+" var i=0;function wr(a,t,v){return j('/api/setreg',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({addr:a,type:t,val:v})});}\n"
+" function next(){if(i>=chg.length){j('/api/savecfg',{method:'POST'}).then(function(){setRes('Saved ('+chg.length+')');loadGeneral();});return;}\n"
+"  var it=chg[i++],addr=+it.el.getAttribute('data-addr'),type=it.el.getAttribute('data-type');\n"
+"  if(type==='ip'){var p=(it.v||'0.0.0.0').split('.'),k=0;(function nip(){if(k>=4){next();return;}wr(addr+k,'u16',+(p[k]||0)).then(function(){k++;nip();});})();}\n"
+"  else{wr(addr,type,Math.round(+it.v||0)).then(function(rr){if(rr.s===403){setRes('Admin only');return;}next();});}}\n"
+" next();}\n"
 /* boot */
 "var _busy=false,_tick=0;\n"
 "function pollLoop(){if(_busy||window.__pollOn===false||cur!=='dash')return;_busy=true;\n"
@@ -735,6 +947,8 @@ static error_t webRequestCallback(HttpConnection *c, const char_t *uri)
 
 	/* 쓰기(admin) */
 	if (!strcmp(uri, "/api/sv300/command")) return apiCommand(c);
+	if (!strcmp(uri, "/api/setreg"))        return apiSetReg(c);
+	if (!strcmp(uri, "/api/savecfg"))       return apiSaveCfg(c);
 
 	/* 조회(로그인 필요) */
 	if (!strncmp(uri, "/api/", 5)) {
@@ -742,6 +956,7 @@ static error_t webRequestCallback(HttpConnection *c, const char_t *uri)
 			return webJsonStatus(c, 401, "{\"ok\":false,\"error\":\"auth\"}");
 		if (!strcmp(uri, "/api/dashboard"))    return apiDashboard(c);
 		if (!strcmp(uri, "/api/sv300/events")) return apiEvents(c);
+		if (!strcmp(uri, "/api/general"))      return apiGeneral(c);
 		return webJsonStatus(c, 404, "{\"ok\":false,\"error\":\"notfound\"}");
 	}
 
