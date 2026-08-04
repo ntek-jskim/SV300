@@ -420,6 +420,7 @@ static error_t apiCommand(HttpConnection *c)
 static const char INDEX_HTML[] =
 "<!doctype html><html lang='en' data-theme='dark'><head><meta charset='utf-8'>\n"
 "<meta name='viewport' content='width=device-width,initial-scale=1'>\n"
+"<link rel='icon' href='data:,'>\n"
 "<title>SV300 · Web</title>\n"
 "<script>(function(){try{document.documentElement.setAttribute('data-theme',localStorage.getItem('theme')||'dark');}catch(e){}})();</script>\n"
 "<style>\n"
@@ -622,7 +623,8 @@ static const char INDEX_HTML[] =
 "var AC=['Disabled','Temp','Freq','U1','U2','U3','U~','U12','U23','U31','Upp~','V.Unbal Uo','V.Unbal Uu','I1','I2','I3','I~','Itotal','In','P1','P2','P3','Ptotal','Q1','Q2','Q3','Qtot','D1','D2','D3','D','S1','S2','S3','Stot','PF1','PF2','PF3','PFtot','THD U1','THD U2','THD U3','THD U12','THD U23','THD U31','THD I1','THD I2','THD I3','DDmd P+','DDmd P-','DDmd Q+','DDmd Q-','DDmd S','DDmd I1','DDmd I2','DDmd I3','MDmd P+','MDmd P-','MDmd Q+','MDmd Q-','MDmd S','MDmd I1','MDmd I2','MDmd I3','UnderDev U1','UnderDev U2','UnderDev U3','OverDev U1','OverDev U2','OverDev U3','CF U1','CF U2','CF U3','CF U12','CF U23','CF U31','CF I1','CF I2','CF I3','KF I1','KF I2','KF I3','PSt1','PSt2','PSt3','Plt1','Plt2','Plt3','Sig.V1','Sig.V2','Sig.V3'];\n"
 "var ET={1:['Sag','sag'],2:['Swell','swell'],3:['S.Intr','intr'],4:['L.Intr','intr'],5:['OC','oc'],6:['RVC','tr'],7:['Trans V','tr'],8:['Trans I','tr'],9:['SOE','oc']};\n"
 "function acn(i){return AC[i]||('#'+i)}\n"
-"function j(u,o){return fetch(u,o).then(function(r){return r.text().then(function(t){return{s:r.status,d:JSON.parse((t||'{}').replace(/-?(inf|nan)/gi,'0'))}})})}\n"
+"function j(u,o){o=o||{};var ac=('AbortController'in window)?new AbortController():null,tm=null;if(ac){o.signal=ac.signal;tm=setTimeout(function(){ac.abort()},6000);}\n"
+" return fetch(u,o).then(function(r){return r.text().then(function(t){if(tm)clearTimeout(tm);return{s:r.status,d:JSON.parse((t||'{}').replace(/-?(inf|nan)/gi,'0'))}})}).catch(function(e){if(tm)clearTimeout(tm);throw e;})}\n"
 "function n(v,d){return(v==null||isNaN(v))?'-':Number(v).toFixed(d)}\n"
 "function esc(s){return String(s).replace(/[&<>]/g,function(x){return{'&':'&amp;','<':'&lt;','>':'&gt;'}[x]})}\n"
 /* theme + clock */
@@ -638,7 +640,7 @@ static const char INDEX_HTML[] =
 " if(r.d.auth){IS_ADMIN=(r.d.role==='admin');\n"
 "  $('role').textContent=r.d.user+' ('+(IS_ADMIN?'Admin':'Viewer')+')';$('role').className='role '+(IS_ADMIN?'admin':'viewer');\n"
 "  ['b-ackal','b-clral','b-clrev','b-ackev'].forEach(function(id){$(id).disabled=!IS_ADMIN});\n"
-"  showApp();go('dash');loadDash();loadEvents();return true;}\n"
+"  showApp();go('dash');pollLoop();return true;}\n"
 " showLogin();return false;});}\n"
 "function logout(){j('/api/logout').then(function(){IS_ADMIN=false;showLogin()})}\n"
 "$('loginForm').addEventListener('submit',function(e){e.preventDefault();\n"
@@ -660,8 +662,7 @@ static const char INDEX_HTML[] =
 " var a=(-90+f*360)*Math.PI/180,dt=$('pfDot');dt.setAttribute('cx',70+60*Math.cos(a));dt.setAttribute('cy',70+60*Math.sin(a));dt.setAttribute('fill',col);\n"
 " $('d-pf').style.color=col;$('d-pfst').style.color=col;$('d-pfst').textContent=st;}\n"
 "function setBar(id,bid,v){var e=$(id);e.textContent=n(v,1)+'%';e.className='uv '+(v>=100?'r':'g');var b=$(bid);b.style.width=Math.max(1,Math.min(100,v||0))+'%';b.className='ufill'+(v>=100?' hot':'');}\n"
-"function loadDash(){if(cur!=='dash'||window.__pollOn===false)return;\n"
-" j('/api/dashboard').then(function(r){if(!r.d.ok){dstat(false);return}var d=r.d.data;\n"
+"function loadDash(){return j('/api/dashboard').then(function(r){if(!r.d.ok){dstat(false);return}var d=r.d.data;\n"
 "  $('d-vavg').textContent=n(d.v_avg,1);$('d-iavg').textContent=n(d.i_avg,2);$('d-freq').textContent=n(d.freq,2);\n"
 "  $('d-u1').textContent=n(d.u[0],1)+' V';$('d-u2').textContent=n(d.u[1],1)+' V';$('d-u3').textContent=n(d.u[2],1)+' V';\n"
 "  $('d-i1').textContent=n(d.i[0],2)+' A';$('d-i2').textContent=n(d.i[1],2)+' A';$('d-i3').textContent=n(d.i[2],2)+' A';\n"
@@ -673,8 +674,7 @@ static const char INDEX_HTML[] =
 " }).catch(function(){dstat(false)});}\n"
 "function chip(c){return \"<span class='chchip'>CH\"+c+'</span>'}\n"
 "function ts2(s){return s?fdt(new Date(s*1000)):'-'}\n"
-"function loadEvents(){if(cur!=='dash'||window.__pollOn===false)return;\n"
-" j('/api/sv300/events').then(function(r){if(!r.d.ok)return;var d=r.d;\n"
+"function loadEvents(){return j('/api/sv300/events').then(function(r){if(!r.d.ok)return;var d=r.d;\n"
 "  $('as-cnt').textContent=d.status.length;$('as-cnt').className='dbadge'+(d.status.length?' hot':'');\n"
 "  var h=\"<tr><th>Alarm Channel</th><th>State</th><th>Count</th></tr>\";\n"
 "  if(!d.status.length)h+=\"<tr><td class='empty' colspan='3'>\\u2713 No active alarms</td></tr>\";\n"
@@ -694,7 +694,10 @@ static const char INDEX_HTML[] =
 " j('/api/sv300/command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cmd:cmd})}).then(function(r){\n"
 "  if(r.s===403){alert('Admin only');return}if(!r.d.ok){alert('Command failed');return}loadEvents();});}\n"
 /* boot */
-"tbtn();clk();setInterval(clk,1000);setInterval(loadDash,1000);setInterval(loadEvents,3000);me();\n"
+"var _busy=false,_tick=0;\n"
+"function pollLoop(){if(_busy||window.__pollOn===false||cur!=='dash')return;_busy=true;\n"
+" loadDash().then(function(){if(_tick%3===0)return loadEvents();}).catch(function(){}).then(function(){_busy=false;_tick++;});}\n"
+"tbtn();clk();setInterval(clk,1000);setInterval(pollLoop,1000);me();\n"
 "</script></body></html>\n";
 
 /* 임베디드 SPA 서빙(고정 길이) */
