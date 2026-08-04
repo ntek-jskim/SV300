@@ -545,7 +545,7 @@ static error_t apiRegs(HttpConnection *c)
 	int n    = qparam(c->request.queryString, "n");
 	int i;
 
-	if (addr < 0 || n <= 0 || n > 160)
+	if (addr < 0 || n <= 0 || n > 256)
 		return webJsonStatus(c, 400, "{\"ok\":false,\"error\":\"range\"}");
 
 	if (beginJson(c)) return ERROR_WRITE_FAILED;
@@ -730,6 +730,13 @@ static const char INDEX_HTML[] =
 ".srow .chg{border-color:var(--warn)}\n"
 ".rtag{font-size:10px;background:var(--panel2);color:var(--muted);padding:1px 6px;border-radius:5px;margin-left:6px}\n"
 ".setnote{color:var(--muted);font-size:12px;margin:12px 2px}\n"
+".atbl{width:100%;border-collapse:collapse;font-size:12px}\n"
+".atbl th,.atbl td{padding:4px 6px;border-bottom:1px solid var(--line);text-align:center}\n"
+".atbl th{color:var(--muted);font-weight:600}\n"
+".atbl tr.aoff{opacity:.45}.atbl tr.aoff:hover,.atbl tr.aoff:focus-within{opacity:1}\n"
+".atbl input,.atbl select{width:100%;min-width:54px;margin:0;padding:3px 4px;font-size:12px}\n"
+".atbl select.awide{min-width:120px}\n"
+".atbl .chg{border-color:var(--warn)}\n"
 "</style></head><body>\n"
 /* ---------- login view ---------- */
 "<div id='v-login'>\n"
@@ -765,6 +772,7 @@ static const char INDEX_HTML[] =
 "   <a class='sitem active' id='si-dash' onclick=\"go('dash')\"><span class='ico'>&#128202;</span>Dashboard</a>\n"
 "   <div class='sgroup'>Setup</div>\n"
 "   <a class='sitem' id='si-setup' onclick=\"go('setup')\"><span class='ico'>&#128421;</span>Main Setting</a>\n"
+"   <a class='sitem' id='si-chset' onclick=\"go('setup','alarm')\"><span class='ico'>&#9881;</span>Channel Setting</a>\n"
 "   <div class='poll-toggle'><label><input type='checkbox' id='pollToggle' checked style='width:auto;margin:0'> Live polling <span class='poll-state' id='pollState'>ON</span></label></div>\n"
 "  </aside>\n"
 "  <main class='container'>\n"
@@ -819,7 +827,7 @@ static const char INDEX_HTML[] =
 "   </div>\n"
 /* setup page (Phase 2에서 구현) */
 "   <div id='p-setup' style='display:none'>\n"
-"    <div class='gp-head'><h1>Settings</h1><span class='gp-badge'>Main Setting</span>\n"
+"    <div class='gp-head'><h1>Settings</h1><span class='gp-badge' id='setBadge'>Main Setting</span>\n"
 "     <span class='gp-actions'><button class='btn primary' id='setSave' onclick='saveSet()'>Save &amp; Apply</button><span class='ph2' id='setRes'></span></span></div>\n"
 "    <div class='gp-tabs'>\n"
 "     <a class='gp-tab on' id='gt-general' onclick=\"setTab('general')\">General</a>\n"
@@ -827,6 +835,7 @@ static const char INDEX_HTML[] =
 "     <a class='gp-tab' id='gt-ct' onclick=\"setTab('ct')\">CT</a>\n"
 "     <a class='gp-tab' id='gt-iom' onclick=\"setTab('iom')\">IO</a>\n"
 "     <a class='gp-tab' id='gt-command' onclick=\"setTab('command')\">Command</a>\n"
+"     <a class='gp-tab' id='gt-alarm' onclick=\"setTab('alarm')\">Alarm Settings</a>\n"
 "    </div>\n"
 "    <div id='setBody'></div>\n"
 "    <div class='setnote' id='setNote'></div>\n"
@@ -868,11 +877,12 @@ static const char INDEX_HTML[] =
 "  else{$('lerr').textContent='Invalid username or password';$('lerr').style.display='';}\n"
 " }).catch(function(){$('lerr').textContent='Login failed';$('lerr').style.display='';});});\n"
 /* nav */
-"function go(pg){cur=pg;\n"
+"function go(pg,tab){cur=pg;\n"
 " $('p-dash').style.display=pg==='dash'?'':'none';$('p-setup').style.display=pg==='setup'?'':'none';\n"
 " $('nav-dash').className=pg==='dash'?'on':'';$('nav-setup').className=pg==='setup'?'on':'';\n"
-" $('si-dash').className='sitem'+(pg==='dash'?' active':'');$('si-setup').className='sitem'+(pg==='setup'?' active':'');\n"
-" if(pg==='setup')setEnter();}\n"
+" $('si-dash').className='sitem'+(pg==='dash'?' active':'');\n"
+" if(pg==='dash'){$('si-setup').className='sitem';$('si-chset').className='sitem';}\n"
+" if(pg==='setup')setEnter(tab);}\n"
 "(function(){var t=$('pollToggle');window.__pollOn=true;t.addEventListener('change',function(){window.__pollOn=t.checked;$('pollState').textContent=t.checked?'ON':'OFF';$('pollState').className='poll-state'+(t.checked?'':' off');});})();\n"
 /* dashboard */
 "function dstat(ok){var e=$('dstat');if(ok){e.className='on';e.innerHTML='&#9679; live &#8635; 1s'}else{e.className='bad';e.innerHTML='&#9679; read error'}}\n"
@@ -920,10 +930,12 @@ static const char INDEX_HTML[] =
 "var PT_F=[{o:0,l:'Wiring Mode',t:'u16',opt:WM},{o:2,l:'V Nominal',t:'u32'},{o:4,l:'PT1',t:'u32'},{o:6,l:'PT2',t:'u16'}];\n"
 "var CT_F=[{o:0,l:'I Nominal',t:'u16'},{o:1,l:'CT1',t:'u16'},{o:2,l:'CT2',t:'u16',opt:CT2M},{o:3,l:'Turns',t:'u16'},{o:4,l:'Start I',t:'u16'},{o:5,l:'CT1 Dir',t:'u16',opt:DIRM},{o:6,l:'CT2 Dir',t:'u16',opt:DIRM},{o:7,l:'CT3 Dir',t:'u16',opt:DIRM},{o:8,l:'Rogowski',t:'u16'},{o:9,l:'Phase Ofs 1',t:'i16'},{o:10,l:'Phase Ofs 2',t:'i16'},{o:11,l:'Phase Ofs 3',t:'i16'},{o:12,l:'ZCT Type',t:'u16',opt:ZCTM},{o:13,l:'ZCT Scale',t:'u16'}];\n"
 "var CMDS=[{g:'System',l:'Reboot',addr:7456,danger:1,note:'reboot'},{g:'System',l:'Save Settings',addr:7457},{g:'System',l:'Init Settings',addr:7471,danger:2},{g:'System',l:'Set Time',addr:7446,utc:1},{g:'Clear / Reset',l:'Clear PI',addr:7472,danger:1},{g:'Clear / Reset',l:'Clear Demand',addr:7473,tgt:1},{g:'Clear / Reset',l:'Clear Min/Max',addr:7483,tgt:1},{g:'Clear / Reset',l:'Clear Energy',addr:7493,tgt:1,danger:1},{g:'Clear / Reset',l:'Clear Alarm',addr:7503,tgt:1},{g:'Clear / Reset',l:'Clear Event',addr:7513,tgt:1},{g:'Acknowledge',l:'Alarm Ack',addr:7543,tgt:1},{g:'Acknowledge',l:'Event Ack',addr:7553,tgt:1}];\n"
-"function setEnter(){setTab('general');}\n"
-"function setTab(t){setCur=t;['general','pt','ct','iom','command'].forEach(function(x){var e=$('gt-'+x);if(e)e.className='gp-tab'+(x===t?' on':'');});\n"
-" $('setSave').style.display=((t==='general'||t==='pt'||t==='ct'||t==='iom')&&IS_ADMIN)?'':'none';$('setRes').textContent='';reloadSet();}\n"
-"function reloadSet(){var t=setCur;if(t==='general')loadGeneral();else if(t==='pt')loadGroup('pt');else if(t==='ct')loadGroup('ct');else if(t==='iom')loadIO();else if(t==='command')loadCommand();}\n"
+"function setEnter(tab){setTab(tab||'general');}\n"
+"function setTab(t){setCur=t;['general','pt','ct','iom','command','alarm'].forEach(function(x){var e=$('gt-'+x);if(e)e.className='gp-tab'+(x===t?' on':'');});\n"
+" $('setSave').style.display=((t!=='command')&&IS_ADMIN)?'':'none';$('setRes').textContent='';\n"
+" $('setBadge').textContent=(t==='alarm')?'Channel Setting':'Main Setting';\n"
+" $('si-setup').className='sitem'+(t!=='alarm'?' active':'');$('si-chset').className='sitem'+(t==='alarm'?' active':'');reloadSet();}\n"
+"function reloadSet(){var t=setCur;if(t==='general')loadGeneral();else if(t==='pt')loadGroup('pt');else if(t==='ct')loadGroup('ct');else if(t==='iom')loadIO();else if(t==='command')loadCommand();else if(t==='alarm')loadAlarm();}\n"
 "function fmtV(f){return (f.type==='bool')?(f.val?'On':'Off'):esc(f.val)}\n"
 "function ctlOf(f){var d=\"data-addr='\"+f.addr+\"' data-type='\"+f.type+\"' data-orig='\"+esc(f.val)+\"'\",dis=IS_ADMIN?'':'disabled';\n"
 " if(f.ro)return \"<span class='sv'>\"+fmtV(f)+\"</span><span class='rtag'>R</span>\";\n"
@@ -944,6 +956,7 @@ static const char INDEX_HTML[] =
 " function next(){if(i>=chg.length){j('/api/savecfg',{method:'POST'}).then(function(){setRes('Saved ('+chg.length+')');reloadSet();});return;}\n"
 "  var it=chg[i++],addr=+it.el.getAttribute('data-addr'),type=it.el.getAttribute('data-type');\n"
 "  if(type==='ip'){var p=(it.v||'0.0.0.0').split('.'),k=0;(function nip(){if(k>=4){next();return;}wr(addr+k,'u16',+(p[k]||0)).then(function(){k++;nip();});})();}\n"
+"  else if(type==='float'){var wf=fToU16(+it.v||0),k2=0;(function nf(){if(k2>=2){next();return;}wr(addr+k2,'u16',wf[k2]).then(function(){k2++;nf();});})();}\n"
 "  else{wr(addr,type,Math.round(+it.v||0)).then(function(rr){if(rr.s===403){setRes('Admin only');return;}next();});}}\n"
 " next();}\n"
 /* setup: PT/CT/IO/Command */
@@ -972,6 +985,25 @@ static const char INDEX_HTML[] =
 " var addr=c.addr+(c.tgt?(+$('t_'+id).value):0),msg=c.l+' 실행?';if(c.danger)msg=c.l+' - '+(c.danger==2?'공장초기화(모든 설정 삭제, 되돌릴 수 없음)':(c.note==='reboot'?'장치가 재부팅됩니다':'되돌릴 수 없습니다'))+'. 계속?';\n"
 " if(!confirm(msg))return;if(c.danger==2&&!confirm('정말 초기화하시겠습니까?'))return;\n"
 " j('/api/setreg',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({addr:addr,type:'u16',val:4660})}).then(function(r){cmdDone(r,c);});}\n"
+/* setup: Channel Setting - Alarm Settings 32행 */
+"function u16toF(lo,hi){var b=new ArrayBuffer(4),d=new DataView(b);d.setUint16(0,lo,true);d.setUint16(2,hi,true);return d.getFloat32(0,true);}\n"
+"function fToU16(f){var b=new ArrayBuffer(4),d=new DataView(b);d.setFloat32(0,f,true);return [d.getUint16(0,true),d.getUint16(2,true)];}\n"
+"function fnum(x){return String(Math.round(x*100)/100);}\n"
+"var alCh=1,COND_OPT=\"<option value='0'>&lt;</option><option value='1'>&gt;</option>\",ACT_OPT=\"<option value='0'>None</option><option value='1'>Relay</option><option value='2'>Beep</option>\";\n"
+"function alSel(c){alCh=c;loadAlarm();}\n"
+"function alSelCell(addr,val,opts,cls){return \"<select class='\"+cls+\"' data-addr='\"+addr+\"' data-type='u16' data-orig='\"+val+\"' data-val='\"+val+\"' \"+(IS_ADMIN?'':'disabled')+\" onchange='setMark(this)'>\"+opts+'</select>';}\n"
+"function alNum(addr,val){return \"<input type='number' data-addr='\"+addr+\"' data-type='u16' data-orig='\"+val+\"' value='\"+val+\"' \"+(IS_ADMIN?'':'disabled')+\" oninput='setMark(this)'>\";}\n"
+"function alFloat(addr,val){var s=fnum(val);return \"<input type='number' step='0.1' data-addr='\"+addr+\"' data-type='float' data-orig='\"+s+\"' value='\"+s+\"' \"+(IS_ADMIN?'':'disabled')+\" oninput='setMark(this)'>\";}\n"
+"function loadAlarm(){var base=(alCh-1)*10000+6858;\n"
+" return j('/api/regs?addr='+base+'&n=192').then(function(r){if(!r.d.ok){$('setBody').innerHTML=\"<p class='stub'>load error</p>\";return;}var w=r.d.words;\n"
+"  var h=\"<div style='margin-bottom:12px'>\";for(var c=1;c<=3;c++)h+=\"<button class='btn\"+(c===alCh?' primary':'')+\"' style='margin-right:6px' onclick='alSel(\"+c+\")'>CH\"+c+'</button>';h+='</div>';\n"
+"  var acOpt='';for(var i=0;i<AC.length;i++)acOpt+=\"<option value='\"+i+\"'>\"+esc(AC[i])+'</option>';\n"
+"  h+=\"<div style='overflow-x:auto'><table class='atbl'><tr><th>#</th><th>Channel</th><th>Cond</th><th>Hyst(%)</th><th>Action</th><th>Level</th></tr>\";\n"
+"  for(var n=0;n<32;n++){var b=base+6*n,o=6*n,chan=w[o],en=chan>0;\n"
+"   h+=\"<tr class='\"+(en?'aon':'aoff')+\"'><td>\"+(n+1)+'</td><td>'+alSelCell(b,chan,acOpt,'awide')+'</td><td>'+alSelCell(b+1,w[o+1],COND_OPT,'')+'</td><td>'+alNum(b+2,w[o+2])+'</td><td>'+alSelCell(b+3,w[o+3],ACT_OPT,'')+'</td><td>'+alFloat(b+4,u16toF(w[o+4],w[o+5]))+'</td></tr>';}\n"
+"  h+='</table></div>';$('setBody').innerHTML=h;\n"
+"  document.querySelectorAll('#setBody select[data-val]').forEach(function(s){s.value=s.getAttribute('data-val');});\n"
+"  $('setNote').textContent=IS_ADMIN?'Channel>0 = 사용. 변경 후 Save & Apply(라이브 반영). ※ 알람설정 재부팅 영속·즉시적용은 실기 확인 후 필요시 펌웨어 반영.':'Viewer 모드 - 읽기 전용.';});}\n"
 /* boot */
 "var _busy=false,_tick=0;\n"
 "function pollLoop(){if(_busy||window.__pollOn===false||cur!=='dash')return;_busy=true;\n"
