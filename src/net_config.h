@@ -191,5 +191,7 @@
 #define HTTP_SERVER_FS_SUPPORT ENABLED
 //동시 접속 수 — 2로 복원(GET / 정상 처리 확인된 값). backlog는 기본(4) 사용.
 #define HTTP_SERVER_MAX_CONNECTIONS 2
+//쿠키 세션(로그인 유지) — request.cookie / response.setCookie 파싱·출력 활성
+#define HTTP_SERVER_COOKIE_SUPPORT ENABLED
 
 #endif
