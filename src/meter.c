@@ -382,7 +382,7 @@ int initSettings(int id)
 		db.comm.ip0[0] = 192;
 		db.comm.ip0[1] = 168;
 		db.comm.ip0[2] = 9;
-		db.comm.ip0[3] = 124;
+		db.comm.ip0[3] = 125;
 
 		db.comm.sm0[0] = 255;
 		db.comm.sm0[1] = 255;
@@ -2722,9 +2722,10 @@ void FS_task(void *arg)
 			saveSettings(&db);
 
 			meter[id].cntl.saveSetting = 0;
-			meter[id].cntl.runFlag = 0;
-			osDelayTask(2000);
-			printf("... save settings, ip=%d.%d.%d.%d\n", 
+			/* 재부팅 없이 설정 저장(웹 설정 저장 지원) — 기존 runFlag=0(→taskMonitor 재부팅)·
+			 * osDelayTask(2000) 제거. 저장(settings.dat)만 수행. 재초기화가 필요한 설정
+			 * (네트워크/PT·CT 등)은 별도 reboot 명령(7456)으로 반영한다. */
+			printf("... save settings, ip=%d.%d.%d.%d\n",
 				pdbk->comm.ip0[0], pdbk->comm.ip0[1], pdbk->comm.ip0[2], pdbk->comm.ip0[3]);
 		}
 		else if (meter[id].cntl.factReset == 0x1234) {
