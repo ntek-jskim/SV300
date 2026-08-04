@@ -288,19 +288,20 @@ static float favg3(const float *a) { return (a[0] + a[1] + a[2]) / 3.0f; }
 /* GET /api/dashboard — CH1 순시치(confWebApp iDPM300 대시보드) */
 static error_t apiDashboard(HttpConnection *c)
 {
-	char b[512];
+	char b[192];   /* 작은 버퍼로 분할 기록(태스크 스택 절약) */
 	METERING *m = &meter[0].meter;
 
 	if (beginJson(c)) return ERROR_WRITE_FAILED;
 	snprintf(b, sizeof(b),
-		"{\"ok\":true,\"data\":{"
-		"\"freq\":%.2f,\"v_avg\":%.1f,\"i_avg\":%.2f,"
-		"\"u\":[%.1f,%.1f,%.1f],\"i\":[%.2f,%.2f,%.2f],"
+		"{\"ok\":true,\"data\":{\"freq\":%.2f,\"v_avg\":%.1f,\"i_avg\":%.2f,"
+		"\"u\":[%.1f,%.1f,%.1f],\"i\":[%.2f,%.2f,%.2f],",
+		m->Freq, m->U[3], m->I[3],
+		m->U[0], m->U[1], m->U[2], m->I[0], m->I[1], m->I[2]);
+	w(c, b);
+	snprintf(b, sizeof(b),
 		"\"p\":%.2f,\"q\":%.2f,\"s\":%.2f,\"pf\":%.1f,"
 		"\"u_unbal\":%.1f,\"i_unbal\":%.1f,"
 		"\"thd_u\":%.1f,\"thd_i\":%.1f,\"tdd_i\":%.1f}}",
-		m->Freq, m->U[3], m->I[3],
-		m->U[0], m->U[1], m->U[2], m->I[0], m->I[1], m->I[2],
 		m->P[3] / 1000.0f, m->Q[3] / 1000.0f, m->S[3] / 1000.0f,
 		(float)fabs(m->PF[3]) * 100.0f,
 		m->Ubal[0], m->Ibal[0],

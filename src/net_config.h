@@ -193,5 +193,7 @@
 #define HTTP_SERVER_MAX_CONNECTIONS 2
 //쿠키 세션(로그인 유지) — request.cookie / response.setCookie 파싱·출력 활성
 #define HTTP_SERVER_COOKIE_SUPPORT ENABLED
+//커넥션 태스크 스택 — 기본 650워드는 JSON snprintf(부동소수 다수)에 부족(홀딩 유발). 여유 확보.
+#define HTTP_SERVER_STACK_SIZE 1200
 
 #endif
