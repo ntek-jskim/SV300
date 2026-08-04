@@ -2720,6 +2720,7 @@ void FS_task(void *arg)
 			/* 파일: SETTINGS 단일(db). PT/CT는 db.pt[id]/ct[id], PQE는 meter[] */
 			memcpy(&db, &meter[0].setting, sizeof(SETTINGS));
 			saveSettings(&db);
+			storeAlarmDef();	/* 알람설정(almSet) 영속화 — SETTINGS에 미포함이라 별도 저장 */
 
 			meter[id].cntl.saveSetting = 0;
 			/* 재부팅 없이 설정 저장(웹 설정 저장 지원) — 기존 runFlag=0(→taskMonitor 재부팅)·

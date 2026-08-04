@@ -51,6 +51,7 @@
 #define	ALARM_ST_FILE CONCAT(SYS_DIR, "\\astat.d")
 #define	ALARM_ST_FILE1 CONCAT(SYS_DIR, "\\astat.d1")
 #define	ALARM_ST_FILE2 CONCAT(SYS_DIR, "\\astat.d2")
+#define	ALARM_DEF_FILE CONCAT(SYS_DIR, "\\almdef.d")	/* 알람설정(almSet) 영속 파일(3채널) */
 #define ALARM_LIST_FILE CONCAT4(ALARM_DIR, "\\alog", ALOG_VER, "_")
 #define EVENT_LIST_FILE CONCAT4(EVENT_DIR, "\\elog", ELOG_VER, "_")
 #define TREND_FILE CONCAT(LOG_TREND_DIR, "\\trd")

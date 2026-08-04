@@ -19,6 +19,8 @@ int alarmProc(int id);
 int loadAlarmLog(int id);
 int storeAlarmStatus(int id);
 int loadAlarmStatus(int id);
+int storeAlarmDef(void);
+int loadAlarmDef(void);
 int deleteAlarmLog(int id);
 void buildTrendSetting();
 int loadEventLog(void);

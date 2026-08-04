@@ -386,6 +386,57 @@ int storeAlarmStatus(int id) {
 	return 0;
 }
 
+#define ALARM_DEF_MAGIC 0x414c4d44u	/* 'ALMD' */
+
+/* 알람설정(almSet, ALARM_DEF) 3채널을 파일로 영속화 (save settings 시 호출) */
+int storeAlarmDef(void) {
+	FILE *fp;
+	int id;
+	uint32_t magic = ALARM_DEF_MAGIC;
+
+	fsFileLock();
+	fp = fopen(ALARM_DEF_FILE, "wb");
+	if (fp == NULL) {
+		fsFileUnlock();
+		return -1;
+	}
+	fwrite(&magic, sizeof(magic), 1, fp);
+	for (id = 0; id < METER_CH_COUNT; id++)
+		fwrite(&meter[id].almSet, sizeof(ALARM_DEF), 1, fp);
+	fclose(fp);
+	fsFileUnlock();
+	printf("[[Store AlarmDef(%s)]]\n", ALARM_DEF_FILE);
+	return 0;
+}
+
+/* 부팅 시 알람설정 로드 — 파일 있으면 buildAlarmSettings 기본값을 덮어씀 */
+int loadAlarmDef(void) {
+	FILE *fp;
+	int id;
+	uint32_t magic = 0;
+
+	fp = fopen(ALARM_DEF_FILE, "rb");
+	if (fp == NULL)
+		return -1;
+	if (fread(&magic, sizeof(magic), 1, fp) != 1 || magic != ALARM_DEF_MAGIC) {
+		fclose(fp);
+		printf("[[AlarmDef invalid, keep defaults]]\n");
+		return -1;
+	}
+	for (id = 0; id < METER_CH_COUNT; id++) {
+		ALARM_DEF tmp;
+		if (fread(&tmp, sizeof(ALARM_DEF), 1, fp) != 1) {
+			fclose(fp);
+			printf("[[AlarmDef short, keep defaults]]\n");
+			return -1;
+		}
+		memcpy(&meter[id].almSet, &tmp, sizeof(ALARM_DEF));
+	}
+	fclose(fp);
+	printf("[[Load AlarmDef(%s)]]\n", ALARM_DEF_FILE);
+	return 0;
+}
+
 int deleteAlarmLog(int id) {
 	char path[64];
 	int res;

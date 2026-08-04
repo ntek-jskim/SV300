@@ -406,6 +406,7 @@ void db_init(void)
 	loadEnergy();
 	loadDemand();
 	loadMaxMin();
+	loadAlarmDef();		/* 알람설정(almSet) 파일 로드 — buildAlarmSettings 기본값 덮어씀(loadAlarmStatus 전) */
 	for (id = 0; id < METER_CH_COUNT; id++) {
 		loadAlarmStatus(id);
 		loadAlarmLog(id);
