@@ -197,5 +197,9 @@
 #define HTTP_SERVER_STACK_SIZE 1200
 //keep-alive idle 타임아웃 — 기본 10s는 max=2 슬롯을 오래 점유해 페이지 이동 시 홀딩. 3s로 단축.
 #define HTTP_SERVER_TIMEOUT 3000
+//★지속 커넥션(keep-alive) — 기본 DISABLED면 매 요청 커넥션 신규/종료 → 처닝(TIME_WAIT)·큰 응답 close-truncation으로 홀딩. 활성화해 커넥션 재사용.
+#define HTTP_SERVER_PERSISTENT_CONN_SUPPORT ENABLED
+//지속 커넥션 idle 타임아웃 — 다음 요청 대기(재사용은 1s 주기라 유지, 여분 커넥션은 3s 후 해제)
+#define HTTP_SERVER_IDLE_TIMEOUT 3000
 
 #endif
