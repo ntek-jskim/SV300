@@ -195,5 +195,7 @@
 #define HTTP_SERVER_COOKIE_SUPPORT ENABLED
 //커넥션 태스크 스택 — 기본 650워드는 JSON snprintf(부동소수 다수)에 부족(홀딩 유발). 여유 확보.
 #define HTTP_SERVER_STACK_SIZE 1200
+//keep-alive idle 타임아웃 — 기본 10s는 max=2 슬롯을 오래 점유해 페이지 이동 시 홀딩. 3s로 단축.
+#define HTTP_SERVER_TIMEOUT 3000
 
 #endif

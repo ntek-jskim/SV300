@@ -142,7 +142,8 @@ static error_t beginJson(HttpConnection *c)
 	c->response.contentType     = "application/json";
 	c->response.chunkedEncoding = TRUE;
 	c->response.noCache         = TRUE;
-	c->response.keepAlive       = FALSE;   /* 응답 후 즉시 닫아 슬롯 반환(keep-alive 10s 점유→홀딩 방지) */
+	/* 폴링 엔드포인트는 keep-alive 유지(커넥션 재사용 → TIME_WAIT 소켓 처닝 방지).
+	 * idle 점유는 HTTP_SERVER_TIMEOUT(3s)로 완화. */
 	return httpWriteHeader(c);
 }
 
