@@ -468,54 +468,101 @@ static error_t apiMinmax(HttpConnection *c)
 	return httpCloseStream(c);
 }
 
-/* GET /api/energy — 채널별 누적/당월 에너지 */
-static error_t apiEnergy(HttpConnection *c)
+/* 2워드(리틀워드) → float 재해석 */
+static float w2f(uint16_t lo, uint16_t hi)
 {
-	char b[256];
-	int i;
+	union { uint32_t u; float f; } x;
+	x.u = (uint32_t)lo | ((uint32_t)hi << 16);
+	return x.f;
+}
+
+/* GET /api/energynow — 현재/당월/전월 × Total/L1~3 × 5종 에너지 매트릭스(0.1kWh) */
+static const char *E_PNAME[3] = { "Current", "This Month", "Last Month" };
+static const char *E_GNAME[4] = { "Total", "L1", "L2", "L3" };
+
+static error_t apiEnergyNow(HttpConnection *c)
+{
+	char b[224];
+	int i, pi, gi;
 
 	if (beginJson(c)) return ERROR_WRITE_FAILED;
 	w(c, "{\"ok\":true,\"ch\":[");
 	for (i = 0; i < METER_CH_COUNT; i++) {
 		ENERGY *e = &meter[i].egy;
-		snprintf(b, sizeof(b),
-			"%s{\"n\":%d,\"kwh_i\":%.2f,\"kwh_e\":%.2f,\"kvarh_i\":%.2f,\"kvarh_e\":%.2f,\"kvah\":%.2f,",
-			i ? "," : "", i + 1,
-			(double)e->Ereg64.cell[0][0][0] / 1000.0, (double)e->Ereg64.cell[0][0][1] / 1000.0,
-			(double)e->Ereg64.cell[0][1][0] / 1000.0, (double)e->Ereg64.cell[0][1][1] / 1000.0,
-			(double)e->Ereg64.cell[0][2][0] / 1000.0);
+		snprintf(b, sizeof(b), "%s{\"n\":%d,\"periods\":[", i ? "," : "", i + 1);
 		w(c, b);
-		snprintf(b, sizeof(b),
-			"\"kwh_i_m\":%.2f,\"kwh_e_m\":%.2f,\"kvarh_i_m\":%.2f,\"kvarh_e_m\":%.2f}",
-			(double)e->Ereg32[1].cell[0][0][0] * 0.1, (double)e->Ereg32[1].cell[0][0][1] * 0.1,
-			(double)e->Ereg32[1].cell[0][1][0] * 0.1, (double)e->Ereg32[1].cell[0][1][1] * 0.1);
+		for (pi = 0; pi < 3; pi++) {
+			ENERGY_REG32 *R = &e->Ereg32[pi];
+			snprintf(b, sizeof(b), "%s{\"name\":\"%s\",\"groups\":[", pi ? "," : "", E_PNAME[pi]);
+			w(c, b);
+			for (gi = 0; gi < 4; gi++) {
+				snprintf(b, sizeof(b),
+					"%s{\"name\":\"%s\",\"import_kwh\":%.1f,\"export_kwh\":%.1f,"
+					"\"import_kvarh\":%.1f,\"export_kvarh\":%.1f,\"kvah\":%.1f}",
+					gi ? "," : "", E_GNAME[gi],
+					R->cell[gi][0][0] * 0.1, R->cell[gi][0][1] * 0.1,
+					R->cell[gi][1][0] * 0.1, R->cell[gi][1][1] * 0.1,
+					R->cell[gi][2][0] * 0.1);
+				w(c, b);
+			}
+			w(c, "]}");
+		}
+		w(c, "]}");
+	}
+	w(c, "]}");
+	return httpCloseStream(c);
+}
+
+/* GET /api/energylog — 채널별 시간별(24h) 당일/전일 kWh (elog 블록) */
+static error_t apiEnergyLog(HttpConnection *c)
+{
+	char b[64];
+	int i, k;
+
+	if (beginJson(c)) return ERROR_WRITE_FAILED;
+	w(c, "{\"ok\":true,\"ch\":[");
+	for (i = 0; i < METER_CH_COUNT; i++) {
+		uint16_t *E = (uint16_t *)&meter[i].elog[0];   /* elog[0]=전일, elog[1]=당일 */
+		uint32_t lts = (uint32_t)E[0]   | ((uint32_t)E[1]   << 16);
+		uint32_t tts = (uint32_t)E[200] | ((uint32_t)E[201] << 16);
+		double lt = 0, tt = 0;
+
+		snprintf(b, sizeof(b), "%s{\"n\":%d,\"last_ts\":%u,\"this_ts\":%u,\"last\":[",
+			i ? "," : "", i + 1, (unsigned)lts, (unsigned)tts);
+		w(c, b);
+		for (k = 0; k < 24; k++) { float v = w2f(E[2 + 8 * k], E[3 + 8 * k]); lt += v; snprintf(b, sizeof(b), "%s%.2f", k ? "," : "", v); w(c, b); }
+		w(c, "],\"this\":[");
+		for (k = 0; k < 24; k++) { float v = w2f(E[202 + 8 * k], E[203 + 8 * k]); tt += v; snprintf(b, sizeof(b), "%s%.2f", k ? "," : "", v); w(c, b); }
+		snprintf(b, sizeof(b), "],\"last_total\":%.1f,\"this_total\":%.1f}", lt, tt);
 		w(c, b);
 	}
 	w(c, "]}");
 	return httpCloseStream(c);
 }
 
-/* GET /api/demand — 채널별 현재/피크 수요 */
-static error_t apiDemand(HttpConnection *c)
+/* GET /api/demandlog — 채널별 96점(15분) P 수요 프로파일(kW) */
+static error_t apiDemandLog(HttpConnection *c)
 {
-	char b[256];
-	int i;
+	char b[64];
+	int i, k;
 
 	if (beginJson(c)) return ERROR_WRITE_FAILED;
 	w(c, "{\"ok\":true,\"ch\":[");
 	for (i = 0; i < METER_CH_COUNT; i++) {
 		DEMAND *d = &meter[i].dm;
-		snprintf(b, sizeof(b),
-			"%s{\"n\":%d,\"cp\":%.2f,\"cq\":%.2f,\"cs\":%.2f,\"di\":[%.2f,%.2f,%.2f],",
-			i ? "," : "", i + 1,
-			d->CD_P[0] / 1000.0f, d->CD_Q[0] / 1000.0f, d->CD_S / 1000.0f,
-			d->DD_I[0], d->DD_I[1], d->DD_I[2]);
+		double sum = 0, pk = 0;
+		int pki = 0;
+		snprintf(b, sizeof(b), "%s{\"n\":%d,\"ts\":%u,\"vals\":[",
+			i ? "," : "", i + 1, (unsigned)d->dmdLogTs);
 		w(c, b);
-		snprintf(b, sizeof(b),
-			"\"mp\":%.2f,\"mpt\":%u,\"mq\":%.2f,\"ms\":%.2f,\"mst\":%u,\"mi\":[%.2f,%.2f,%.2f]}",
-			d->MD_P[0].value / 1000.0f, (unsigned)d->MD_P[0].mdTime,
-			d->MD_Q[0].value / 1000.0f, d->MD_S.value / 1000.0f, (unsigned)d->MD_S.mdTime,
-			d->MD_I[0].value, d->MD_I[1].value, d->MD_I[2].value);
+		for (k = 0; k < 96; k++) {
+			float v = d->DP_P_Log[k] / 1000.0f;
+			if (v > pk) { pk = v; pki = k; }
+			sum += v;
+			snprintf(b, sizeof(b), "%s%.2f", k ? "," : "", v);
+			w(c, b);
+		}
+		snprintf(b, sizeof(b), "],\"peak\":%.2f,\"peaki\":%d,\"avg\":%.2f}", pk, pki, sum / 96.0);
 		w(c, b);
 	}
 	w(c, "]}");
@@ -982,6 +1029,7 @@ static const char INDEX_HTML[] =
 ".hsub{font-size:11px;color:var(--muted);font-weight:700;margin:10px 0 4px}\n"
 ".ctbl.hsm td,.ctbl.hsm th{padding:3px 5px;font-size:11px}\n"
 ".hcv{width:100%;height:180px;display:block}\n"
+".dmcv{width:100%;height:200px;display:block}\n"
 ".phbox{display:flex;justify-content:center;margin-bottom:10px}\n"
 ".phsvg{width:100%;max-width:240px;height:auto}\n"
 ".ph-bg{fill:none;stroke:var(--line);stroke-width:1}\n"
@@ -1336,12 +1384,18 @@ static const char INDEX_HTML[] =
 " h+=r3('U mag (V)',x.u,1)+r3('U angle (&deg;)',x.uang,1)+r3('I mag (A)',x.i,2)+r3('I angle (&deg;)',x.iang,1);return h+'</table>';}\n"
 "function bMm(x){var h=`<div class='cmeta'>Reset: ${ts2(x.reset_ts)}</div><table class='ctbl mmtbl'><tr><th>Metric</th><th></th><th>Value</th><th>Time</th></tr>`;\n"
 " x.m.forEach(function(m){h+=`<tr><td class='rk' rowspan='2'>${m.nm}</td><td class='mk'>Max</td><td>${n(m.mx,2)}</td><td class='ts'>${ts2(m.mxt)}</td></tr><tr><td class='mk'>Min</td><td>${n(m.mn,2)}</td><td class='ts'>${ts2(m.mnt)}</td></tr>`;});return h+'</table>';}\n"
-"function bEgy(x){var h=\"<table class='ctbl'><tr><th></th><th>Import</th><th>Export</th></tr>\";\n"
-" h+=`<tr><td class='rk'>kWh</td><td>${n(x.kwh_i,2)}</td><td>${n(x.kwh_e,2)}</td></tr><tr><td class='rk'>kVarh</td><td>${n(x.kvarh_i,2)}</td><td>${n(x.kvarh_e,2)}</td></tr><tr><td class='rk'>kVAh</td><td>${n(x.kvah,2)}</td><td>-</td></tr>`;\n"
-" return h+`</table><div class='cmeta'>This month kWh: imp ${n(x.kwh_i_m,2)} / exp ${n(x.kwh_e_m,2)}</div>`;}\n"
-"function bDmd(x){var h=\"<table class='ctbl'><tr><th></th><th>Present</th><th>Peak</th><th>Peak Time</th></tr>\";\n"
-" h+=`<tr><td class='rk'>P(kW)</td><td>${n(x.cp,2)}</td><td>${n(x.mp,2)}</td><td class='ts'>${ts2(x.mpt)}</td></tr><tr><td class='rk'>Q(kVar)</td><td>${n(x.cq,2)}</td><td>${n(x.mq,2)}</td><td>-</td></tr><tr><td class='rk'>S(kVA)</td><td>${n(x.cs,2)}</td><td>${n(x.ms,2)}</td><td class='ts'>${ts2(x.mst)}</td></tr>`;\n"
-" h+=`<tr><td class='rk'>I(A)</td><td>${n(x.di[0],1)}/${n(x.di[1],1)}/${n(x.di[2],1)}</td><td>${n(x.mi[0],1)}/${n(x.mi[1],1)}/${n(x.mi[2],1)}</td><td>-</td></tr>`;return h+'</table>';}\n"
+"function bEgyNow(x){var C=[['import_kwh','Imp kWh'],['export_kwh','Exp kWh'],['import_kvarh','Imp kVarh'],['export_kvarh','Exp kVarh'],['kvah','kVAh']];\n"
+" var h=\"<table class='ctbl hsm'><tr><th></th>\";C.forEach(function(c){h+='<th>'+c[1]+'</th>';});h+='</tr>';\n"
+" x.periods.forEach(function(pr){h+=`<tr><td class='rk' colspan='6' style='color:var(--accent)'>${pr.name}</td></tr>`;pr.groups.forEach(function(g){h+=`<tr><td class='rk'>${g.name}</td>`;C.forEach(function(c){h+='<td>'+n(g[c[0]],1)+'</td>';});h+='</tr>';});});return h+'</table>';}\n"
+"function bEgyLog(lg){var h=`<div class='hsub'>Hourly kWh (This ${n(lg.this_total,1)} / Last ${n(lg.last_total,1)})</div><table class='ctbl hsm'><tr><th>H</th><th>This</th><th>Last</th></tr>`;\n"
+" for(var k=0;k<24;k++){h+=`<tr><td class='rk'>${k}</td><td>${n(lg.this[k],2)}</td><td>${n(lg.last[k],2)}</td></tr>`;}return h+'</table>';}\n"
+"function drawDemand(id,vals,peak){var cv=$(id);if(!cv)return;var w=cv.clientWidth||300;cv.width=w;cv.height=200;var g=cv.getContext('2d'),pl=36,pb=18,pt=10,nn=96,ymax=(peak>0?peak:1)*1.15,i;\n"
+" var gy=function(v){return 200-pb-(v/ymax)*(200-pt-pb);};g.clearRect(0,0,w,200);\n"
+" g.strokeStyle='rgba(128,140,155,.25)';g.fillStyle='#8b9bb0';g.font='8px sans-serif';\n"
+" for(var s=0;s<=4;s++){var yv=ymax*s/4,y=gy(yv);g.beginPath();g.moveTo(pl,y);g.lineTo(w,y);g.stroke();g.fillText(yv.toFixed(yv<10?1:0),2,y+3);}\n"
+" var slot=(w-pl)/nn,bw=slot>1.5?slot*0.7:slot,y0=200-pb;\n"
+" for(i=0;i<nn;i++){var v=vals[i]||0;g.fillStyle=(peak>0&&v>=peak-1e-6)?'#ef4444':'rgba(59,130,246,.65)';g.fillRect(pl+i*slot,gy(v),bw,y0-gy(v));}\n"
+" g.fillStyle='#8b9bb0';[0,6,12,18,24].forEach(function(hh){g.fillText(hh+'h',pl+hh*4*slot-4,199);});}\n"
 "function harmTable(x,ord){var h=\"<table class='ctbl hsm'><tr><th>Ord</th><th>L1</th><th>L2</th><th>L3</th></tr>\";ord.forEach(function(o,k){h+=`<tr><td class='rk'>${o}</td><td>${n(x.ph[0][k],1)}</td><td>${n(x.ph[1][k],1)}</td><td>${n(x.ph[2][k],1)}</td></tr>`;});return h+'</table>';}\n"
 "function drawHarm(id,ph,ord){var cv=$(id);if(!cv)return;var w=cv.clientWidth||300;cv.width=w;cv.height=180;var g=cv.getContext('2d'),pad=22,nn=ord.length,mx=1,i,p;\n"
 " for(p=0;p<3;p++)for(i=0;i<nn;i++){if(ph[p][i]>mx)mx=ph[p][i];}\n"
@@ -1361,8 +1415,11 @@ static const char INDEX_HTML[] =
 "function loadChannelTab(){var t=chTabCur;\n"
 " if(t==='meter'||t==='phase')return j('/api/channels').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=chCards(r.d.ch,t==='meter'?bMeter:bPhase);}).catch(chFail);\n"
 " if(t==='minmax')return j('/api/minmax').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=chCards(r.d.ch,bMm);}).catch(chFail);\n"
-" if(t==='energy')return j('/api/energy').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=chCards(r.d.ch,bEgy);}).catch(chFail);\n"
-" if(t==='demand')return j('/api/demand').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=chCards(r.d.ch,bDmd);}).catch(chFail);\n"
+" if(t==='energy')return j('/api/energynow').then(function(r){if(chTabCur!==t)return null;if(!r.d.ok){chStat(false);return null;}return j('/api/energylog').then(function(r2){return{now:r.d.ch,log:(r2.d&&r2.d.ok)?r2.d.ch:[]};});}).then(function(d){if(!d||chTabCur!=='energy')return;chStat(true);$('chbody').innerHTML=chCards(d.now,function(x){var lg=d.log.filter(function(e){return e.n===x.n;})[0];return bEgyNow(x)+(lg?bEgyLog(lg):'');});}).catch(chFail);\n"
+" if(t==='demand')return j('/api/demandlog').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);\n"
+"  $('chbody').innerHTML=chCards(r.d.ch,function(x){var pm=x.peaki*15,ph=Math.floor(pm/60),pmm=pm%60;return `<div class='cmeta'>peak ${n(x.peak,2)} kW @ ${p2(ph)}:${p2(pmm)} · avg ${n(x.avg,2)} kW · ${ts2(x.ts)}</div><canvas id='dm${x.n}' class='dmcv'></canvas>`;});\n"
+"  r.d.ch.forEach(function(x){drawDemand('dm'+x.n,x.vals,x.peak);});\n"
+" }).catch(chFail);\n"
 " if(t==='harmonics')return j('/api/harmonics?opt='+harmOpt).then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);\n"
 "  if(harmView==='chart'){$('chbody').innerHTML=chCards(r.d.ch,function(x){return \"<canvas id='hc\"+x.n+\"' class='hcv'></canvas>\";});r.d.ch.forEach(function(x){drawHarm('hc'+x.n,x.ph,r.d.orders);});}\n"
 "  else{$('chbody').innerHTML=chCards(r.d.ch,function(x){return harmTable(x,r.d.orders);});}\n"
@@ -1451,8 +1508,9 @@ static error_t webRequestCallback(HttpConnection *c, const char_t *uri)
 		if (!strcmp(uri, "/api/feeders"))      return apiFeeders(c);
 		if (!strcmp(uri, "/api/channels"))     return apiChannels(c);
 		if (!strcmp(uri, "/api/minmax"))       return apiMinmax(c);
-		if (!strcmp(uri, "/api/energy"))       return apiEnergy(c);
-		if (!strcmp(uri, "/api/demand"))       return apiDemand(c);
+		if (!strcmp(uri, "/api/energynow"))    return apiEnergyNow(c);
+		if (!strcmp(uri, "/api/energylog"))    return apiEnergyLog(c);
+		if (!strcmp(uri, "/api/demandlog"))    return apiDemandLog(c);
 		if (!strcmp(uri, "/api/harmonics"))    return apiHarmonics(c);
 		if (!strcmp(uri, "/api/general"))      return apiGeneral(c);
 		if (!strncmp(uri, "/api/regs", 9))     return apiRegs(c);
