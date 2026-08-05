@@ -347,6 +347,159 @@ static error_t apiFeeders(HttpConnection *c)
 	return httpCloseStream(c);
 }
 
+/* GET /api/channels — 채널별 전체 계측(Meter) + 위상각(Phase) */
+static error_t apiChannels(HttpConnection *c)
+{
+	char b[256];
+	int i;
+
+	if (beginJson(c)) return ERROR_WRITE_FAILED;
+	w(c, "{\"ok\":true,\"ch\":[");
+	for (i = 0; i < METER_CH_COUNT; i++) {
+		METERING *m = &meter[i].meter;
+		CNTL_DATA *cn = &meter[i].cntl;
+		snprintf(b, sizeof(b),
+			"%s{\"n\":%d,\"st\":%u,\"freq\":%.2f,\"temp\":%.1f,"
+			"\"u\":[%.1f,%.1f,%.1f,%.1f],\"upp\":[%.1f,%.1f,%.1f,%.1f],"
+			"\"i\":[%.2f,%.2f,%.2f,%.2f],\"in\":%.2f,",
+			i ? "," : "", i + 1, (unsigned)(m->meterStatus ? 1 : 0), m->Freq, m->Temp,
+			m->U[0], m->U[1], m->U[2], m->U[3], m->Upp[0], m->Upp[1], m->Upp[2], m->Upp[3],
+			m->I[0], m->I[1], m->I[2], m->I[3], m->In);
+		w(c, b);
+		snprintf(b, sizeof(b),
+			"\"p\":[%.2f,%.2f,%.2f,%.2f],\"q\":[%.2f,%.2f,%.2f,%.2f],"
+			"\"s\":[%.2f,%.2f,%.2f,%.2f],\"pf\":[%.3f,%.3f,%.3f,%.3f],",
+			m->P[0]/1000.0f, m->P[1]/1000.0f, m->P[2]/1000.0f, m->P[3]/1000.0f,
+			m->Q[0]/1000.0f, m->Q[1]/1000.0f, m->Q[2]/1000.0f, m->Q[3]/1000.0f,
+			m->S[0]/1000.0f, m->S[1]/1000.0f, m->S[2]/1000.0f, m->S[3]/1000.0f,
+			m->PF[0], m->PF[1], m->PF[2], m->PF[3]);
+		w(c, b);
+		snprintf(b, sizeof(b),
+			"\"uang\":[%.1f,%.1f,%.1f],\"iang\":[%.1f,%.1f,%.1f],\"uiang\":[%.1f,%.1f,%.1f]}",
+			m->Uangle[0], m->Uangle[1], m->Uangle[2],
+			m->Iangle[0], m->Iangle[1], m->Iangle[2],
+			cn->UIangle[0], cn->UIangle[1], cn->UIangle[2]);
+		w(c, b);
+	}
+	w(c, "]}");
+	return httpCloseStream(c);
+}
+
+/* GET /api/minmax — 채널별 Max/Min(+타임스탬프) */
+static void mmEmit(HttpConnection *c, const char *nm, MAXMIN_DATA *d, int first)
+{
+	char b[128];
+	snprintf(b, sizeof(b), "%s{\"nm\":\"%s\",\"mx\":%.2f,\"mxt\":%u,\"mn\":%.2f,\"mnt\":%u}",
+		first ? "" : ",", nm, d->max, (unsigned)d->max_ts, d->min, (unsigned)d->min_ts);
+	w(c, b);
+}
+
+static error_t apiMinmax(HttpConnection *c)
+{
+	char b[48];
+	int i;
+
+	if (beginJson(c)) return ERROR_WRITE_FAILED;
+	w(c, "{\"ok\":true,\"ch\":[");
+	for (i = 0; i < METER_CH_COUNT; i++) {
+		MAXMIN *mm = &meter[i].maxmin;
+		snprintf(b, sizeof(b), "%s{\"n\":%d,\"m\":[", i ? "," : "", i + 1);
+		w(c, b);
+		mmEmit(c, "Freq", &mm->Freq, 1);
+		mmEmit(c, "U1", &mm->U[0], 0); mmEmit(c, "U2", &mm->U[1], 0); mmEmit(c, "U3", &mm->U[2], 0);
+		mmEmit(c, "I1", &mm->I[0], 0); mmEmit(c, "I2", &mm->I[1], 0); mmEmit(c, "I3", &mm->I[2], 0);
+		mmEmit(c, "P.tot", &mm->P[3], 0); mmEmit(c, "PF.tot", &mm->PF[3], 0);
+		w(c, "]}");
+	}
+	w(c, "]}");
+	return httpCloseStream(c);
+}
+
+/* GET /api/energy — 채널별 누적/당월 에너지 */
+static error_t apiEnergy(HttpConnection *c)
+{
+	char b[256];
+	int i;
+
+	if (beginJson(c)) return ERROR_WRITE_FAILED;
+	w(c, "{\"ok\":true,\"ch\":[");
+	for (i = 0; i < METER_CH_COUNT; i++) {
+		ENERGY *e = &meter[i].egy;
+		snprintf(b, sizeof(b),
+			"%s{\"n\":%d,\"kwh_i\":%.2f,\"kwh_e\":%.2f,\"kvarh_i\":%.2f,\"kvarh_e\":%.2f,\"kvah\":%.2f,",
+			i ? "," : "", i + 1,
+			(double)e->Ereg64.cell[0][0][0] / 1000.0, (double)e->Ereg64.cell[0][0][1] / 1000.0,
+			(double)e->Ereg64.cell[0][1][0] / 1000.0, (double)e->Ereg64.cell[0][1][1] / 1000.0,
+			(double)e->Ereg64.cell[0][2][0] / 1000.0);
+		w(c, b);
+		snprintf(b, sizeof(b),
+			"\"kwh_i_m\":%.2f,\"kwh_e_m\":%.2f,\"kvarh_i_m\":%.2f,\"kvarh_e_m\":%.2f}",
+			(double)e->Ereg32[1].cell[0][0][0] * 0.1, (double)e->Ereg32[1].cell[0][0][1] * 0.1,
+			(double)e->Ereg32[1].cell[0][1][0] * 0.1, (double)e->Ereg32[1].cell[0][1][1] * 0.1);
+		w(c, b);
+	}
+	w(c, "]}");
+	return httpCloseStream(c);
+}
+
+/* GET /api/demand — 채널별 현재/피크 수요 */
+static error_t apiDemand(HttpConnection *c)
+{
+	char b[256];
+	int i;
+
+	if (beginJson(c)) return ERROR_WRITE_FAILED;
+	w(c, "{\"ok\":true,\"ch\":[");
+	for (i = 0; i < METER_CH_COUNT; i++) {
+		DEMAND *d = &meter[i].dm;
+		snprintf(b, sizeof(b),
+			"%s{\"n\":%d,\"cp\":%.2f,\"cq\":%.2f,\"cs\":%.2f,\"di\":[%.2f,%.2f,%.2f],",
+			i ? "," : "", i + 1,
+			d->CD_P[0] / 1000.0f, d->CD_Q[0] / 1000.0f, d->CD_S / 1000.0f,
+			d->DD_I[0], d->DD_I[1], d->DD_I[2]);
+		w(c, b);
+		snprintf(b, sizeof(b),
+			"\"mp\":%.2f,\"mpt\":%u,\"mq\":%.2f,\"ms\":%.2f,\"mst\":%u,\"mi\":[%.2f,%.2f,%.2f]}",
+			d->MD_P[0].value / 1000.0f, (unsigned)d->MD_P[0].mdTime,
+			d->MD_Q[0].value / 1000.0f, d->MD_S.value / 1000.0f, (unsigned)d->MD_S.mdTime,
+			d->MD_I[0].value, d->MD_I[1].value, d->MD_I[2].value);
+		w(c, b);
+	}
+	w(c, "]}");
+	return httpCloseStream(c);
+}
+
+/* GET /api/harmonics — 채널별 U/I 고조파(차수 2~15, 원시 uint16) */
+static error_t apiHarmonics(HttpConnection *c)
+{
+	char b[48];
+	int i, ph, o;
+
+	if (beginJson(c)) return ERROR_WRITE_FAILED;
+	w(c, "{\"ok\":true,\"ord\":[");
+	for (o = 2; o <= 15; o++) { snprintf(b, sizeof(b), "%s%d", o > 2 ? "," : "", o); w(c, b); }
+	w(c, "],\"ch\":[");
+	for (i = 0; i < METER_CH_COUNT; i++) {
+		HARMONICS *hd = &meter[i].hd;
+		snprintf(b, sizeof(b), "%s{\"n\":%d,\"u\":[", i ? "," : "", i + 1);
+		w(c, b);
+		for (ph = 0; ph < 3; ph++) {
+			w(c, ph ? ",[" : "[");
+			for (o = 2; o <= 15; o++) { snprintf(b, sizeof(b), "%s%u", o > 2 ? "," : "", (unsigned)hd->U[ph][o]); w(c, b); }
+			w(c, "]");
+		}
+		w(c, "],\"i\":[");
+		for (ph = 0; ph < 3; ph++) {
+			w(c, ph ? ",[" : "[");
+			for (o = 2; o <= 15; o++) { snprintf(b, sizeof(b), "%s%u", o > 2 ? "," : "", (unsigned)hd->I[ph][o]); w(c, b); }
+			w(c, "]");
+		}
+		w(c, "]}");
+	}
+	w(c, "]}");
+	return httpCloseStream(c);
+}
+
 /* GET /api/sv300/events — 3CH 알람상태/알람로그/이벤트로그/요약 */
 #define EV_CAP  24   /* 각 목록 응답 상한(임베디드 응답/루프 바운드) */
 
@@ -762,6 +915,20 @@ static const char INDEX_HTML[] =
 ".kvi{background:var(--panel2);border-radius:8px;padding:7px 10px;display:flex;flex-direction:column;gap:2px}\n"
 ".kvi .kk{font-size:11px;color:var(--muted)}.kvi .kvv{font-family:'Consolas',monospace;font-weight:700;font-size:14px}\n"
 ".kvi .kvv small{color:var(--muted);font-weight:400;font-size:10px}\n"
+".chgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}\n"
+"@media(max-width:1000px){.chgrid{grid-template-columns:1fr}}\n"
+".chcard{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;min-width:0}\n"
+".chh{font-size:14px;font-weight:700;color:var(--accent);margin-bottom:10px}\n"
+".ctbl{width:100%;border-collapse:collapse;font-size:12.5px}\n"
+".ctbl th,.ctbl td{padding:5px 6px;text-align:right;border-bottom:1px solid var(--line)}\n"
+".ctbl th{color:var(--muted);font-weight:600;font-size:11px}\n"
+".ctbl td{font-family:'Consolas',monospace}\n"
+".ctbl td.rk,.ctbl th:first-child{text-align:left;color:var(--muted);font-family:inherit}\n"
+".ctbl .ts{font-size:9px;color:var(--muted)}\n"
+".ctbl .empty{text-align:center;color:var(--muted)}\n"
+".cmeta{margin-top:8px;font-size:11px;color:var(--muted);font-family:'Consolas',monospace}\n"
+".hsub{font-size:11px;color:var(--muted);font-weight:700;margin:10px 0 4px}\n"
+".ctbl.hsm td,.ctbl.hsm th{padding:3px 5px;font-size:11px}\n"
 ".stub{color:var(--muted);padding:30px 4px}\n"
 ".gp-head{display:flex;align-items:center;gap:12px;margin:4px 0 10px}\n"
 ".gp-head h1{font-size:22px;font-weight:800;margin:0}\n"
@@ -810,6 +977,7 @@ static const char INDEX_HTML[] =
 "  <nav>\n"
 "   <a id='nav-dash' class='on' onclick=\"go('dash')\">Dashboard</a>\n"
 "   <a id='nav-feeder' onclick=\"go('feeder')\">Feeder</a>\n"
+"   <a id='nav-channel' onclick=\"go('channel')\">Channel</a>\n"
 "   <a id='nav-setup' onclick=\"go('setup')\">Setup</a>\n"
 "  </nav>\n"
 "  <div class='status'>\n"
@@ -824,6 +992,7 @@ static const char INDEX_HTML[] =
 "   <div class='sgroup'>Measure</div>\n"
 "   <a class='sitem active' id='si-dash' onclick=\"go('dash')\"><span class='ico'>&#128202;</span>Dashboard</a>\n"
 "   <a class='sitem' id='si-feeder' onclick=\"go('feeder')\"><span class='ico'>&#128268;</span>Feeder</a>\n"
+"   <a class='sitem' id='si-channel' onclick=\"go('channel')\"><span class='ico'>&#128225;</span>Channel</a>\n"
 "   <div class='sgroup'>Setup</div>\n"
 "   <a class='sitem' id='si-setup' onclick=\"go('setup')\"><span class='ico'>&#128421;</span>Main Setting</a>\n"
 "   <a class='sitem' id='si-chset' onclick=\"go('setup','alarm')\"><span class='ico'>&#9881;</span>Channel Setting</a>\n"
@@ -884,6 +1053,20 @@ static const char INDEX_HTML[] =
 "    <h1 class='pgh'>Feeder</h1>\n"
 "    <div class='dstatus'><span id='fstat' class='on'>&#9679; live &#8635; 1s</span></div>\n"
 "    <div id='fgrid' class='fgrid'></div>\n"
+"   </div>\n"
+"   <div id='p-channel' style='display:none'>\n"
+"    <div class='gp-head'><h1>Channel</h1><span class='gp-actions'><span id='chstat' class='ph2 on'>&#9679; live &#8635; 1s</span></span></div>\n"
+"    <div class='gp-tabs'>\n"
+"     <a class='gp-tab on' id='ct-meter' onclick=\"chSetTab('meter')\">Meter</a>\n"
+"     <a class='gp-tab' id='ct-phase' onclick=\"chSetTab('phase')\">Phase</a>\n"
+"     <a class='gp-tab' id='ct-minmax' onclick=\"chSetTab('minmax')\">Min/Max</a>\n"
+"     <a class='gp-tab' id='ct-harmonics' onclick=\"chSetTab('harmonics')\">Harmonics</a>\n"
+"     <a class='gp-tab' id='ct-energy' onclick=\"chSetTab('energy')\">Energy</a>\n"
+"     <a class='gp-tab' id='ct-demand' onclick=\"chSetTab('demand')\">Demand</a>\n"
+"     <a class='gp-tab' id='ct-alarm' onclick=\"chSetTab('alarm')\">Alarm</a>\n"
+"     <a class='gp-tab' id='ct-event' onclick=\"chSetTab('event')\">Event</a>\n"
+"    </div>\n"
+"    <div id='chbody'></div>\n"
 "   </div>\n"
 "   <div id='p-setup' style='display:none'>\n"
 "    <div class='gp-head'><h1>Settings</h1><span class='gp-badge' id='setBadge'>Main Setting</span>\n"
@@ -1050,6 +1233,44 @@ static const char INDEX_HTML[] =
 "  ['L1','L2','L3'].forEach(function(ph,k){h+=`<tr><td class='pk'>${ph}</td><td>${n(f.u[k],1)}</td><td>${n(f.upp[k],1)}</td><td>${n(f.i[k],2)}</td><td>${n(f.thdu[k],1)}%</td><td>${n(f.thdi[k],1)}%</td></tr>`;});\n"
 "  h+=`</table><div class='fkv'>`+kv('In',n(f.in,2),'A')+kv('PF',n(f.pf,3),'')+kv('P',n(f.p,2),'kW')+kv('Q',n(f.q,2),'kVar')+kv('S',n(f.s,2),'kVA')+kv('U-unb',n(f.uunb,1),'%')+kv('I-unb',n(f.iunb,1),'%')+kv('Import',n(f.kwh,2),'kWh')+kv('Month',n(f.kwh_m,2),'kWh')+`</div></div>`;\n"
 " });$('fgrid').innerHTML=h;});}\n"
+/* Channel */
+"var chTabCur='meter',CHN=[{n:1},{n:2},{n:3}];\n"
+"function chEnter(){chSetTab(chTabCur);}\n"
+"function chSetTab(t){chTabCur=t;['meter','phase','minmax','harmonics','energy','demand','alarm','event'].forEach(function(x){var e=$('ct-'+x);if(e)e.className='gp-tab'+(x===t?' on':'');});loadChannelTab();}\n"
+"function chStat(ok){var e=$('chstat');if(e){e.className='ph2 '+(ok?'on':'bad');e.innerHTML=ok?'&#9679; live &#8635; 1s':'&#9679; read error';}}\n"
+"function chCards(list,fn){var h=\"<div class='chgrid'>\";list.forEach(function(x){h+=`<div class='chcard'><div class='chh'>CH${x.n}</div>${fn(x)}</div>`;});return h+'</div>';}\n"
+"function r4(nm,a,d){return `<tr><td class='rk'>${nm}</td><td>${n(a[0],d)}</td><td>${n(a[1],d)}</td><td>${n(a[2],d)}</td><td>${n(a[3],d)}</td></tr>`;}\n"
+"function bMeter(x){var h=\"<table class='ctbl'><tr><th></th><th>L1</th><th>L2</th><th>L3</th><th>Avg</th></tr>\";\n"
+" h+=r4('Voltage',x.u,1)+r4('Line V',x.upp,1)+r4('Current',x.i,2)+r4('P (kW)',x.p,2)+r4('Q (kVar)',x.q,2)+r4('S (kVA)',x.s,2)+r4('PF',x.pf,3);\n"
+" return h+`</table><div class='cmeta'>Freq ${n(x.freq,2)} Hz · Temp ${n(x.temp,1)} · In ${n(x.in,2)} A</div>`;}\n"
+"function bPhase(x){var h=\"<table class='ctbl'><tr><th></th><th>U(V)</th><th>&#8736;U</th><th>I(A)</th><th>&#8736;I</th><th>U-I</th></tr>\";\n"
+" ['L1','L2','L3'].forEach(function(ph,k){h+=`<tr><td class='rk'>${ph}</td><td>${n(x.u[k],1)}</td><td>${n(x.uang[k],1)}</td><td>${n(x.i[k],2)}</td><td>${n(x.iang[k],1)}</td><td>${n(x.uiang[k],1)}</td></tr>`;});return h+'</table>';}\n"
+"function bMm(x){var h=\"<table class='ctbl'><tr><th>Metric</th><th>Max</th><th>Min</th></tr>\";\n"
+" x.m.forEach(function(m){h+=`<tr><td class='rk'>${m.nm}</td><td>${n(m.mx,2)}<div class='ts'>${ts2(m.mxt)}</div></td><td>${n(m.mn,2)}<div class='ts'>${ts2(m.mnt)}</div></td></tr>`;});return h+'</table>';}\n"
+"function bEgy(x){var h=\"<table class='ctbl'><tr><th></th><th>Import</th><th>Export</th></tr>\";\n"
+" h+=`<tr><td class='rk'>kWh</td><td>${n(x.kwh_i,2)}</td><td>${n(x.kwh_e,2)}</td></tr><tr><td class='rk'>kVarh</td><td>${n(x.kvarh_i,2)}</td><td>${n(x.kvarh_e,2)}</td></tr><tr><td class='rk'>kVAh</td><td>${n(x.kvah,2)}</td><td>-</td></tr>`;\n"
+" return h+`</table><div class='cmeta'>This month kWh: imp ${n(x.kwh_i_m,2)} / exp ${n(x.kwh_e_m,2)}</div>`;}\n"
+"function bDmd(x){var h=\"<table class='ctbl'><tr><th></th><th>Present</th><th>Peak</th><th>Peak Time</th></tr>\";\n"
+" h+=`<tr><td class='rk'>P(kW)</td><td>${n(x.cp,2)}</td><td>${n(x.mp,2)}</td><td class='ts'>${ts2(x.mpt)}</td></tr><tr><td class='rk'>Q(kVar)</td><td>${n(x.cq,2)}</td><td>${n(x.mq,2)}</td><td>-</td></tr><tr><td class='rk'>S(kVA)</td><td>${n(x.cs,2)}</td><td>${n(x.ms,2)}</td><td class='ts'>${ts2(x.mst)}</td></tr>`;\n"
+" h+=`<tr><td class='rk'>I(A)</td><td>${n(x.di[0],1)}/${n(x.di[1],1)}/${n(x.di[2],1)}</td><td>${n(x.mi[0],1)}/${n(x.mi[1],1)}/${n(x.mi[2],1)}</td><td>-</td></tr>`;return h+'</table>';}\n"
+"function bHarm(x,ord){function tb(a){var h=\"<table class='ctbl hsm'><tr><th>Ord</th><th>L1</th><th>L2</th><th>L3</th></tr>\";ord.forEach(function(o,oi){h+=`<tr><td class='rk'>${o}</td><td>${a[0][oi]}</td><td>${a[1][oi]}</td><td>${a[2][oi]}</td></tr>`;});return h+'</table>';}\n"
+" return \"<div class='hsub'>Voltage</div>\"+tb(x.u)+\"<div class='hsub'>Current</div>\"+tb(x.i);}\n"
+"function bAlarm(x,ev){var st=ev.status.filter(function(s){return s.chn===x.n;}),lg=ev.alarmlog.filter(function(s){return s.chn===x.n;});\n"
+" var h=\"<div class='hsub'>Active</div><table class='ctbl'><tr><th>Channel</th><th>State</th><th>Cnt</th></tr>\";\n"
+" if(!st.length)h+=\"<tr><td colspan='3' class='empty'>None</td></tr>\";st.forEach(function(s){h+=`<tr><td class='rk'>${esc(acn(s.chan))}</td><td><span class='st set'>Set</span></td><td>${s.count}</td></tr>`;});\n"
+" h+=\"</table><div class='hsub'>Log</div><table class='ctbl'><tr><th>Channel</th><th>Val</th><th>Time</th></tr>\";\n"
+" if(!lg.length)h+=\"<tr><td colspan='3' class='empty'>No log</td></tr>\";lg.forEach(function(s){h+=`<tr><td class='rk'>${esc(acn(s.chan))}</td><td>${n(s.value,2)}</td><td class='ts'>${ts2(s.ts)}</td></tr>`;});return h+'</table>';}\n"
+"function bEvent(x,ev){var el=ev.eventlog.filter(function(s){return s.chn===x.n;});\n"
+" var h=\"<table class='ctbl'><tr><th>Type</th><th>Time</th><th>Dur</th><th>Lv</th></tr>\";\n"
+" if(!el.length)h+=\"<tr><td colspan='4' class='empty'>No events</td></tr>\";el.forEach(function(e){var t=ET[e.type]||['#'+e.type,'oc'];h+=`<tr><td><span class='evt ${t[1]}'>${t[0]}</span></td><td class='ts'>${ts2(e.ts)}</td><td>${e.dur}</td><td>${n(e.level,2)}</td></tr>`;});return h+'</table>';}\n"
+"function loadChannelTab(){var t=chTabCur;\n"
+" if(t==='meter'||t==='phase')return j('/api/channels').then(function(r){if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=chCards(r.d.ch,t==='meter'?bMeter:bPhase);}).catch(function(){chStat(false);});\n"
+" if(t==='minmax')return j('/api/minmax').then(function(r){if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=chCards(r.d.ch,bMm);}).catch(function(){chStat(false);});\n"
+" if(t==='energy')return j('/api/energy').then(function(r){if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=chCards(r.d.ch,bEgy);}).catch(function(){chStat(false);});\n"
+" if(t==='demand')return j('/api/demand').then(function(r){if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=chCards(r.d.ch,bDmd);}).catch(function(){chStat(false);});\n"
+" if(t==='harmonics')return j('/api/harmonics').then(function(r){if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=chCards(r.d.ch,function(x){return bHarm(x,r.d.ord);});}).catch(function(){chStat(false);});\n"
+" if(t==='alarm'||t==='event')return j('/api/sv300/events').then(function(r){if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=chCards(CHN,function(x){return (t==='alarm'?bAlarm:bEvent)(x,r.d);});}).catch(function(){chStat(false);});\n"
+" return Promise.resolve();}\n"
 "function runCmd(ci){var c=CMDS[ci],id='c'+ci;\n"
 " if(c.utc){var v=$('u_'+id).value;if(!v){alert('시간을 입력하세요');return;}var m=v.split(/[-T:]/),ep=Math.floor(Date.UTC(+m[0],+m[1]-1,+m[2],+m[3],+m[4],+m[5]||0)/1000);if(!confirm('Set Time to '+v.replace('T',' ')+' ?'))return;j('/api/setreg',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({addr:c.addr,type:'u32',val:ep})}).then(function(r){cmdDone(r,c);});return;}\n"
 " var addr=c.addr+(c.tgt?(+$('t_'+id).value):0),msg=c.l+' 실행?';if(c.danger)msg=c.l+' - '+(c.danger==2?'공장초기화(모든 설정 삭제, 되돌릴 수 없음)':(c.note==='reboot'?'장치가 재부팅됩니다':'되돌릴 수 없습니다'))+'. 계속?';\n"
@@ -1129,6 +1350,11 @@ static error_t webRequestCallback(HttpConnection *c, const char_t *uri)
 		if (!strcmp(uri, "/api/dashboard"))    return apiDashboard(c);
 		if (!strcmp(uri, "/api/sv300/events")) return apiEvents(c);
 		if (!strcmp(uri, "/api/feeders"))      return apiFeeders(c);
+		if (!strcmp(uri, "/api/channels"))     return apiChannels(c);
+		if (!strcmp(uri, "/api/minmax"))       return apiMinmax(c);
+		if (!strcmp(uri, "/api/energy"))       return apiEnergy(c);
+		if (!strcmp(uri, "/api/demand"))       return apiDemand(c);
+		if (!strcmp(uri, "/api/harmonics"))    return apiHarmonics(c);
 		if (!strcmp(uri, "/api/general"))      return apiGeneral(c);
 		if (!strncmp(uri, "/api/regs", 9))     return apiRegs(c);
 		return webJsonStatus(c, 404, "{\"ok\":false,\"error\":\"notfound\"}");
