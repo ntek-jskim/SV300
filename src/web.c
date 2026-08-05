@@ -311,6 +311,42 @@ static error_t apiDashboard(HttpConnection *c)
 	return httpCloseStream(c);
 }
 
+/* GET /api/feeders — 채널(피더)별 3상 계측 + 전력·에너지 */
+static error_t apiFeeders(HttpConnection *c)
+{
+	char b[256];
+	int i;
+
+	if (beginJson(c)) return ERROR_WRITE_FAILED;
+	w(c, "{\"ok\":true,\"feeders\":[");
+	for (i = 0; i < METER_CH_COUNT; i++) {
+		METERING *m = &meter[i].meter;
+		double kwh  = (double)meter[i].egy.Ereg64.cell[0][0][0] / 1000.0;   /* TOTAL,KWH,IMPORT (Wh→kWh) */
+		double kwhM = (double)meter[i].egy.Ereg32[1].cell[0][0][0] * 0.1;   /* THIS_MONTH (0.1kWh) */
+		unsigned wiring = (unsigned)meter[0].setting.pt[i].wiring;
+
+		snprintf(b, sizeof(b),
+			"%s{\"n\":%d,\"wiring\":%u,\"freq\":%.2f,"
+			"\"u\":[%.1f,%.1f,%.1f],\"upp\":[%.1f,%.1f,%.1f],"
+			"\"i\":[%.2f,%.2f,%.2f],\"in\":%.2f,",
+			i ? "," : "", i + 1, wiring, m->Freq,
+			m->U[0], m->U[1], m->U[2], m->Upp[0], m->Upp[1], m->Upp[2],
+			m->I[0], m->I[1], m->I[2], m->In);
+		w(c, b);
+		snprintf(b, sizeof(b),
+			"\"thdu\":[%.1f,%.1f,%.1f],\"thdi\":[%.1f,%.1f,%.1f],\"tddi\":[%.1f,%.1f,%.1f],"
+			"\"pf\":%.3f,\"p\":%.3f,\"q\":%.3f,\"s\":%.3f,\"uunb\":%.1f,\"iunb\":%.1f,"
+			"\"kwh\":%.2f,\"kwh_m\":%.2f,\"st\":%u}",
+			m->THD_U[0], m->THD_U[1], m->THD_U[2], m->THD_I[0], m->THD_I[1], m->THD_I[2],
+			m->TDD_I[0], m->TDD_I[1], m->TDD_I[2],
+			m->PF[3], m->P[3] / 1000.0f, m->Q[3] / 1000.0f, m->S[3] / 1000.0f,
+			m->Ubal[0], m->Ibal[0], kwh, kwhM, (unsigned)(m->meterStatus ? 1 : 0));
+		w(c, b);
+	}
+	w(c, "]}");
+	return httpCloseStream(c);
+}
+
 /* GET /api/sv300/events — 3CH 알람상태/알람로그/이벤트로그/요약 */
 #define EV_CAP  24   /* 각 목록 응답 상한(임베디드 응답/루프 바운드) */
 
@@ -710,6 +746,22 @@ static const char INDEX_HTML[] =
 ".esum .sb span{font-size:11px;color:var(--muted)}.esum .sb b{font-size:18px;font-weight:800;font-family:'Consolas',monospace}\n"
 ".ph{color:var(--muted)}\n"
 ".ph2{color:var(--muted);font-size:13px}\n"
+".pgh{font-size:24px;font-weight:800;margin:4px 0 10px}\n"
+".fgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px}\n"
+".fcard{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}\n"
+".fcard.off{opacity:.5}\n"
+".fch{display:flex;align-items:center;gap:10px;margin-bottom:12px}\n"
+".fch .ft{font-size:15px;font-weight:700}.fch .ff{margin-left:auto;font-family:'Consolas',monospace;color:var(--muted);font-size:13px}\n"
+".wb{font-size:11px;font-weight:700;color:var(--accent);background:var(--panel2);border-radius:6px;padding:2px 8px}\n"
+".ftbl{width:100%;border-collapse:collapse;font-size:13px;margin-bottom:12px}\n"
+".ftbl th,.ftbl td{padding:5px 6px;text-align:right;border-bottom:1px solid var(--line)}\n"
+".ftbl th{color:var(--muted);font-weight:600;font-size:11px}\n"
+".ftbl td{font-family:'Consolas',monospace}\n"
+".ftbl td.pk,.ftbl th:first-child{text-align:left;color:var(--muted);font-family:inherit}\n"
+".fkv{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}\n"
+".kvi{background:var(--panel2);border-radius:8px;padding:7px 10px;display:flex;flex-direction:column;gap:2px}\n"
+".kvi .kk{font-size:11px;color:var(--muted)}.kvi .kvv{font-family:'Consolas',monospace;font-weight:700;font-size:14px}\n"
+".kvi .kvv small{color:var(--muted);font-weight:400;font-size:10px}\n"
 ".stub{color:var(--muted);padding:30px 4px}\n"
 ".gp-head{display:flex;align-items:center;gap:12px;margin:4px 0 10px}\n"
 ".gp-head h1{font-size:22px;font-weight:800;margin:0}\n"
@@ -757,6 +809,7 @@ static const char INDEX_HTML[] =
 "  <div class='brand'>SV300</div>\n"
 "  <nav>\n"
 "   <a id='nav-dash' class='on' onclick=\"go('dash')\">Dashboard</a>\n"
+"   <a id='nav-feeder' onclick=\"go('feeder')\">Feeder</a>\n"
 "   <a id='nav-setup' onclick=\"go('setup')\">Setup</a>\n"
 "  </nav>\n"
 "  <div class='status'>\n"
@@ -770,6 +823,7 @@ static const char INDEX_HTML[] =
 "  <aside class='sidebar'>\n"
 "   <div class='sgroup'>Measure</div>\n"
 "   <a class='sitem active' id='si-dash' onclick=\"go('dash')\"><span class='ico'>&#128202;</span>Dashboard</a>\n"
+"   <a class='sitem' id='si-feeder' onclick=\"go('feeder')\"><span class='ico'>&#128268;</span>Feeder</a>\n"
 "   <div class='sgroup'>Setup</div>\n"
 "   <a class='sitem' id='si-setup' onclick=\"go('setup')\"><span class='ico'>&#128421;</span>Main Setting</a>\n"
 "   <a class='sitem' id='si-chset' onclick=\"go('setup','alarm')\"><span class='ico'>&#9881;</span>Channel Setting</a>\n"
@@ -826,6 +880,11 @@ static const char INDEX_HTML[] =
 "    </div>\n"
 "   </div>\n"
 /* setup page (Phase 2에서 구현) */
+"   <div id='p-feeder' style='display:none'>\n"
+"    <h1 class='pgh'>Feeder</h1>\n"
+"    <div class='dstatus'><span id='fstat' class='on'>&#9679; live &#8635; 1s</span></div>\n"
+"    <div id='fgrid' class='fgrid'></div>\n"
+"   </div>\n"
 "   <div id='p-setup' style='display:none'>\n"
 "    <div class='gp-head'><h1>Settings</h1><span class='gp-badge' id='setBadge'>Main Setting</span>\n"
 "     <span class='gp-actions'><button class='btn primary' id='setSave' onclick='saveSet()'>Save &amp; Apply</button><span class='ph2' id='setRes'></span></span></div>\n"
@@ -878,11 +937,9 @@ static const char INDEX_HTML[] =
 " }).catch(function(){$('lerr').textContent='Login failed';$('lerr').style.display='';});});\n"
 /* nav */
 "function go(pg,tab){cur=pg;\n"
-" $('p-dash').style.display=pg==='dash'?'':'none';$('p-setup').style.display=pg==='setup'?'':'none';\n"
-" $('nav-dash').className=pg==='dash'?'on':'';$('nav-setup').className=pg==='setup'?'on':'';\n"
-" $('si-dash').className='sitem'+(pg==='dash'?' active':'');\n"
-" if(pg==='dash'){$('si-setup').className='sitem';$('si-chset').className='sitem';}\n"
-" if(pg==='setup')setEnter(tab);}\n"
+" ['dash','feeder','channel','setup'].forEach(function(p){var pe=$('p-'+p);if(pe)pe.style.display=(p===pg)?'':'none';var ne=$('nav-'+p);if(ne)ne.className=(p===pg)?'on':'';var se=$('si-'+p);if(se)se.className='sitem'+(p===pg?' active':'');});\n"
+" if(pg!=='setup')$('si-chset').className='sitem';\n"
+" if(pg==='setup')setEnter(tab);else if(pg==='feeder')loadFeeder();else if(pg==='channel')chEnter();}\n"
 "(function(){var t=$('pollToggle');window.__pollOn=true;t.addEventListener('change',function(){window.__pollOn=t.checked;$('pollState').textContent=t.checked?'ON':'OFF';$('pollState').className='poll-state'+(t.checked?'':' off');});})();\n"
 /* dashboard */
 "function dstat(ok){var e=$('dstat');if(ok){e.className='on';e.innerHTML='&#9679; live &#8635; 1s'}else{e.className='bad';e.innerHTML='&#9679; read error'}}\n"
@@ -981,6 +1038,18 @@ static const char INDEX_HTML[] =
 " $('setBody').innerHTML=\"<div class='setgrid'>\"+h+'</div>';$('setNote').textContent=IS_ADMIN?'명령은 즉시 실행됩니다. Reboot / Init Settings 주의.':'Viewer 모드 - 실행 불가.';}\n"
 "function waitReboot(){var tr=0;setTimeout(function pl(){tr++;fetch('/api/me',{cache:'no-store'}).then(function(){location.reload();}).catch(function(){if(tr<40)setTimeout(pl,2000);else location.reload();});},8000);}\n"
 "function cmdDone(r,c){if(r.s===403){alert('Admin only');return;}if(!r.d.ok){alert('명령 실패');return;}setRes(c.l+' 실행됨');if(c.note==='reboot'){$('setNote').textContent='재부팅 중... 복귀되면 자동으로 로그인 화면으로 전환됩니다.';waitReboot();}}\n"
+/* Feeder */
+"function fbadge(w){return `<span class='wb'>${WM[w]||('mode '+w)}</span>`;}\n"
+"function kv(k,v,u){return `<div class='kvi'><span class='kk'>${k}</span><span class='kvv'>${v}<small> ${u}</small></span></div>`;}\n"
+"function loadFeeder(){return j('/api/feeders').then(function(r){\n"
+" if(!r.d.ok){$('fstat').className='bad';$('fstat').innerHTML='&#9679; read error';return;}\n"
+" $('fstat').className='on';$('fstat').innerHTML='&#9679; live &#8635; 1s';var h='';\n"
+" r.d.feeders.forEach(function(f){\n"
+"  h+=`<div class='fcard${f.st?'':' off'}'><div class='fch'><span class='ft'>Feeder #${f.n}</span>${fbadge(f.wiring)}<span class='ff'>${n(f.freq,2)} Hz</span></div>`;\n"
+"  h+=`<table class='ftbl'><tr><th></th><th>Phase V</th><th>Line V</th><th>Current</th><th>THD-U</th><th>THD-I</th></tr>`;\n"
+"  ['L1','L2','L3'].forEach(function(ph,k){h+=`<tr><td class='pk'>${ph}</td><td>${n(f.u[k],1)}</td><td>${n(f.upp[k],1)}</td><td>${n(f.i[k],2)}</td><td>${n(f.thdu[k],1)}%</td><td>${n(f.thdi[k],1)}%</td></tr>`;});\n"
+"  h+=`</table><div class='fkv'>`+kv('In',n(f.in,2),'A')+kv('PF',n(f.pf,3),'')+kv('P',n(f.p,2),'kW')+kv('Q',n(f.q,2),'kVar')+kv('S',n(f.s,2),'kVA')+kv('U-unb',n(f.uunb,1),'%')+kv('I-unb',n(f.iunb,1),'%')+kv('Import',n(f.kwh,2),'kWh')+kv('Month',n(f.kwh_m,2),'kWh')+`</div></div>`;\n"
+" });$('fgrid').innerHTML=h;});}\n"
 "function runCmd(ci){var c=CMDS[ci],id='c'+ci;\n"
 " if(c.utc){var v=$('u_'+id).value;if(!v){alert('시간을 입력하세요');return;}var m=v.split(/[-T:]/),ep=Math.floor(Date.UTC(+m[0],+m[1]-1,+m[2],+m[3],+m[4],+m[5]||0)/1000);if(!confirm('Set Time to '+v.replace('T',' ')+' ?'))return;j('/api/setreg',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({addr:c.addr,type:'u32',val:ep})}).then(function(r){cmdDone(r,c);});return;}\n"
 " var addr=c.addr+(c.tgt?(+$('t_'+id).value):0),msg=c.l+' 실행?';if(c.danger)msg=c.l+' - '+(c.danger==2?'공장초기화(모든 설정 삭제, 되돌릴 수 없음)':(c.note==='reboot'?'장치가 재부팅됩니다':'되돌릴 수 없습니다'))+'. 계속?';\n"
@@ -1007,8 +1076,12 @@ static const char INDEX_HTML[] =
 "  $('setNote').textContent=IS_ADMIN?'Channel>0 = 사용. 변경 후 Save & Apply(라이브 반영). ※ 알람설정 재부팅 영속·즉시적용은 실기 확인 후 필요시 펌웨어 반영.':'Viewer 모드 - 읽기 전용.';});}\n"
 /* boot */
 "var _busy=false,_tick=0;\n"
-"function pollLoop(){if(_busy||window.__pollOn===false||cur!=='dash')return;_busy=true;\n"
-" loadDash().then(function(){if(_tick%3===0)return loadEvents();}).catch(function(){}).then(function(){_busy=false;_tick++;});}\n"
+"function pollFin(){_busy=false;_tick++;}\n"
+"function pollLoop(){if(_busy||window.__pollOn===false)return;\n"
+" if(cur==='dash'){_busy=true;loadDash().then(function(){if(_tick%3===0)return loadEvents();}).catch(function(){}).then(pollFin);}\n"
+" else if(cur==='feeder'){_busy=true;loadFeeder().catch(function(){}).then(pollFin);}\n"
+" else if(cur==='channel'){_busy=true;loadChannelTab().catch(function(){}).then(pollFin);}\n"
+"}\n"
 "tbtn();clk();setInterval(clk,1000);setInterval(pollLoop,1000);me();\n"
 "</script></body></html>\n";
 
@@ -1055,6 +1128,7 @@ static error_t webRequestCallback(HttpConnection *c, const char_t *uri)
 			return webJsonStatus(c, 401, "{\"ok\":false,\"error\":\"auth\"}");
 		if (!strcmp(uri, "/api/dashboard"))    return apiDashboard(c);
 		if (!strcmp(uri, "/api/sv300/events")) return apiEvents(c);
+		if (!strcmp(uri, "/api/feeders"))      return apiFeeders(c);
 		if (!strcmp(uri, "/api/general"))      return apiGeneral(c);
 		if (!strncmp(uri, "/api/regs", 9))     return apiRegs(c);
 		return webJsonStatus(c, 404, "{\"ok\":false,\"error\":\"notfound\"}");
