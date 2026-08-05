@@ -62,7 +62,7 @@
 #define ECHO_TRACE_LEVEL         TRACE_LEVEL_INFO
 #define COAP_TRACE_LEVEL         TRACE_LEVEL_INFO
 #define FTP_TRACE_LEVEL          TRACE_LEVEL_INFO
-#define HTTP_TRACE_LEVEL         TRACE_LEVEL_INFO  // [임시] 홀딩 진단용(accept/close/timeout 확인). 진단 후 OFF 복원
+#define HTTP_TRACE_LEVEL         TRACE_LEVEL_OFF   // 요청 폴링 스팸 억제(진단 시 INFO)
 #define MQTT_TRACE_LEVEL         TRACE_LEVEL_INFO
 #define MQTT_SN_TRACE_LEVEL      TRACE_LEVEL_INFO
 #define SMTP_TRACE_LEVEL         TRACE_LEVEL_INFO
