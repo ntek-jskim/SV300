@@ -360,24 +360,63 @@ static error_t apiChannels(HttpConnection *c)
 		CNTL_DATA *cn = &meter[i].cntl;
 		snprintf(b, sizeof(b),
 			"%s{\"n\":%d,\"st\":%u,\"freq\":%.2f,\"temp\":%.1f,"
-			"\"u\":[%.1f,%.1f,%.1f,%.1f],\"upp\":[%.1f,%.1f,%.1f,%.1f],"
-			"\"i\":[%.2f,%.2f,%.2f,%.2f],\"in\":%.2f,",
+			"\"u\":[%.1f,%.1f,%.1f,%.1f],\"upp\":[%.1f,%.1f,%.1f,%.1f],",
 			i ? "," : "", i + 1, (unsigned)(m->meterStatus ? 1 : 0), m->Freq, m->Temp,
-			m->U[0], m->U[1], m->U[2], m->U[3], m->Upp[0], m->Upp[1], m->Upp[2], m->Upp[3],
-			m->I[0], m->I[1], m->I[2], m->I[3], m->In);
+			m->U[0], m->U[1], m->U[2], m->U[3], m->Upp[0], m->Upp[1], m->Upp[2], m->Upp[3]);
 		w(c, b);
 		snprintf(b, sizeof(b),
-			"\"p\":[%.2f,%.2f,%.2f,%.2f],\"q\":[%.2f,%.2f,%.2f,%.2f],"
-			"\"s\":[%.2f,%.2f,%.2f,%.2f],\"pf\":[%.3f,%.3f,%.3f,%.3f],",
+			"\"uu\":%.2f,\"uo\":%.2f,\"uzs\":[%.2f,%.1f],\"ups\":[%.2f,%.1f],\"uns\":[%.2f,%.1f],"
+			"\"uang\":[%.1f,%.1f,%.1f],",
+			m->Ubal[0], m->Ubal[1], m->Uzs[0], m->Uzs[1], m->Ups[0], m->Ups[1], m->Uns[0], m->Uns[1],
+			m->Uangle[0], m->Uangle[1], m->Uangle[2]);
+		w(c, b);
+		snprintf(b, sizeof(b),
+			"\"uundev\":[%.1f,%.1f,%.1f],\"uovdev\":[%.1f,%.1f,%.1f],"
+			"\"i\":[%.2f,%.2f,%.2f,%.2f],\"itot\":%.2f,\"in\":%.2f,\"isum\":%.2f,\"ig\":%.2f,",
+			m->UUndev[0], m->UUndev[1], m->UUndev[2], m->UOvdev[0], m->UOvdev[1], m->UOvdev[2],
+			m->I[0], m->I[1], m->I[2], m->I[3], m->Itot, m->In, m->Isum, m->Ig);
+		w(c, b);
+		snprintf(b, sizeof(b),
+			"\"izs\":[%.2f,%.1f],\"ips\":[%.2f,%.1f],\"ins\":[%.2f,%.1f],"
+			"\"iang\":[%.1f,%.1f,%.1f],\"iu\":%.2f,\"io\":%.2f,",
+			m->Izs[0], m->Izs[1], m->Ips[0], m->Ips[1], m->Ins[0], m->Ins[1],
+			m->Iangle[0], m->Iangle[1], m->Iangle[2], m->Ibal[0], m->Ibal[1]);
+		w(c, b);
+		snprintf(b, sizeof(b),
+			"\"p\":[%.2f,%.2f,%.2f,%.2f],\"q\":[%.2f,%.2f,%.2f,%.2f],\"s\":[%.2f,%.2f,%.2f,%.2f],",
 			m->P[0]/1000.0f, m->P[1]/1000.0f, m->P[2]/1000.0f, m->P[3]/1000.0f,
 			m->Q[0]/1000.0f, m->Q[1]/1000.0f, m->Q[2]/1000.0f, m->Q[3]/1000.0f,
-			m->S[0]/1000.0f, m->S[1]/1000.0f, m->S[2]/1000.0f, m->S[3]/1000.0f,
-			m->PF[0], m->PF[1], m->PF[2], m->PF[3]);
+			m->S[0]/1000.0f, m->S[1]/1000.0f, m->S[2]/1000.0f, m->S[3]/1000.0f);
 		w(c, b);
 		snprintf(b, sizeof(b),
-			"\"uang\":[%.1f,%.1f,%.1f],\"iang\":[%.1f,%.1f,%.1f],\"uiang\":[%.1f,%.1f,%.1f]}",
-			m->Uangle[0], m->Uangle[1], m->Uangle[2],
-			m->Iangle[0], m->Iangle[1], m->Iangle[2],
+			"\"fp\":[%.2f,%.2f,%.2f,%.2f],\"fq\":[%.2f,%.2f,%.2f,%.2f],\"fs\":[%.2f,%.2f,%.2f,%.2f],",
+			m->fP[0]/1000.0f, m->fP[1]/1000.0f, m->fP[2]/1000.0f, m->fP[3]/1000.0f,
+			m->fQ[0]/1000.0f, m->fQ[1]/1000.0f, m->fQ[2]/1000.0f, m->fQ[3]/1000.0f,
+			m->fS[0]/1000.0f, m->fS[1]/1000.0f, m->fS[2]/1000.0f, m->fS[3]/1000.0f);
+		w(c, b);
+		snprintf(b, sizeof(b),
+			"\"pf\":[%.3f,%.3f,%.3f,%.3f],\"dpf\":[%.3f,%.3f,%.3f,%.3f],"
+			"\"d\":[%.2f,%.2f,%.2f,%.2f],\"pang\":[%.1f,%.1f,%.1f,%.1f],",
+			m->PF[0], m->PF[1], m->PF[2], m->PF[3], m->dPF[0], m->dPF[1], m->dPF[2], m->dPF[3],
+			m->D[0]/1000.0f, m->D[1]/1000.0f, m->D[2]/1000.0f, m->D[3]/1000.0f,
+			m->Pangle[0], m->Pangle[1], m->Pangle[2], m->Pangle[3]);
+		w(c, b);
+		snprintf(b, sizeof(b),
+			"\"thdu\":[%.2f,%.2f,%.2f],\"thdupp\":[%.2f,%.2f,%.2f],"
+			"\"cfu\":[%.2f,%.2f,%.2f],\"cfupp\":[%.2f,%.2f,%.2f],",
+			m->THD_U[0], m->THD_U[1], m->THD_U[2], m->THD_Upp[0], m->THD_Upp[1], m->THD_Upp[2],
+			m->CF_U[0], m->CF_U[1], m->CF_U[2], m->CF_Upp[0], m->CF_Upp[1], m->CF_Upp[2]);
+		w(c, b);
+		snprintf(b, sizeof(b),
+			"\"thdi\":[%.2f,%.2f,%.2f],\"tddi\":[%.2f,%.2f,%.2f],"
+			"\"kfi\":[%.2f,%.2f,%.2f],\"cfi\":[%.2f,%.2f,%.2f],",
+			m->THD_I[0], m->THD_I[1], m->THD_I[2], m->TDD_I[0], m->TDD_I[1], m->TDD_I[2],
+			m->KF_I[0], m->KF_I[1], m->KF_I[2], m->CF_I[0], m->CF_I[1], m->CF_I[2]);
+		w(c, b);
+		snprintf(b, sizeof(b),
+			"\"fu\":[%.1f,%.1f,%.1f,%.1f],\"fi\":[%.2f,%.2f,%.2f,%.2f],"
+			"\"uiang\":[%.1f,%.1f,%.1f]}",
+			m->fU[0], m->fU[1], m->fU[2], m->fU[3], m->fI[0], m->fI[1], m->fI[2], m->fI[3],
 			cn->UIangle[0], cn->UIangle[1], cn->UIangle[2]);
 		w(c, b);
 	}
@@ -1240,9 +1279,22 @@ static const char INDEX_HTML[] =
 "function chStat(ok){var e=$('chstat');if(e){e.className='ph2 '+(ok?'on':'bad');e.innerHTML=ok?'&#9679; live &#8635; 1s':'&#9679; read error';}}\n"
 "function chCards(list,fn){var h=\"<div class='chgrid'>\";list.forEach(function(x){h+=`<div class='chcard'><div class='chh'>CH${x.n}</div>${fn(x)}</div>`;});return h+'</div>';}\n"
 "function r4(nm,a,d){return `<tr><td class='rk'>${nm}</td><td>${n(a[0],d)}</td><td>${n(a[1],d)}</td><td>${n(a[2],d)}</td><td>${n(a[3],d)}</td></tr>`;}\n"
-"function bMeter(x){var h=\"<table class='ctbl'><tr><th></th><th>L1</th><th>L2</th><th>L3</th><th>Avg</th></tr>\";\n"
-" h+=r4('Voltage',x.u,1)+r4('Line V',x.upp,1)+r4('Current',x.i,2)+r4('P (kW)',x.p,2)+r4('Q (kVar)',x.q,2)+r4('S (kVA)',x.s,2)+r4('PF',x.pf,3);\n"
-" return h+`</table><div class='cmeta'>Freq ${n(x.freq,2)} Hz · Temp ${n(x.temp,1)} · In ${n(x.in,2)} A</div>`;}\n"
+"function r3(nm,a,d){return `<tr><td class='rk'>${nm}</td><td>${n(a[0],d)}</td><td>${n(a[1],d)}</td><td>${n(a[2],d)}</td><td></td></tr>`;}\n"
+"function rs(nm,v,d){return `<tr><td class='rk'>${nm}</td><td></td><td></td><td></td><td>${n(v,d)}</td></tr>`;}\n"
+"function bMeter(x){var h=\"<table class='ctbl'><tr><th></th><th>L1</th><th>L2</th><th>L3</th><th>Total/Avg</th></tr>\";\n"
+" h+=rs('Frequency (Hz)',x.freq,2)+rs('Temp (&deg;C)',x.temp,1)+r4('U (V)',x.u,1)+r4('U L-L (V)',x.upp,1);\n"
+" h+=rs('U unbal Uu (%)',x.uu,2)+rs('U unbal Uo (%)',x.uo,2);\n"
+" h+=rs('U Zero Seq Mag',x.uzs[0],2)+rs('U Zero Seq Ang',x.uzs[1],1)+rs('U Pos Seq Mag',x.ups[0],2)+rs('U Pos Seq Ang',x.ups[1],1)+rs('U Neg Seq Mag',x.uns[0],2)+rs('U Neg Seq Ang',x.uns[1],1);\n"
+" h+=r3('Angle U (&deg;)',x.uang,1)+r3('U UnderDev (%)',x.uundev,1)+r3('U OverDev (%)',x.uovdev,1);\n"
+" h+=r4('I (A)',x.i,2)+rs('I total (A)',x.itot,2)+rs('In meas (A)',x.in,2)+rs('In calc (A)',x.isum,2)+rs('Ig (A)',x.ig,2);\n"
+" h+=rs('I Zero Seq Mag',x.izs[0],2)+rs('I Zero Seq Ang',x.izs[1],1)+rs('I Pos Seq Mag',x.ips[0],2)+rs('I Pos Seq Ang',x.ips[1],1)+rs('I Neg Seq Mag',x.ins[0],2)+rs('I Neg Seq Ang',x.ins[1],1);\n"
+" h+=r3('Angle I (&deg;)',x.iang,1)+rs('I unbal Iu (%)',x.iu,2)+rs('I unbal Io (%)',x.io,2);\n"
+" h+=r4('P (kW)',x.p,2)+r4('fP (kW)',x.fp,2)+r4('Q (kVar)',x.q,2)+r4('fQ (kVar)',x.fq,2)+r4('S (kVA)',x.s,2)+r4('fS (kVA)',x.fs,2);\n"
+" h+=r4('PF',x.pf,3)+r4('dPF',x.dpf,3)+r4('Deformed D (kW)',x.d,2)+r4('Power Angle (&deg;)',x.pang,1);\n"
+" h+=r3('THD V (%)',x.thdu,2)+r3('THD V L-L (%)',x.thdupp,2)+r3('CF V',x.cfu,2)+r3('CF V L-L',x.cfupp,2);\n"
+" h+=r3('THD I (%)',x.thdi,2)+r3('TDD I (%)',x.tddi,2)+r3('K-Factor I',x.kfi,2)+r3('CF I',x.cfi,2);\n"
+" h+=r4('fU (V)',x.fu,1)+r4('fI (A)',x.fi,2);\n"
+" return h+'</table>';}\n"
 "function bPhase(x){var h=\"<table class='ctbl'><tr><th></th><th>U(V)</th><th>&#8736;U</th><th>I(A)</th><th>&#8736;I</th><th>U-I</th></tr>\";\n"
 " ['L1','L2','L3'].forEach(function(ph,k){h+=`<tr><td class='rk'>${ph}</td><td>${n(x.u[k],1)}</td><td>${n(x.uang[k],1)}</td><td>${n(x.i[k],2)}</td><td>${n(x.iang[k],1)}</td><td>${n(x.uiang[k],1)}</td></tr>`;});return h+'</table>';}\n"
 "function bMm(x){var h=\"<table class='ctbl'><tr><th>Metric</th><th>Max</th><th>Min</th></tr>\";\n"
