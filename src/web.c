@@ -142,6 +142,7 @@ static error_t beginJson(HttpConnection *c)
 	c->response.contentType     = "application/json";
 	c->response.chunkedEncoding = TRUE;
 	c->response.noCache         = TRUE;
+	c->response.keepAlive       = FALSE;   /* 응답 후 즉시 닫아 슬롯 반환(keep-alive 10s 점유→홀딩 방지) */
 	return httpWriteHeader(c);
 }
 
@@ -153,6 +154,7 @@ static error_t webJsonStatus(HttpConnection *c, uint_t code, const char *body)
 	c->response.contentType     = "application/json";
 	c->response.chunkedEncoding = TRUE;
 	c->response.noCache         = TRUE;
+	c->response.keepAlive       = FALSE;
 	if (httpWriteHeader(c)) return ERROR_WRITE_FAILED;
 	w(c, body);
 	return httpCloseStream(c);
@@ -235,6 +237,7 @@ static error_t apiLogin(HttpConnection *c)
 	c->response.contentType     = "application/json";
 	c->response.chunkedEncoding = TRUE;
 	c->response.noCache         = TRUE;
+	c->response.keepAlive       = FALSE;
 	snprintf(c->response.setCookie, sizeof(c->response.setCookie),
 		"sid=%s; Path=/; Max-Age=28800; HttpOnly", s->tok);
 	if (httpWriteHeader(c)) return ERROR_WRITE_FAILED;
@@ -261,6 +264,7 @@ static error_t apiLogout(HttpConnection *c)
 	c->response.contentType     = "application/json";
 	c->response.chunkedEncoding = TRUE;
 	c->response.noCache         = TRUE;
+	c->response.keepAlive       = FALSE;
 	strcpy(c->response.setCookie, "sid=; Path=/; Max-Age=0");
 	if (httpWriteHeader(c)) return ERROR_WRITE_FAILED;
 	w(c, "{\"ok\":true}");
@@ -1389,6 +1393,7 @@ static error_t serveIndex(HttpConnection *c)
 	httpInitResponseHeader(c);
 	c->response.contentType   = "text/html";
 	c->response.contentLength = sizeof(INDEX_HTML) - 1;
+	c->response.keepAlive     = FALSE;
 	e = httpWriteHeader(c);
 	if (e) return e;
 	e = httpWriteStream(c, INDEX_HTML, sizeof(INDEX_HTML) - 1);
