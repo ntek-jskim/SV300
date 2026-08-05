@@ -435,19 +435,28 @@ static void mmEmit(HttpConnection *c, const char *nm, MAXMIN_DATA *d, int first)
 
 static error_t apiMinmax(HttpConnection *c)
 {
-	char b[48];
+	char b[64];
 	int i;
 
 	if (beginJson(c)) return ERROR_WRITE_FAILED;
 	w(c, "{\"ok\":true,\"ch\":[");
 	for (i = 0; i < METER_CH_COUNT; i++) {
 		MAXMIN *mm = &meter[i].maxmin;
-		snprintf(b, sizeof(b), "%s{\"n\":%d,\"m\":[", i ? "," : "", i + 1);
+		snprintf(b, sizeof(b), "%s{\"n\":%d,\"reset_ts\":%u,\"m\":[",
+			i ? "," : "", i + 1, (unsigned)mm->rstTime);
 		w(c, b);
-		mmEmit(c, "Freq", &mm->Freq, 1);
-		mmEmit(c, "U1", &mm->U[0], 0); mmEmit(c, "U2", &mm->U[1], 0); mmEmit(c, "U3", &mm->U[2], 0);
-		mmEmit(c, "I1", &mm->I[0], 0); mmEmit(c, "I2", &mm->I[1], 0); mmEmit(c, "I3", &mm->I[2], 0);
-		mmEmit(c, "P.tot", &mm->P[3], 0); mmEmit(c, "PF.tot", &mm->PF[3], 0);
+		mmEmit(c, "Frequency", &mm->Freq, 1);  mmEmit(c, "Temp", &mm->Temp, 0);
+		mmEmit(c, "U1", &mm->U[0], 0); mmEmit(c, "U2", &mm->U[1], 0); mmEmit(c, "U3", &mm->U[2], 0); mmEmit(c, "U~", &mm->U[3], 0);
+		mmEmit(c, "U12", &mm->Upp[0], 0); mmEmit(c, "U23", &mm->Upp[1], 0); mmEmit(c, "U31", &mm->Upp[2], 0); mmEmit(c, "Upp~", &mm->Upp[3], 0);
+		mmEmit(c, "I1", &mm->I[0], 0); mmEmit(c, "I2", &mm->I[1], 0); mmEmit(c, "I3", &mm->I[2], 0); mmEmit(c, "I~", &mm->I[3], 0);
+		mmEmit(c, "I total", &mm->Itot, 0); mmEmit(c, "In", &mm->In, 0); mmEmit(c, "Isum", &mm->Isum, 0);
+		mmEmit(c, "P1", &mm->P[0], 0); mmEmit(c, "P2", &mm->P[1], 0); mmEmit(c, "P3", &mm->P[2], 0); mmEmit(c, "P total", &mm->P[3], 0);
+		mmEmit(c, "Q1", &mm->Q[0], 0); mmEmit(c, "Q2", &mm->Q[1], 0); mmEmit(c, "Q3", &mm->Q[2], 0); mmEmit(c, "Q total", &mm->Q[3], 0);
+		mmEmit(c, "S1", &mm->S[0], 0); mmEmit(c, "S2", &mm->S[1], 0); mmEmit(c, "S3", &mm->S[2], 0); mmEmit(c, "S total", &mm->S[3], 0);
+		mmEmit(c, "PF L1", &mm->PF[0], 0); mmEmit(c, "PF L2", &mm->PF[1], 0); mmEmit(c, "PF L3", &mm->PF[2], 0); mmEmit(c, "PF total", &mm->PF[3], 0);
+		mmEmit(c, "THD U1", &mm->THD_U[0], 0); mmEmit(c, "THD U2", &mm->THD_U[1], 0); mmEmit(c, "THD U3", &mm->THD_U[2], 0);
+		mmEmit(c, "THD U12", &mm->THD_Upp[0], 0); mmEmit(c, "THD U23", &mm->THD_Upp[1], 0); mmEmit(c, "THD U31", &mm->THD_Upp[2], 0);
+		mmEmit(c, "THD I1", &mm->THD_I[0], 0); mmEmit(c, "THD I2", &mm->THD_I[1], 0); mmEmit(c, "THD I3", &mm->THD_I[2], 0);
 		w(c, "]}");
 	}
 	w(c, "]}");
@@ -968,6 +977,13 @@ static const char INDEX_HTML[] =
 ".cmeta{margin-top:8px;font-size:11px;color:var(--muted);font-family:'Consolas',monospace}\n"
 ".hsub{font-size:11px;color:var(--muted);font-weight:700;margin:10px 0 4px}\n"
 ".ctbl.hsm td,.ctbl.hsm th{padding:3px 5px;font-size:11px}\n"
+".phbox{display:flex;justify-content:center;margin-bottom:10px}\n"
+".phsvg{width:100%;max-width:240px;height:auto}\n"
+".ph-bg{fill:none;stroke:var(--line);stroke-width:1}\n"
+".ph-grid{fill:none;stroke:var(--line);stroke-width:.5;opacity:.6}\n"
+".ph-mk{fill:var(--muted)}\n"
+".mmtbl td.mk{color:var(--muted);font-size:10px;text-align:left}\n"
+".mmtbl td.rk{border-right:1px solid var(--line)}\n"
 ".stub{color:var(--muted);padding:30px 4px}\n"
 ".gp-head{display:flex;align-items:center;gap:12px;margin:4px 0 10px}\n"
 ".gp-head h1{font-size:22px;font-weight:800;margin:0}\n"
@@ -1295,10 +1311,18 @@ static const char INDEX_HTML[] =
 " h+=r3('THD I (%)',x.thdi,2)+r3('TDD I (%)',x.tddi,2)+r3('K-Factor I',x.kfi,2)+r3('CF I',x.cfi,2);\n"
 " h+=r4('fU (V)',x.fu,1)+r4('fI (A)',x.fi,2);\n"
 " return h+'</table>';}\n"
-"function bPhase(x){var h=\"<table class='ctbl'><tr><th></th><th>U(V)</th><th>&#8736;U</th><th>I(A)</th><th>&#8736;I</th><th>U-I</th></tr>\";\n"
-" ['L1','L2','L3'].forEach(function(ph,k){h+=`<tr><td class='rk'>${ph}</td><td>${n(x.u[k],1)}</td><td>${n(x.uang[k],1)}</td><td>${n(x.i[k],2)}</td><td>${n(x.iang[k],1)}</td><td>${n(x.uiang[k],1)}</td></tr>`;});return h+'</table>';}\n"
-"function bMm(x){var h=\"<table class='ctbl'><tr><th>Metric</th><th>Max</th><th>Min</th></tr>\";\n"
-" x.m.forEach(function(m){h+=`<tr><td class='rk'>${m.nm}</td><td>${n(m.mx,2)}<div class='ts'>${ts2(m.mxt)}</div></td><td>${n(m.mn,2)}<div class='ts'>${ts2(m.mnt)}</div></td></tr>`;});return h+'</table>';}\n"
+"function phVec(cx,cy,ang,len,col,mk){var r=ang*Math.PI/180,x=(cx+len*Math.cos(r)).toFixed(1),y=(cy-len*Math.sin(r)).toFixed(1);return `<line x1='${cx}' y1='${cy}' x2='${x}' y2='${y}' stroke='${col}' stroke-width='2.2' marker-end='url(#${mk})'/>`;}\n"
+"function phasorSVG(x){var cx=130,cy=130,R=110,mk='ar'+x.n,a,k,r,um=Math.max(Math.abs(x.u[0]),Math.abs(x.u[1]),Math.abs(x.u[2]))||1,im=Math.max(Math.abs(x.i[0]),Math.abs(x.i[1]),Math.abs(x.i[2]))||1;\n"
+" var s=`<svg class='phsvg' viewBox='0 0 260 260'><defs><marker id='${mk}' markerWidth='8' markerHeight='8' refX='6' refY='3' orient='auto'><path d='M0,0 L6,3 L0,6 Z' class='ph-mk'/></marker></defs>`;\n"
+" s+=`<circle cx='${cx}' cy='${cy}' r='${R}' class='ph-bg'/><circle cx='${cx}' cy='${cy}' r='55' class='ph-grid'/>`;\n"
+" for(a=0;a<360;a+=30){r=a*Math.PI/180;s+=`<line x1='${cx}' y1='${cy}' x2='${(cx+R*Math.cos(r)).toFixed(1)}' y2='${(cy-R*Math.sin(r)).toFixed(1)}' class='ph-grid'/>`;}\n"
+" for(k=0;k<3;k++)s+=phVec(cx,cy,x.uang[k],R*0.92*Math.abs(x.u[k])/um,'#3b82f6',mk);\n"
+" for(k=0;k<3;k++)s+=phVec(cx,cy,x.iang[k],R*0.6*Math.abs(x.i[k])/im,'#22c55e',mk);\n"
+" return s+'</svg>';}\n"
+"function bPhase(x){var h=\"<div class='phbox'>\"+phasorSVG(x)+\"</div><table class='ctbl'><tr><th></th><th>L1</th><th>L2</th><th>L3</th><th></th></tr>\";\n"
+" h+=r3('U mag (V)',x.u,1)+r3('U angle (&deg;)',x.uang,1)+r3('I mag (A)',x.i,2)+r3('I angle (&deg;)',x.iang,1);return h+'</table>';}\n"
+"function bMm(x){var h=`<div class='cmeta'>Reset: ${ts2(x.reset_ts)}</div><table class='ctbl mmtbl'><tr><th>Metric</th><th></th><th>Value</th><th>Time</th></tr>`;\n"
+" x.m.forEach(function(m){h+=`<tr><td class='rk' rowspan='2'>${m.nm}</td><td class='mk'>Max</td><td>${n(m.mx,2)}</td><td class='ts'>${ts2(m.mxt)}</td></tr><tr><td class='mk'>Min</td><td>${n(m.mn,2)}</td><td class='ts'>${ts2(m.mnt)}</td></tr>`;});return h+'</table>';}\n"
 "function bEgy(x){var h=\"<table class='ctbl'><tr><th></th><th>Import</th><th>Export</th></tr>\";\n"
 " h+=`<tr><td class='rk'>kWh</td><td>${n(x.kwh_i,2)}</td><td>${n(x.kwh_e,2)}</td></tr><tr><td class='rk'>kVarh</td><td>${n(x.kvarh_i,2)}</td><td>${n(x.kvarh_e,2)}</td></tr><tr><td class='rk'>kVAh</td><td>${n(x.kvah,2)}</td><td>-</td></tr>`;\n"
 " return h+`</table><div class='cmeta'>This month kWh: imp ${n(x.kwh_i_m,2)} / exp ${n(x.kwh_e_m,2)}</div>`;}\n"
