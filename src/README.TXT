@@ -1,9 +1,13 @@
 중요 수정사항
 
-26/02/19 FW V00.00 
+26/02/19 FW V00.00
   1) start
 
-NOSDMEM : SD MEMORY Y/N 
+26/08/04 FW V00.02
+  1) Web: Feeder·Channel 화면 신규 — Channel 8탭(Meter/Phase/Min·Max/Harmonics/Energy/Demand/Alarm/Event) confWebApp 동일화
+  2) Channel 홀딩 근본수정 — HTTP_SERVER_PERSISTENT_CONN_SUPPORT 활성화(keep-alive)로 커넥션 재사용
+
+NOSDMEM : SD MEMORY Y/N
 HWV1 : CH3(METER CHIP SELECT)
 HWV2 : SPI FLASH 16MB
 
