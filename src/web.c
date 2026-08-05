@@ -522,29 +522,28 @@ static error_t apiDemand(HttpConnection *c)
 	return httpCloseStream(c);
 }
 
-/* GET /api/harmonics — 채널별 U/I 고조파(차수 2~15, 원시 uint16) */
+/* GET /api/harmonics?opt=pv|lv|cur — 채널별 고조파(차수 2~63, %=raw/10) */
 static error_t apiHarmonics(HttpConnection *c)
 {
 	char b[48];
-	int i, ph, o;
+	int i, ph, o, sel = 0;   /* 0=상전압(U), 1=선간(Upp), 2=전류(I) */
+	const char *q = c->request.queryString;
+
+	if (q) { if (strstr(q, "opt=lv")) sel = 1; else if (strstr(q, "opt=cur")) sel = 2; }
 
 	if (beginJson(c)) return ERROR_WRITE_FAILED;
-	w(c, "{\"ok\":true,\"ord\":[");
-	for (o = 2; o <= 15; o++) { snprintf(b, sizeof(b), "%s%d", o > 2 ? "," : "", o); w(c, b); }
+	snprintf(b, sizeof(b), "{\"ok\":true,\"opt\":%d,\"orders\":[", sel);
+	w(c, b);
+	for (o = 2; o <= 63; o++) { snprintf(b, sizeof(b), "%s%d", o > 2 ? "," : "", o); w(c, b); }
 	w(c, "],\"ch\":[");
 	for (i = 0; i < METER_CH_COUNT; i++) {
 		HARMONICS *hd = &meter[i].hd;
-		snprintf(b, sizeof(b), "%s{\"n\":%d,\"u\":[", i ? "," : "", i + 1);
+		uint16_t (*arr)[64] = (sel == 1) ? hd->Upp : (sel == 2) ? hd->I : hd->U;
+		snprintf(b, sizeof(b), "%s{\"n\":%d,\"ph\":[", i ? "," : "", i + 1);
 		w(c, b);
 		for (ph = 0; ph < 3; ph++) {
 			w(c, ph ? ",[" : "[");
-			for (o = 2; o <= 15; o++) { snprintf(b, sizeof(b), "%s%u", o > 2 ? "," : "", (unsigned)hd->U[ph][o]); w(c, b); }
-			w(c, "]");
-		}
-		w(c, "],\"i\":[");
-		for (ph = 0; ph < 3; ph++) {
-			w(c, ph ? ",[" : "[");
-			for (o = 2; o <= 15; o++) { snprintf(b, sizeof(b), "%s%u", o > 2 ? "," : "", (unsigned)hd->I[ph][o]); w(c, b); }
+			for (o = 2; o <= 63; o++) { snprintf(b, sizeof(b), "%s%.1f", o > 2 ? "," : "", arr[ph][o] / 10.0f); w(c, b); }
 			w(c, "]");
 		}
 		w(c, "]}");
@@ -982,6 +981,7 @@ static const char INDEX_HTML[] =
 ".cmeta{margin-top:8px;font-size:11px;color:var(--muted);font-family:'Consolas',monospace}\n"
 ".hsub{font-size:11px;color:var(--muted);font-weight:700;margin:10px 0 4px}\n"
 ".ctbl.hsm td,.ctbl.hsm th{padding:3px 5px;font-size:11px}\n"
+".hcv{width:100%;height:180px;display:block}\n"
 ".phbox{display:flex;justify-content:center;margin-bottom:10px}\n"
 ".phsvg{width:100%;max-width:240px;height:auto}\n"
 ".ph-bg{fill:none;stroke:var(--line);stroke-width:1}\n"
@@ -1125,6 +1125,12 @@ static const char INDEX_HTML[] =
 "     <a class='gp-tab' id='ct-demand' onclick=\"chSetTab('demand')\">Demand</a>\n"
 "     <a class='gp-tab' id='ct-alarm' onclick=\"chSetTab('alarm')\">Alarm</a>\n"
 "     <a class='gp-tab' id='ct-event' onclick=\"chSetTab('event')\">Event</a>\n"
+"    </div>\n"
+"    <div id='chctl' style='display:none;margin:0 0 10px;align-items:center;gap:8px'>\n"
+"     <span class='ph2'>Option</span>\n"
+"     <select id='hopt' style='width:150px' onchange=\"harmOpt=this.value;pollLoop()\"><option value='pv'>Phase Voltage</option><option value='lv'>Line Voltage</option><option value='cur'>Current</option></select>\n"
+"     <button class='btn' id='hvt' onclick=\"harmView='table';syncHv();pollLoop()\">Table</button>\n"
+"     <button class='btn' id='hvc' onclick=\"harmView='chart';syncHv();pollLoop()\">Chart</button>\n"
 "    </div>\n"
 "    <div id='chbody'></div>\n"
 "   </div>\n"
@@ -1295,8 +1301,9 @@ static const char INDEX_HTML[] =
 " });$('fgrid').innerHTML=h;});}\n"
 /* Channel */
 "var chTabCur='meter',CHN=[{n:1},{n:2},{n:3}];\n"
+"var harmOpt='pv',harmView='table',PCOL=['#8b5cf6','#38bdf8','#84cc16'];\n"
 "function chEnter(){chSetTab(chTabCur);}\n"
-"function chSetTab(t){chTabCur=t;['meter','phase','minmax','harmonics','energy','demand','alarm','event'].forEach(function(x){var e=$('ct-'+x);if(e)e.className='gp-tab'+(x===t?' on':'');});$('chbody').innerHTML=\"<p class='stub'>loading...</p>\";pollLoop();}\n"
+"function chSetTab(t){chTabCur=t;['meter','phase','minmax','harmonics','energy','demand','alarm','event'].forEach(function(x){var e=$('ct-'+x);if(e)e.className='gp-tab'+(x===t?' on':'');});var cc=$('chctl');if(cc)cc.style.display=(t==='harmonics')?'flex':'none';syncHv();$('chbody').innerHTML=\"<p class='stub'>loading...</p>\";pollLoop();}\n"
 "function chStat(ok){var e=$('chstat');if(e){e.className='ph2 '+(ok?'on':'bad');e.innerHTML=ok?'&#9679; live &#8635; 1s':'&#9679; read error';}}\n"
 "function chFail(){chStat(false);var b=$('chbody');if(b&&b.innerHTML.indexOf('loading')>=0)b.innerHTML=\"<p class='stub'>read error - retrying...</p>\";}\n"
 "function chCards(list,fn){var h=\"<div class='chgrid'>\";list.forEach(function(x){h+=`<div class='chcard'><div class='chh'>CH${x.n}</div>${fn(x)}</div>`;});return h+'</div>';}\n"
@@ -1335,8 +1342,14 @@ static const char INDEX_HTML[] =
 "function bDmd(x){var h=\"<table class='ctbl'><tr><th></th><th>Present</th><th>Peak</th><th>Peak Time</th></tr>\";\n"
 " h+=`<tr><td class='rk'>P(kW)</td><td>${n(x.cp,2)}</td><td>${n(x.mp,2)}</td><td class='ts'>${ts2(x.mpt)}</td></tr><tr><td class='rk'>Q(kVar)</td><td>${n(x.cq,2)}</td><td>${n(x.mq,2)}</td><td>-</td></tr><tr><td class='rk'>S(kVA)</td><td>${n(x.cs,2)}</td><td>${n(x.ms,2)}</td><td class='ts'>${ts2(x.mst)}</td></tr>`;\n"
 " h+=`<tr><td class='rk'>I(A)</td><td>${n(x.di[0],1)}/${n(x.di[1],1)}/${n(x.di[2],1)}</td><td>${n(x.mi[0],1)}/${n(x.mi[1],1)}/${n(x.mi[2],1)}</td><td>-</td></tr>`;return h+'</table>';}\n"
-"function bHarm(x,ord){function tb(a){var h=\"<table class='ctbl hsm'><tr><th>Ord</th><th>L1</th><th>L2</th><th>L3</th></tr>\";ord.forEach(function(o,oi){h+=`<tr><td class='rk'>${o}</td><td>${a[0][oi]}</td><td>${a[1][oi]}</td><td>${a[2][oi]}</td></tr>`;});return h+'</table>';}\n"
-" return \"<div class='hsub'>Voltage</div>\"+tb(x.u)+\"<div class='hsub'>Current</div>\"+tb(x.i);}\n"
+"function harmTable(x,ord){var h=\"<table class='ctbl hsm'><tr><th>Ord</th><th>L1</th><th>L2</th><th>L3</th></tr>\";ord.forEach(function(o,k){h+=`<tr><td class='rk'>${o}</td><td>${n(x.ph[0][k],1)}</td><td>${n(x.ph[1][k],1)}</td><td>${n(x.ph[2][k],1)}</td></tr>`;});return h+'</table>';}\n"
+"function drawHarm(id,ph,ord){var cv=$(id);if(!cv)return;var w=cv.clientWidth||300;cv.width=w;cv.height=180;var g=cv.getContext('2d'),pad=22,nn=ord.length,mx=1,i,p;\n"
+" for(p=0;p<3;p++)for(i=0;i<nn;i++){if(ph[p][i]>mx)mx=ph[p][i];}\n"
+" g.clearRect(0,0,w,180);var gw=(w-pad-4)/nn,bw=gw/3;\n"
+" for(i=0;i<nn;i++){for(p=0;p<3;p++){var v=ph[p][i]||0,bh=(180-2*pad)*(v>0?v:0)/mx;g.fillStyle=PCOL[p];g.fillRect(pad+i*gw+p*bw,180-pad-bh,bw>1?bw-0.5:bw,bh);}\n"
+"  if(ord[i]%5===0||ord[i]===2){g.fillStyle='#8b9bb0';g.font='8px sans-serif';g.fillText(ord[i],pad+i*gw,178);}}\n"
+" g.strokeStyle='rgba(128,140,155,.3)';g.beginPath();g.moveTo(pad,180-pad);g.lineTo(w,180-pad);g.stroke();}\n"
+"function syncHv(){var a=$('hvt'),b=$('hvc');if(a)a.className='btn'+(harmView==='table'?' primary':'');if(b)b.className='btn'+(harmView==='chart'?' primary':'');}\n"
 "function bAlarm(x,ev){var st=ev.status.filter(function(s){return s.chn===x.n;}),lg=ev.alarmlog.filter(function(s){return s.chn===x.n;});\n"
 " var h=\"<div class='hsub'>Active</div><table class='ctbl'><tr><th>Channel</th><th>State</th><th>Cnt</th></tr>\";\n"
 " if(!st.length)h+=\"<tr><td colspan='3' class='empty'>None</td></tr>\";st.forEach(function(s){h+=`<tr><td class='rk'>${esc(acn(s.chan))}</td><td><span class='st set'>Set</span></td><td>${s.count}</td></tr>`;});\n"
@@ -1350,7 +1363,10 @@ static const char INDEX_HTML[] =
 " if(t==='minmax')return j('/api/minmax').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=chCards(r.d.ch,bMm);}).catch(chFail);\n"
 " if(t==='energy')return j('/api/energy').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=chCards(r.d.ch,bEgy);}).catch(chFail);\n"
 " if(t==='demand')return j('/api/demand').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=chCards(r.d.ch,bDmd);}).catch(chFail);\n"
-" if(t==='harmonics')return j('/api/harmonics').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=chCards(r.d.ch,function(x){return bHarm(x,r.d.ord);});}).catch(chFail);\n"
+" if(t==='harmonics')return j('/api/harmonics?opt='+harmOpt).then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);\n"
+"  if(harmView==='chart'){$('chbody').innerHTML=chCards(r.d.ch,function(x){return \"<canvas id='hc\"+x.n+\"' class='hcv'></canvas>\";});r.d.ch.forEach(function(x){drawHarm('hc'+x.n,x.ph,r.d.orders);});}\n"
+"  else{$('chbody').innerHTML=chCards(r.d.ch,function(x){return harmTable(x,r.d.orders);});}\n"
+" }).catch(chFail);\n"
 " if(t==='alarm'||t==='event')return j('/api/sv300/events').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=chCards(CHN,function(x){return (t==='alarm'?bAlarm:bEvent)(x,r.d);});}).catch(chFail);\n"
 " return Promise.resolve();}\n"
 "function runCmd(ci){var c=CMDS[ci],id='c'+ci;\n"
