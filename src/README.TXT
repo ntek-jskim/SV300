@@ -3,9 +3,13 @@
 26/02/19 FW V00.00
   1) start
 
-26/08/04 FW V00.02
-  1) Web: Feeder·Channel 화면 신규 — Channel 11탭(Meter/Phase/Min·Max/Harmonics/Waveform/Report/Monthly/Energy/Demand/Alarm/Event) confWebApp 동일화
+26/08/05 FW V00.02
+  1) Web: Feeder·Channel 화면 신규 — Channel 8탭(Meter/Phase/Min·Max/Harmonics/Energy/Demand/Alarm/Event) confWebApp 동일화
   2) Channel 홀딩 근본수정 — HTTP_SERVER_PERSISTENT_CONN_SUPPORT 활성화(keep-alive)로 커넥션 재사용
+
+26/08/06 FW V00.02
+  1) Web: Channel Waveform / Report(EN50160·ITIC) / Monthly 탭 추가 → confWebApp Channel 11탭 완성
+  2) Web: 고조파 Table/Chart·에너지 매트릭스·수요 프로파일 차트 등 탭별 세부 마감
 
 NOSDMEM : SD MEMORY Y/N
 HWV1 : CH3(METER CHIP SELECT)
