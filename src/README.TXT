@@ -4,7 +4,7 @@
   1) start
 
 26/08/04 FW V00.02
-  1) Web: Feeder·Channel 화면 신규 — Channel 8탭(Meter/Phase/Min·Max/Harmonics/Energy/Demand/Alarm/Event) confWebApp 동일화
+  1) Web: Feeder·Channel 화면 신규 — Channel 11탭(Meter/Phase/Min·Max/Harmonics/Waveform/Report/Monthly/Energy/Demand/Alarm/Event) confWebApp 동일화
   2) Channel 홀딩 근본수정 — HTTP_SERVER_PERSISTENT_CONN_SUPPORT 활성화(keep-alive)로 커넥션 재사용
 
 NOSDMEM : SD MEMORY Y/N
