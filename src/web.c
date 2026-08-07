@@ -726,56 +726,59 @@ static error_t apiMonthly(HttpConnection *c)
 static error_t apiEvents(HttpConnection *c)
 {
 	char b[256];
-	int i, k, n;
+	int i, k, m, first;
 
 	if (beginJson(c)) return ERROR_WRITE_FAILED;
 
-	/* alarm status: st[32] 중 status!=0 (활성 알람) */
+	/* alarm status: st[32] 중 status!=0 (활성 알람). 상한은 채널별(EV_CAP) — 전역 합산 아님 */
 	w(c, "{\"ok\":true,\"status\":[");
-	n = 0;
+	first = 1;
 	for (i = 0; i < METER_CH_COUNT; i++) {
 		ALARM_STATUS *a = &meter[i].alarm;
-		for (k = 0; k < 32 && n < EV_CAP; k++) {
+		m = 0;
+		for (k = 0; k < 32 && m < EV_CAP; k++) {
 			if (a->st[k].status) {
 				snprintf(b, sizeof(b), "%s{\"chn\":%d,\"chan\":%u,\"count\":%u}",
-					n ? "," : "", i + 1, (unsigned)a->st[k].chan, (unsigned)a->st[k].count);
-				w(c, b); n++;
+					first ? "" : ",", i + 1, (unsigned)a->st[k].chan, (unsigned)a->st[k].count);
+				w(c, b); first = 0; m++;
 			}
 		}
 	}
 
 	/* alarm log: alist.alog[count] */
 	w(c, "],\"alarmlog\":[");
-	n = 0;
+	first = 1;
 	for (i = 0; i < METER_CH_COUNT; i++) {
 		ALARM_LIST *L = &meter[i].alist;
 		int cnt = L->count; if (cnt > N_ALARM_LIST) cnt = N_ALARM_LIST;
-		for (k = 0; k < cnt && n < EV_CAP; k++) {
+		m = 0;
+		for (k = 0; k < cnt && m < EV_CAP; k++) {
 			ALARM_LOG *g = &L->alog[k];
 			snprintf(b, sizeof(b),
 				"%s{\"chn\":%d,\"chan\":%u,\"set\":%u,\"value\":%.2f,\"ts\":%u}",
-				n ? "," : "", i + 1, (unsigned)g->chan, (unsigned)g->status,
+				first ? "" : ",", i + 1, (unsigned)g->chan, (unsigned)g->status,
 				g->value, (unsigned)g->ts);
-			w(c, b); n++;
+			w(c, b); first = 0; m++;
 		}
 	}
 
 	/* event log: elist.elog[count] */
 	w(c, "],\"eventlog\":[");
-	n = 0;
+	first = 1;
 	for (i = 0; i < METER_CH_COUNT; i++) {
 		EVENT_LIST *E = &meter[i].elist;
 		int cnt = E->count; if (cnt > N_EVENT_LIST) cnt = N_EVENT_LIST;
-		for (k = 0; k < cnt && n < EV_CAP; k++) {
+		m = 0;
+		for (k = 0; k < cnt && m < EV_CAP; k++) {
 			EVENT_LOG *e = &E->elog[k];
 			float lv = e->level[0];
 			if (e->level[1] > lv) lv = e->level[1];
 			if (e->level[2] > lv) lv = e->level[2];
 			snprintf(b, sizeof(b),
 				"%s{\"chn\":%d,\"type\":%u,\"ts\":%u,\"dur\":%u,\"mask\":%u,\"level\":%.2f}",
-				n ? "," : "", i + 1, (unsigned)e->type, (unsigned)e->startTs,
+				first ? "" : ",", i + 1, (unsigned)e->type, (unsigned)e->startTs,
 				(unsigned)e->duration, (unsigned)e->mask, lv);
-			w(c, b); n++;
+			w(c, b); first = 0; m++;
 		}
 	}
 
@@ -854,7 +857,7 @@ static int qparam(const char *qs, const char *key)
 static uint16_t rdReg(uint16_t a) { uint16_t v = 0; readMemCb(a, &v); return v; }
 
 /* 설정 필드 테이블(General 탭) — 주소는 펌웨어 ground truth(CH1 base) */
-enum { WT_U16, WT_U32, WT_I16, WT_BOOL, WT_IP, WT_STR };
+enum { WT_U16, WT_U32, WT_I16, WT_BOOL, WT_IP, WT_STR, WT_SERIAL, WT_MAC, WT_FWDATE };
 static const char *wtName(uint8_t t)
 {
 	switch (t) {
@@ -862,7 +865,7 @@ static const char *wtName(uint8_t t)
 	case WT_I16:  return "i16";
 	case WT_BOOL: return "bool";
 	case WT_IP:   return "ip";
-	case WT_STR:  return "str";
+	case WT_STR:  case WT_SERIAL: case WT_MAC: case WT_FWDATE: return "str";  /* 읽기전용 표시 */
 	default:      return "u16";
 	}
 }
@@ -875,11 +878,14 @@ typedef struct {
 
 /* card: 0=Device Information, 1=Communication, 2=ETC */
 static const GField GEN[] = {
-	{ "name",            "Name",                 7134, WT_STR,  0, 1, 16 },
-	{ "hw_model",        "HW Model",             7086, WT_U16,  0, 1, 0 },
-	{ "hw_version",      "HW Version",           7087, WT_U16,  0, 1, 0 },
-	{ "fw_version",      "FW Version",           7088, WT_U16,  0, 1, 0 },
-	{ "timezone",        "Timezone",             7413, WT_I16,  0, 0, 0 },
+	{ "name",            "Name",                 7134, WT_STR,    0, 1, 16 },
+	{ "serial",          "Serial Number",        7070, WT_SERIAL, 0, 1, 0 },
+	{ "mac",             "MAC Address",          7076, WT_MAC,    0, 1, 0 },
+	{ "hw_model",        "HW Model",             7086, WT_U16,    0, 1, 0 },
+	{ "hw_version",      "HW Version",           7087, WT_U16,    0, 1, 0 },
+	{ "fw_version",      "FW Version",           7088, WT_U16,    0, 1, 0 },
+	{ "fw_build",        "FW Build Date",        7089, WT_FWDATE, 0, 1, 0 },
+	{ "timezone",        "Timezone",             7413, WT_I16,    0, 0, 0 },
 	{ "device_id",       "Device ID",            7110, WT_U16,  1, 0, 0 },
 	{ "tcp_port",        "TCP Port",             7111, WT_U16,  1, 0, 0 },
 	{ "dhcp",            "DHCP",                 7154, WT_BOOL, 1, 0, 0 },
@@ -913,7 +919,21 @@ static error_t apiGeneral(HttpConnection *c)
 	w(c, "{\"ok\":true,\"fields\":[");
 	for (i = 0; i < GEN_N; i++) {
 		const GField *f = &GEN[i];
-		if (f->type == WT_IP) {
+		if (f->type == WT_SERIAL) {
+			METER_INFO *inf = &meter[0].info;
+			snprintf(val, sizeof(val), "\"%02x%02x%02x%02x%02x%02x\"",
+				inf->sn[0] & 0xff, inf->sn[1] & 0xff, inf->sn[2] & 0xff,
+				inf->sn[3] & 0xff, inf->sn[4] & 0xff, inf->sn[5] & 0xff);
+		} else if (f->type == WT_MAC) {
+			METER_INFO *inf = &meter[0].info;
+			snprintf(val, sizeof(val), "\"%02x:%02x:%02x:%02x:%02x:%02x\"",
+				inf->mac_msb[0] & 0xff, inf->mac_msb[1] & 0xff, inf->mac[0] & 0xff,
+				inf->mac[1] & 0xff, inf->mac[2] & 0xff, inf->mac[3] & 0xff);
+		} else if (f->type == WT_FWDATE) {
+			METER_INFO *inf = &meter[0].info;
+			snprintf(val, sizeof(val), "\"%04u-%02u-%02u\"",
+				(unsigned)inf->fwBuildYear, (unsigned)inf->fwBuildMon, (unsigned)inf->fwBuildDay);
+		} else if (f->type == WT_IP) {
 			snprintf(val, sizeof(val), "\"%u.%u.%u.%u\"",
 				rdReg(f->addr), rdReg(f->addr + 1), rdReg(f->addr + 2), rdReg(f->addr + 3));
 		} else if (f->type == WT_STR) {
@@ -1178,6 +1198,8 @@ static const char INDEX_HTML[] =
 ".setcard h3{font-size:15px;font-weight:700;padding:14px 0 10px;margin:0 0 6px;border-bottom:1px solid var(--line)}\n"
 ".srow{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;font-size:13px;border-bottom:1px solid var(--line)}\n"
 ".srow:last-child{border-bottom:none}.srow .sk{color:var(--muted)}\n"
+".sgrp{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.6px;color:var(--accent);padding:14px 0 6px;margin-top:6px;border-top:1px solid var(--line)}\n"
+".setcard h3+.sgrp{margin-top:0;border-top:none;padding-top:6px}\n"
 ".srow .sv{font-family:'Consolas',monospace}\n"
 ".srow input,.srow select{width:160px;margin:0;padding:6px 8px;font-size:13px}\n"
 ".srow input[type=checkbox]{width:auto}\n"
@@ -1230,7 +1252,7 @@ static const char INDEX_HTML[] =
 "   <a class='sitem' id='si-channel' onclick=\"go('channel')\"><span class='ico'>&#128225;</span>Channel</a>\n"
 "   <div class='sgroup'>Setup</div>\n"
 "   <a class='sitem' id='si-setup' onclick=\"go('setup')\"><span class='ico'>&#128421;</span>Main Setting</a>\n"
-"   <a class='sitem' id='si-chset' onclick=\"go('setup','alarm')\"><span class='ico'>&#9881;</span>Channel Setting</a>\n"
+"   <a class='sitem' id='si-chset' onclick=\"go('setup','chan')\"><span class='ico'>&#9881;</span>Channel Setting</a>\n"
 "   <div class='poll-toggle'><label><input type='checkbox' id='pollToggle' checked style='width:auto;margin:0'> Live polling <span class='poll-state' id='pollState'>ON</span></label></div>\n"
 "  </aside>\n"
 "  <main class='container'>\n"
@@ -1307,22 +1329,14 @@ static const char INDEX_HTML[] =
 "    <div id='chctl' style='display:none;margin:0 0 10px;align-items:center;gap:8px'>\n"
 "     <span class='ph2'>Option</span>\n"
 "     <select id='hopt' style='width:150px' onchange=\"harmOpt=this.value;pollLoop()\"><option value='pv'>Phase Voltage</option><option value='lv'>Line Voltage</option><option value='cur'>Current</option></select>\n"
-"     <button class='btn' id='hvt' onclick=\"harmView='table';syncHv();pollLoop()\">Table</button>\n"
-"     <button class='btn' id='hvc' onclick=\"harmView='chart';syncHv();pollLoop()\">Chart</button>\n"
+"     <span class='ph2' style='margin-left:6px'>Voltage: CH1 (M0~M2 shared) &middot; Current: CH1~3</span>\n"
 "    </div>\n"
 "    <div id='chbody'></div>\n"
 "   </div>\n"
 "   <div id='p-setup' style='display:none'>\n"
 "    <div class='gp-head'><h1>Settings</h1><span class='gp-badge' id='setBadge'>Main Setting</span>\n"
 "     <span class='gp-actions'><button class='btn primary' id='setSave' onclick='saveSet()'>Save &amp; Apply</button><span class='ph2' id='setRes'></span></span></div>\n"
-"    <div class='gp-tabs'>\n"
-"     <a class='gp-tab on' id='gt-general' onclick=\"setTab('general')\">General</a>\n"
-"     <a class='gp-tab' id='gt-pt' onclick=\"setTab('pt')\">PT</a>\n"
-"     <a class='gp-tab' id='gt-ct' onclick=\"setTab('ct')\">CT</a>\n"
-"     <a class='gp-tab' id='gt-iom' onclick=\"setTab('iom')\">IO</a>\n"
-"     <a class='gp-tab' id='gt-command' onclick=\"setTab('command')\">Command</a>\n"
-"     <a class='gp-tab' id='gt-alarm' onclick=\"setTab('alarm')\">Alarm Settings</a>\n"
-"    </div>\n"
+"    <div class='gp-tabs' id='setTabs'></div>\n"
 "    <div id='setBody'></div>\n"
 "    <div class='setnote' id='setNote'></div>\n"
 "   </div>\n"
@@ -1337,7 +1351,7 @@ static const char INDEX_HTML[] =
 "var ET={1:['Sag','sag'],2:['Swell','swell'],3:['S.Intr','intr'],4:['L.Intr','intr'],5:['OC','oc'],6:['RVC','tr'],7:['Trans V','tr'],8:['Trans I','tr'],9:['SOE','oc']};\n"
 "function acn(i){return AC[i]||('#'+i)}\n"
 "function j(u,o){o=o||{};var ac=('AbortController'in window)?new AbortController():null,tm=null;if(ac){o.signal=ac.signal;tm=setTimeout(function(){ac.abort()},6000);}\n"
-" return fetch(u,o).then(function(r){return r.text().then(function(t){if(tm)clearTimeout(tm);return{s:r.status,d:JSON.parse((t||'{}').replace(/-?(inf|nan)/gi,'0'))}})}).catch(function(e){if(tm)clearTimeout(tm);throw e;})}\n"
+" return fetch(u,o).then(function(r){return r.text().then(function(t){if(tm)clearTimeout(tm);return{s:r.status,d:JSON.parse((t||'{}').replace(/-?\\b(inf|nan)\\b/gi,'0'))}})}).catch(function(e){if(tm)clearTimeout(tm);throw e;})}\n"
 "function n(v,d){return(v==null||isNaN(v))?'-':Number(v).toFixed(d)}\n"
 "function esc(s){return String(s).replace(/[&<>]/g,function(x){return{'&':'&amp;','<':'&lt;','>':'&gt;'}[x]})}\n"
 /* theme + clock */
@@ -1413,13 +1427,21 @@ static const char INDEX_HTML[] =
 "var CT2M={0:'5A',1:'100mA/333mV',2:'Rogowski'},ZCTM={1:'200mV:100mV',2:'200mV:1.5mA',3:'200mV:0.1mA'},DIM={0:'DI',1:'PI'},DIRM={0:'+',1:'-'};\n"
 "var PT_F=[{o:0,l:'Wiring Mode',t:'u16',opt:WM},{o:2,l:'V Nominal',t:'u32'},{o:4,l:'PT1',t:'u32'},{o:6,l:'PT2',t:'u16'}];\n"
 "var CT_F=[{o:0,l:'I Nominal',t:'u16'},{o:1,l:'CT1',t:'u16'},{o:2,l:'CT2',t:'u16',opt:CT2M},{o:3,l:'Turns',t:'u16'},{o:4,l:'Start I',t:'u16'},{o:5,l:'CT1 Dir',t:'u16',opt:DIRM},{o:6,l:'CT2 Dir',t:'u16',opt:DIRM},{o:7,l:'CT3 Dir',t:'u16',opt:DIRM},{o:8,l:'Rogowski',t:'u16'},{o:9,l:'Phase Ofs 1',t:'i16'},{o:10,l:'Phase Ofs 2',t:'i16'},{o:11,l:'Phase Ofs 3',t:'i16'},{o:12,l:'ZCT Type',t:'u16',opt:ZCTM},{o:13,l:'ZCT Scale',t:'u16'}];\n"
-"var CMDS=[{g:'System',l:'Reboot',addr:7456,danger:1,note:'reboot'},{g:'System',l:'Save Settings',addr:7457},{g:'System',l:'Init Settings',addr:7471,danger:2},{g:'System',l:'Set Time',addr:7446,utc:1},{g:'Clear / Reset',l:'Clear PI',addr:7472,danger:1},{g:'Clear / Reset',l:'Clear Demand',addr:7473,tgt:1},{g:'Clear / Reset',l:'Clear Min/Max',addr:7483,tgt:1},{g:'Clear / Reset',l:'Clear Energy',addr:7493,tgt:1,danger:1},{g:'Clear / Reset',l:'Clear Alarm',addr:7503,tgt:1},{g:'Clear / Reset',l:'Clear Event',addr:7513,tgt:1},{g:'Acknowledge',l:'Alarm Ack',addr:7543,tgt:1},{g:'Acknowledge',l:'Event Ack',addr:7553,tgt:1}];\n"
-"function setEnter(tab){setTab(tab||'general');}\n"
-"function setTab(t){setCur=t;['general','pt','ct','iom','command','alarm'].forEach(function(x){var e=$('gt-'+x);if(e)e.className='gp-tab'+(x===t?' on':'');});\n"
-" $('setSave').style.display=((t!=='command')&&IS_ADMIN)?'':'none';$('setRes').textContent='';\n"
-" $('setBadge').textContent=(t==='alarm')?'Channel Setting':'Main Setting';\n"
-" $('si-setup').className='sitem'+(t!=='alarm'?' active':'');$('si-chset').className='sitem'+(t==='alarm'?' active':'');reloadSet();}\n"
-"function reloadSet(){var t=setCur;if(t==='general')loadGeneral();else if(t==='pt')loadGroup('pt');else if(t==='ct')loadGroup('ct');else if(t==='iom')loadIO();else if(t==='command')loadCommand();else if(t==='alarm')loadAlarm();}\n"
+"var CMDS=[{g:'System',l:'Reboot',addr:7456,danger:1,note:'reboot'},{g:'System',l:'Save Settings',addr:7457},{g:'System',l:'Init Settings',addr:7471,danger:2},{g:'System',l:'Set Time',addr:7446,utc:1},{g:'Clear / Reset',l:'Clear PI',addr:7472,danger:1},{g:'Clear / Reset',l:'Clear Demand',addr:7473,tgt:1},{g:'Clear / Reset',l:'Clear Min/Max',addr:7483,tgt:1},{g:'Clear / Reset',l:'Clear Energy',addr:7493,tgt:1,danger:1},{g:'Clear / Reset',l:'Clear Alarm',addr:7503,tgt:1},{g:'Clear / Reset',l:'Clear Event',addr:7513,tgt:1},{g:'Acknowledge',l:'Alarm Ack',addr:7543,tgt:1},{g:'Acknowledge',l:'Event Ack',addr:7553,tgt:1},{g:'Load (navigate)',l:'Load Event',addr:7523,tgt:1},{g:'Load (navigate)',l:'Load Alarm',addr:7533,tgt:1},{g:'Load (navigate)',l:'Load ITIC',addr:7563,tgt:1},{g:'Load (navigate)',l:'Load ITIC2',addr:7566,tgt:1}];\n"
+"var MAIN_TABS=[['general','General'],['pt','PT'],['ct','CT'],['iom','IO'],['command','Command']];\n"
+"var CHAN_TABS=[['pqevent','PQ Event'],['transient','Transient'],['waveform','Waveform'],['disturb','Disturbance'],['trend','Trend'],['pqreport','PQ Report'],['almdef','Alarm Def'],['alarm','Alarm Settings']];\n"
+"var setMode='main';\n"
+"function setEnter(arg){setMode=(arg==='chan')?'chan':'main';$('setBadge').textContent=(setMode==='chan')?'Channel Setting':'Main Setting';$('si-setup').className='sitem'+(setMode==='main'?' active':'');$('si-chset').className='sitem'+(setMode==='chan'?' active':'');setTab(((setMode==='chan')?CHAN_TABS:MAIN_TABS)[0][0]);}\n"
+"function setTab(t){setCur=t;var L=(setMode==='chan')?CHAN_TABS:MAIN_TABS,h='';L.forEach(function(p){h+=\"<a class='gp-tab\"+(p[0]===t?' on':'')+\"' data-t='\"+p[0]+\"'>\"+esc(p[1])+'</a>';});var st=$('setTabs');st.innerHTML=h;st.onclick=function(e){var a=e.target.closest('a[data-t]');if(a)setTab(a.getAttribute('data-t'));};\n"
+" $('setSave').style.display=((t!=='command')&&IS_ADMIN)?'':'none';$('setRes').textContent='';$('setBody').innerHTML=\"<p class='stub'>loading...</p>\";reloadSet();}\n"
+"function reloadSet(){var t=setCur;if(t==='general')loadGeneral();else if(t==='pt')loadGroup('pt');else if(t==='ct')loadGroup('ct');else if(t==='iom')loadIO();else if(t==='command')loadCommand();else if(t==='alarm')loadAlarm();else loadCSect(t);}\n"
+"var CSECT={pqevent:[[6700,'Level','Over Current'],[6701,'Cycle','Over Current'],[6702,'Trigger Action','Over Current'],[6703,'holdOff Cycle','Over Current'],[6706,'Level(%)','Sag',1],[6707,'Cycle','Sag',1],[6708,'Trigger Action','Sag',1],[6709,'holdOff Cycle','Sag',1],[6712,'Level(%)','Swell',1],[6713,'Cycle','Swell',1],[6714,'Trigger Action','Swell',1],[6715,'holdOff Cycle','Swell',1],[6718,'Level(%)','Interruption',1],[6719,'Time(s)','Interruption',1],[6720,'Trigger Action','Interruption',1],[6721,'holdOff Cycle','Interruption',1]],transient:[[6724,'HoldOff(ms)','Voltage',1],[6725,'Abs Peak(%)','Voltage',1],[6726,'Fast Change','Voltage',1],[6727,'Trigger Action','Voltage',1],[6728,'HoldOff','Current'],[6729,'Abs Peak','Current'],[6730,'Fast Change','Current'],[6731,'Trigger Action','Current']],waveform:[[6744,'Resolution(32k/8k)'],[6745,'Param(U/I)'],[6746,'Pre trig(0.1s)'],[6747,'Post trig(1s)']],disturb:[[6748,'Resolution(HalfCyc)'],[6749,'Param(U/I)'],[6750,'Pre trig(smp)'],[6751,'Post trig(smp)']],pqreport:[[6844,'Active'],[6845,'Start Day']],almdef:[[6854,'compare Time Delay(s)']]};\n"
+"(function(){var t=[];[[1,6764,6766,6767],[2,6783,6785,6786],[3,6802,0,6805],[4,6821,0,6824]].forEach(function(g){var gn='Group '+g[0];t.push([g[1],'Active',gn]);t.push([g[1]+1,'Interval',gn]);if(g[2])t.push([g[2],'Version',gn]);for(var k=0;k<16;k++)t.push([g[3]+k,'Ch'+(k+1),gn]);});CSECT.trend=t;})();\n"
+"function loadCSect(key){var f=CSECT[key];if(!f){$('setBody').innerHTML=\"<p class='stub'>-</p>\";return;}var lo=f[0][0],hi=f[0][0];f.forEach(function(p){if(p[0]<lo)lo=p[0];if(p[0]>hi)hi=p[0];});var nn=hi-lo+1;\n"
+" Promise.all([1,2,3].map(function(ch){return j('/api/regs?addr='+(lo+(ch-1)*10000)+'&n='+nn).then(function(r){return (r.d&&r.d.ok)?r.d.words:null;}).catch(function(){return null;});})).then(function(bl){if(setCur!==key)return;\n"
+"  var h=\"<div class='setgrid'>\";for(var ch=1;ch<=3;ch++){var wds=bl[ch-1];h+=\"<div class='setcard'><h3>CH\"+ch+'</h3>';\n"
+"   if(!wds){h+=\"<p class='stub'>no data</p>\";}else{var pg=null;f.forEach(function(p){if(ch>1&&p[3])return;var g=p[2]||'';if(g&&g!==pg){h+=\"<div class='sgrp'>\"+esc(g)+\"</div>\";}pg=g;var addr=p[0]+(ch-1)*10000,v=wds[p[0]-lo]||0;h+=\"<div class='srow'><span class='sk'>\"+esc(p[1])+\"</span><input type='number' data-addr='\"+addr+\"' data-type='u16' data-orig='\"+v+\"' value='\"+v+\"' \"+(IS_ADMIN?'':'disabled')+\" oninput='setMark(this)'></div>\";});}\n"
+"   h+='</div>';}h+='</div>';$('setBody').innerHTML=h;$('setNote').textContent=IS_ADMIN?'변경 후 Save & Apply(재부팅 없이 저장).':'Viewer 모드 - 읽기 전용.';});}\n"
 "function fmtV(f){return (f.type==='bool')?(f.val?'On':'Off'):esc(f.val)}\n"
 "function ctlOf(f){var d=\"data-addr='\"+f.addr+\"' data-type='\"+f.type+\"' data-orig='\"+esc(f.val)+\"'\",dis=IS_ADMIN?'':'disabled';\n"
 " if(f.ro)return \"<span class='sv'>\"+fmtV(f)+\"</span><span class='rtag'>R</span>\";\n"
@@ -1533,12 +1555,13 @@ static const char INDEX_HTML[] =
 " g.strokeStyle='rgba(128,140,155,.2)';g.fillStyle='#8b9bb0';g.font='8px sans-serif';\n"
 " [0,0.5,1].forEach(function(f){var yv=mn+(mx-mn)*f,y=gy(yv);g.beginPath();g.moveTo(pad,y);g.lineTo(w,y);g.stroke();g.fillText(yv.toFixed(0),2,y+3);});\n"
 " for(si=0;si<3;si++){g.strokeStyle=PCOL[si];g.lineWidth=1.4;g.beginPath();for(k=0;k<L;k++){var x=pad+(w-pad-6)*k/(L-1),y=gy(series[si][k]);if(k===0)g.moveTo(x,y);else g.lineTo(x,y);}g.stroke();}}\n"
-"var EN_ROWS=[['Frequency Variation 1','(+1%~-1%),99.5%/Wk'],['Frequency Variation 2','(+4%~-6%),100%/Wk'],['Voltage Variation 1','(+10%~-10%),95%/Wk'],['Voltage Variation 2','(+10~-15%),100%/Wk'],['Voltage Unbalance','(<2%),100%/Wk'],['THD','(<8%),95%/Wk'],['Harmonics','(0.5%~6%),95%/Wk'],['Plt','(1),95%/Wk']],EN_INFO=['Voltage Sag','Voltage Swell','Short Interruption','Signaling Volt.'];\n"
+"var EN_ROWS=[['Frequency Variation 1','(+1%~-1%),99.5%/Wk',99.5],['Frequency Variation 2','(+4%~-6%),100%/Wk',100],['Voltage Variation 1','(+10%~-10%),95%/Wk',95],['Voltage Variation 2','(+10~-15%),100%/Wk',100],['Voltage Unbalance','(<2%),100%/Wk',100],['THD','(<8%),95%/Wk',95],['Harmonics','(0.5%~6%),95%/Wk',95],['Plt','(1),95%/Wk',95]],EN_INFO=['Voltage Sag','Voltage Swell','Short Interruption','Signaling Volt.'];\n"
+"function passOf(v,thr){var ok=true,any=false,i;for(i=0;i<3;i++){if(v[i]!=null){any=true;if(v[i]<thr)ok=false;}}return (any&&ok)?1:0;}\n"
 "function enNv(v){return (v==null)?'-':Number(v).toFixed(1);}\n"
-"function bReport(x){var ok=x.rows.every(function(r){return r.p===1;});\n"
-" var h=`<div class='cmeta'>${ts2(x.start)} ~ ${ts2(x.end)} · <span class='enb ${ok?'pass':'fail'}'>${ok?'Compliant':'Non-compliant'}</span></div><table class='ctbl hsm'><tr><th>Parameter</th><th>L1</th><th>L2</th><th>L3</th><th>Comp</th></tr>`;\n"
-" x.rows.forEach(function(r,ri){h+=`<tr><td class='rk'>${EN_ROWS[ri][0]}</td><td>${enNv(r.v[0])}</td><td>${enNv(r.v[1])}</td><td>${enNv(r.v[2])}</td><td><span class='enb ${r.p?'pass':'fail'}'>${r.p?'Pass':'Fail'}</span></td></tr>`;});\n"
-" x.info.forEach(function(v,k){h+=`<tr><td class='rk'>${EN_INFO[k]}</td><td>${n(v,k<3?0:1)}</td><td>-</td><td>-</td><td><span class='enb info'>Info</span></td></tr>`;});\n"
+"function bReport(x){var okAll=x.rows.every(function(r,ri){return passOf(r.v,EN_ROWS[ri][2])===1;});\n"
+" var h=`<div class='cmeta'>${ts2(x.start)} ~ ${ts2(x.end)} · <span class='enb ${okAll?'pass':'fail'}'>${okAll?'Compliant':'Non-compliant'}</span></div><table class='ctbl hsm'><tr><th>Parameter</th><th>L1</th><th>L2</th><th>L3</th><th>Comp</th><th>Requirement</th></tr>`;\n"
+" x.rows.forEach(function(r,ri){var p=passOf(r.v,EN_ROWS[ri][2]);h+=`<tr><td class='rk'>${EN_ROWS[ri][0]}</td><td>${enNv(r.v[0])}</td><td>${enNv(r.v[1])}</td><td>${enNv(r.v[2])}</td><td><span class='enb ${p?'pass':'fail'}'>${p?'Pass':'Fail'}</span></td><td class='ph2'>${EN_ROWS[ri][1]}</td></tr>`;});\n"
+" x.info.forEach(function(v,k){h+=`<tr><td class='rk'>${EN_INFO[k]}</td><td>${n(v,k<3?0:1)}</td><td>-</td><td>-</td><td><span class='enb info'>Info</span></td><td class='ph2'>Info Only</td></tr>`;});\n"
 " return h+`</table><div class='hsub'>ITIC (CBEMA) Curve</div><canvas id='it${x.n}' class='itcv'></canvas>`;}\n"
 "var ITIC_UP=[[0.0001,500],[0.001,200],[0.003,140],[0.003,120],[10,120],[10,110],[100,110]],ITIC_LO=[[0.0001,0],[0.02,0],[0.02,70],[0.5,70],[0.5,80],[10,80],[10,90],[100,90]];\n"
 "function drawITIC(id){var cv=$(id);if(!cv)return;var w=cv.clientWidth||400;cv.width=w;cv.height=240;var g=cv.getContext('2d'),pl=40,pr=10,pt=12,pb=22,h=240;\n"
@@ -1564,13 +1587,13 @@ static const char INDEX_HTML[] =
 " g.strokeStyle='rgba(128,140,155,.3)';g.beginPath();g.moveTo(pad,180-pad);g.lineTo(w,180-pad);g.stroke();}\n"
 "function syncHv(){var a=$('hvt'),b=$('hvc');if(a)a.className='btn'+(harmView==='table'?' primary':'');if(b)b.className='btn'+(harmView==='chart'?' primary':'');}\n"
 "function bAlarm(x,ev){var st=ev.status.filter(function(s){return s.chn===x.n;}),lg=ev.alarmlog.filter(function(s){return s.chn===x.n;});\n"
-" var h=\"<div class='hsub'>Active</div><table class='ctbl'><tr><th>Channel</th><th>State</th><th>Cnt</th></tr>\";\n"
-" if(!st.length)h+=\"<tr><td colspan='3' class='empty'>None</td></tr>\";st.forEach(function(s){h+=`<tr><td class='rk'>${esc(acn(s.chan))}</td><td><span class='st set'>Set</span></td><td>${s.count}</td></tr>`;});\n"
-" h+=\"</table><div class='hsub'>Log</div><table class='ctbl'><tr><th>Channel</th><th>Val</th><th>Time</th></tr>\";\n"
-" if(!lg.length)h+=\"<tr><td colspan='3' class='empty'>No log</td></tr>\";lg.forEach(function(s){h+=`<tr><td class='rk'>${esc(acn(s.chan))}</td><td>${n(s.value,2)}</td><td class='ts'>${ts2(s.ts)}</td></tr>`;});return h+'</table>';}\n"
+" var h=`<div class='hsub'>Alarm Status <span class='ph2'>(${st.length} active)</span></div><table class='ctbl'><tr><th>Alarm Channel</th><th>State</th><th>Count</th></tr>`;\n"
+" if(!st.length)h+=\"<tr><td colspan='3' class='empty'>No active alarms</td></tr>\";st.forEach(function(s){h+=`<tr><td class='rk'>${esc(acn(s.chan))}</td><td><span class='st set'>Set</span></td><td>${s.count}</td></tr>`;});\n"
+" h+=\"</table><div class='hsub'>Alarm Log</div><table class='ctbl'><tr><th>Channel</th><th>State</th><th>Value</th><th>Time</th></tr>\";\n"
+" if(!lg.length)h+=\"<tr><td colspan='4' class='empty'>No alarm log</td></tr>\";lg.forEach(function(s){h+=`<tr><td class='rk'>${esc(acn(s.chan))}</td><td><span class='st ${s.set?'set':'clr'}'>${s.set?'Set':'Clear'}</span></td><td>${n(s.value,2)}</td><td class='ts'>${ts2(s.ts)}</td></tr>`;});return h+'</table>';}\n"
 "function bEvent(x,ev){var el=ev.eventlog.filter(function(s){return s.chn===x.n;});\n"
-" var h=\"<table class='ctbl'><tr><th>Type</th><th>Time</th><th>Dur</th><th>Lv</th></tr>\";\n"
-" if(!el.length)h+=\"<tr><td colspan='4' class='empty'>No events</td></tr>\";el.forEach(function(e){var t=ET[e.type]||['#'+e.type,'oc'];h+=`<tr><td><span class='evt ${t[1]}'>${t[0]}</span></td><td class='ts'>${ts2(e.ts)}</td><td>${e.dur}</td><td>${n(e.level,2)}</td></tr>`;});return h+'</table>';}\n"
+" var h=\"<table class='ctbl'><tr><th>Type</th><th>Start Time</th><th>Dur(ms)</th><th>Phase</th><th>Level</th></tr>\";\n"
+" if(!el.length)h+=\"<tr><td colspan='5' class='empty'>No events</td></tr>\";el.forEach(function(e){var t=ET[e.type]||['#'+e.type,'oc'],ph=[];if(e.mask&1)ph.push('L1');if(e.mask&2)ph.push('L2');if(e.mask&4)ph.push('L3');h+=`<tr><td><span class='evt ${t[1]}'>${t[0]}</span></td><td class='ts'>${ts2(e.ts)}</td><td>${e.dur}</td><td>${ph.join(',')||'-'}</td><td>${n(e.level,2)}</td></tr>`;});return h+'</table>';}\n"
 "function loadChannelTab(){var t=chTabCur;\n"
 " if(t==='meter'||t==='phase')return j('/api/channels').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=chCards(r.d.ch,t==='meter'?bMeter:bPhase);}).catch(chFail);\n"
 " if(t==='minmax')return j('/api/minmax').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=chCards(r.d.ch,bMm);}).catch(chFail);\n"
@@ -1580,13 +1603,16 @@ static const char INDEX_HTML[] =
 "  r.d.ch.forEach(function(x){drawDemand('dm'+x.n,x.vals,x.peak);});\n"
 " }).catch(chFail);\n"
 " if(t==='harmonics')return j('/api/harmonics?opt='+harmOpt).then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);\n"
-"  if(harmView==='chart'){$('chbody').innerHTML=chCards(r.d.ch,function(x){return \"<canvas id='hc\"+x.n+\"' class='hcv'></canvas>\";});r.d.ch.forEach(function(x){drawHarm('hc'+x.n,x.ph,r.d.orders);});}\n"
-"  else{$('chbody').innerHTML=chCards(r.d.ch,function(x){return harmTable(x,r.d.orders);});}\n"
+"  if(harmOpt==='cur'){$('chbody').innerHTML=chCards(r.d.ch,function(x){return \"<div class='hsub'>Chart</div><canvas id='hc\"+x.n+\"' class='hcv'></canvas><div class='hsub' style='margin-top:10px'>Table</div>\"+harmTable(x,r.d.orders);});r.d.ch.forEach(function(x){drawHarm('hc'+x.n,x.ph,r.d.orders);});return;}\n"
+"  var x=r.d.ch.filter(function(c){return c.n===1;})[0];\n"
+"  if(!x){$('chbody').innerHTML=\"<p class='stub'>no data</p>\";return;}\n"
+"  $('chbody').innerHTML=\"<div class='chcard'><div class='chh'>CH1</div><div class='hsub'>Chart</div><canvas id='hc1' class='hcv'></canvas><div class='hsub' style='margin-top:10px'>Table</div>\"+harmTable(x,r.d.orders)+\"</div>\";\n"
+"  drawHarm('hc1',x.ph,r.d.orders);\n"
 " }).catch(chFail);\n"
 " if(t==='waveform')return j('/api/waveform').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);\n"
 "  $('chbody').innerHTML=chCards(r.d.channels,function(x){return \"<div class='hsub'>Voltage</div><canvas id='wv\"+x.n+\"' class='wcv'></canvas><div class='hsub'>Current</div><canvas id='wi\"+x.n+\"' class='wcv'></canvas>\";});\n"
 "  r.d.channels.forEach(function(x){drawLines('wv'+x.n,x.v);drawLines('wi'+x.n,x.i);});}).catch(chFail);\n"
-" if(t==='report')return j('/api/en50160').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=chCards(r.d.ch,bReport);r.d.ch.forEach(function(x){drawITIC('it'+x.n);});}).catch(chFail);\n"
+" if(t==='report')return j('/api/en50160').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);var x=r.d.ch[0];if(!x)return;$('chbody').innerHTML=\"<div class='chcard'><div class='chh'>CH\"+x.n+\" · EN50160</div>\"+bReport(x)+'</div>';drawITIC('it'+x.n);}).catch(chFail);\n"
 " if(t==='monthly')return j('/api/monthly').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=chCards(r.d.ch,bMonthly);}).catch(chFail);\n"
 " if(t==='alarm'||t==='event')return j('/api/sv300/events').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=chCards(CHN,function(x){return (t==='alarm'?bAlarm:bEvent)(x,r.d);});}).catch(chFail);\n"
 " return Promise.resolve();}\n"

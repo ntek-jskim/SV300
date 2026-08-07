@@ -14,8 +14,8 @@
 
 #define	FW_VER	0002
 #define	FW_BUILD_YEAR 26
-#define	FW_BUILD_MON  7
-#define	FW_BUILD_DAY  24
+#define	FW_BUILD_MON  8
+#define	FW_BUILD_DAY  5
 
 #define	SQRT_2	 1.414213562 
 
@@ -382,11 +382,11 @@ int initSettings(int id)
 		db.comm.ip0[0] = 192;
 		db.comm.ip0[1] = 168;
 		db.comm.ip0[2] = 9;
-		db.comm.ip0[3] = 125;
+		db.comm.ip0[3] = 124;
 
 		db.comm.sm0[0] = 255;
 		db.comm.sm0[1] = 255;
-		db.comm.sm0[2] = 0;
+		db.comm.sm0[2] = 255;
 		db.comm.sm0[3] = 0;
 
 		db.comm.gw0[0] = 192;
@@ -1088,10 +1088,9 @@ int loadSettings(SETTINGS	*pdb)
 	for (id = 0; id < METER_CH_COUNT; id++)
 		buildSettings(id);
 
-#ifdef	METER_TEST_DATA
 	for (id = 0; id < METER_CH_COUNT; id++)
 		buildAlarmSettings(id);
-#endif	
+
 	for (id = 0; id < METER_CH_COUNT; id++)
 		buildExtSettings(id);
 		
