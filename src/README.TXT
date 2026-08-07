@@ -14,6 +14,8 @@
 26/08/07 FW V00.02
   1) Web: Main Setting 확장 — Device Info(S/N·MAC·FW Build Date)·Command Load 그룹 추가, Channel Setting 7섹션(PQ Event/Transient/Waveform/Disturbance/Trend/PQ Report/Alarm Def) 신규(그룹핑)
   2) Web: 전압공유(M0~M2) 반영 — PQ Event Sag/Swell/Intr·Transient Voltage는 CH2/3 숨김, Harmonics는 CH1 Chart+Table 동시(전류만 CH1~3)
+  3) FW/Web: 명령맵(260807) 정렬(ALL+#1~3) + Alarm/Event/ITIC의 Load(페이지)·Clear를 Command→측정화면으로 이동, ITIC는 웹=itic2·외부=itic 분리
+  4) FW/Web: Min/Max·Energy·Demand Clear 버튼, 대시보드 IOM DATA(7050~7069) 표시, Energy 영역 R/W(FW 쓰기경로) — Energy 웹 전체편집은 flash 초과로 보류
 
 NOSDMEM : SD MEMORY Y/N
 HWV1 : CH3(METER CHIP SELECT)

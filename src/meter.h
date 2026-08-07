@@ -2032,10 +2032,10 @@ typedef struct {
 #define MBAD_SET_TS				MB_FIELD_OFF(cmds)			/* UTC Time  = 7446 */
 #define MBAD_SET_CMD			(MBAD_SET_TS + 10u)			/* 명령 시작 = 7456 */
 #define MBAD_SET_END			(MBAD_SET_TS + 127u)		/* 명령 끝   = 7573 */
-#define MBAD_CMD_FETCH_EVENT		(MBAD_SET_CMD + 67)		/* load event  = 7523 */
-#define MBAD_CMD_FETCH_ALARM		(MBAD_SET_CMD + 77)		/* load alarm  = 7533 */
-#define MBAD_CMD_FETCH_ITIC			(MBAD_SET_CMD + 107)	/* load itic   = 7563 */
-#define MBAD_CMD_FETCH_ITIC2		(MBAD_SET_CMD + 110)	/* load itic2  = 7566 */
+#define MBAD_CMD_FETCH_EVENT		(MBAD_SET_CMD + 37)		/* load event ALL,#1~3 = 7493 */
+#define MBAD_CMD_FETCH_ALARM		(MBAD_SET_CMD + 41)		/* load alarm ALL,#1~3 = 7497 */
+#define MBAD_CMD_FETCH_ITIC			(MBAD_SET_CMD + 53)		/* load itic  = 7509 (단일 레지스터) */
+#define MBAD_CMD_FETCH_ITIC2		(MBAD_SET_CMD + 54)		/* load itic2 = 7510 (단일 레지스터) */
 
 #define METER_MB_SETTING_REGS(m)	((uint16_t *)&(m).pqevt)
 

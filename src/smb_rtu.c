@@ -555,61 +555,59 @@ void cmdProc()
 			printf("[CLEAR PI]\n");
 //			reqFactoryReset(c);
 			break;
-		// clear demand: base+0=all, base+1~3=CH0~2
+		/* 260807 맵: ALL+#1~3(4개), spacing 4. load event/alarm(37~44)은 handleFetchCmd 동기처리 */
+		// clear demand: base+0=all, base+1~3=CH0~2  (7473~7476)
 		case 17:
 		case 18:
 		case 19:
 		case 20:
 			dispatchMeterChCmd(17, addr, c, clearDemand);
 			break;
-		// clear minmax
+		// clear minmax (7477~7480)
+		case 21:
+		case 22:
+		case 23:
+		case 24:
+			dispatchMeterChCmd(21, addr, c, clearMinMax);
+			break;
+		// clear energy (7481~7484)
+		case 25:
+		case 26:
 		case 27:
 		case 28:
+			dispatchMeterChCmd(25, addr, c, clearEnergy);
+			break;
+		// clear alarm (7485~7488)
 		case 29:
 		case 30:
-			dispatchMeterChCmd(27, addr, c, clearMinMax);
+		case 31:
+		case 32:
+			dispatchMeterChCmd(29, addr, c, clearAlarm);
 			break;
-		// clear energy
-		case 37:
-		case 38:
-		case 39:
-		case 40:
-			dispatchMeterChCmd(37, addr, c, clearEnergy);
+		// clear event (7489~7492)
+		case 33:
+		case 34:
+		case 35:
+		case 36:
+			dispatchMeterChCmd(33, addr, c, clearEventListCmd);
 			break;
-		// clear alarm
+		// alarm ack (7501~7504, +0~+3 → 공통 METER_INFO)
+		case 45:
+		case 46:
 		case 47:
 		case 48:
-		case 49:
-		case 50:
-			dispatchMeterChCmd(47, addr, c, clearAlarm);
-			break;
-		// clear event
-		case 57:
-		case 58:
-		case 59:
-		case 60:
-			dispatchMeterChCmd(57, addr, c, clearEventListCmd);
-			break;
-		// ack alarm (+0~+3 → 공통 METER_INFO, per-CH 분기 없음)
-		case 87:
-		case 88:
-		case 89:
-		case 90:
 			ackAlarmCmd(c);
 			break;
-		// ack event (+0~+3 → 공통 METER_INFO)
-		case 97:
-		case 98:
-		case 99:
-		case 100:
+		// event ack (7505~7508, +0~+3 → 공통 METER_INFO)
+		case 49:
+		case 50:
+		case 51:
+		case 52:
 			ackEventCmd(c);
 			break;
-		// clear ITIC list
-		case 113:
-		case 114:
-		case 115:
-		case 116:
-			dispatchMeterChCmd(113, addr, c, clearIticList);
+		// clear ITIC,ITIC2 (7511, 단일 레지스터 → CH1, itic·itic2 동시)
+		case 55:
+			clearIticList(0, c);
 			break;
 	}
 }

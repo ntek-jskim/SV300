@@ -529,6 +529,10 @@ static uint16_t *getMeterRegBaseById(int id) {
 
 static int meterRwRangeValid(uint16_t offset, uint16_t count)
 {
+	/* Energy 영역(260807 맵: R/W) — egy 구조체 범위 허용 */
+	if (offset >= MBAD_ENERGY_START &&
+	    (uint32_t)offset + count <= (uint32_t)MBAD_ENERGY_START + MBAD_ENERGY_SIZE)
+		return 1;
 	if (offset < MBAD_RW_OFF_START)
 		return 0;
 	if ((uint32_t)offset + count > MBAD_RW_OFF_END)
@@ -619,22 +623,26 @@ static int decodeMeterAddress(uint16_t address, int *id, uint16_t *offset) {
 /* fetch: MBAD_CMD_FETCH_* (+67/+77/+107/+110) 베이스+0/1/2 → id 0/1/2 */
 static int handleFetchCmd(uint16_t cmdAddr, uint16_t cmd)
 {
-	if (cmdAddr >= MBAD_CMD_FETCH_EVENT && cmdAddr < (MBAD_CMD_FETCH_EVENT + METER_CH_COUNT)) {
-		fetchEvent(cmdAddr - MBAD_CMD_FETCH_EVENT, cmd);
+	int ch;
+	/* load event: ALL(base)=전채널, base+1~3=CH1~3 */
+	if (cmdAddr >= MBAD_CMD_FETCH_EVENT && cmdAddr <= MBAD_CMD_FETCH_EVENT + METER_CH_COUNT) {
+		if (cmdAddr == MBAD_CMD_FETCH_EVENT)
+			for (ch = 0; ch < METER_CH_COUNT; ch++) fetchEvent(ch, cmd);
+		else
+			fetchEvent(cmdAddr - MBAD_CMD_FETCH_EVENT - 1, cmd);
 		return 1;
 	}
-	if (cmdAddr >= MBAD_CMD_FETCH_ALARM && cmdAddr < (MBAD_CMD_FETCH_ALARM + METER_CH_COUNT)) {
-		fetchAlarm(cmdAddr - MBAD_CMD_FETCH_ALARM, cmd);
+	/* load alarm: ALL(base)=전채널, base+1~3=CH1~3 */
+	if (cmdAddr >= MBAD_CMD_FETCH_ALARM && cmdAddr <= MBAD_CMD_FETCH_ALARM + METER_CH_COUNT) {
+		if (cmdAddr == MBAD_CMD_FETCH_ALARM)
+			for (ch = 0; ch < METER_CH_COUNT; ch++) fetchAlarm(ch, cmd);
+		else
+			fetchAlarm(cmdAddr - MBAD_CMD_FETCH_ALARM - 1, cmd);
 		return 1;
 	}
-	if (cmdAddr >= MBAD_CMD_FETCH_ITIC && cmdAddr < (MBAD_CMD_FETCH_ITIC + METER_CH_COUNT)) {
-		fetchItic(cmdAddr - MBAD_CMD_FETCH_ITIC, cmd);
-		return 1;
-	}
-	if (cmdAddr >= MBAD_CMD_FETCH_ITIC2 && cmdAddr < (MBAD_CMD_FETCH_ITIC2 + METER_CH_COUNT)) {
-		fetchItic2(cmdAddr - MBAD_CMD_FETCH_ITIC2, cmd);
-		return 1;
-	}
+	/* load ITIC / ITIC2: 단일 레지스터(CH1) */
+	if (cmdAddr == MBAD_CMD_FETCH_ITIC)  { fetchItic(0, cmd);  return 1; }
+	if (cmdAddr == MBAD_CMD_FETCH_ITIC2) { fetchItic2(0, cmd); return 1; }
 	return 0;
 }
 
@@ -1113,6 +1121,10 @@ int writeMemCb(uint16_t address, uint16_t value) {
 
 	if (decodeMeterAddress(address, &id, &offset) != 0)
 		return -1;
+
+	/* Energy 영역(260807 맵 R/W) — CH1(id0)/CH2/CH3 모두 egy 구조체에 직접 기록 */
+	if (offset >= MBAD_ENERGY_START && offset < MBAD_ENERGY_START + MBAD_ENERGY_SIZE)
+		return (writeMeterHoldReg(id, offset, value) < 0) ? -1 : 0;
 
 	if (id == 1 && offset >= MBAD_RW_OFF_START && offset < MBAD_RW_OFF_END) {
 		if (writeMeterHoldReg(1, offset, value) < 0)

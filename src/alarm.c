@@ -922,9 +922,10 @@ void fetchEvent(int id, int cmd) {
 
 static int iticTypeMatches(int mode, uint16_t type)
 {
-	if (mode == 0)
-		return type >= E_SAG && type <= E_RVC;
-	return type == E_TrV || type == E_TrC;
+	(void)mode;
+	/* itic·itic2 모두 전압 ITIC 이벤트(sag/swell/intr/RVC). itic2는 itic의 2번째 독립 창
+	 * — 외부서버(load itic)와 웹(load itic2)이 각자 페이지 커서를 갖도록 분리 */
+	return type >= E_SAG && type <= E_RVC;
 }
 
 static void fetchIticCommon(int id, int mode, int cmd)
