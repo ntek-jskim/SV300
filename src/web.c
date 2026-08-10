@@ -856,10 +856,10 @@ static error_t apiCommand(HttpConnection *c)
 		if (p) { p++; while (*p && *p != '"' && o < (int)sizeof(cmd) - 1) cmd[o++] = *p++; cmd[o] = 0; }
 	}
 
-	if      (!strcmp(cmd, "clear_alarm")) addr = 7485;   /* clear alarm ALL(260807 맵) */
-	else if (!strcmp(cmd, "clear_event")) addr = 7489;   /* clear event ALL */
-	else if (!strcmp(cmd, "ack_alarm"))   addr = 7501;   /* alarm ack ALL */
-	else if (!strcmp(cmd, "ack_event"))   addr = 7505;   /* event ack ALL */
+	if      (!strcmp(cmd, "clear_alarm")) addr = 7477;   /* clear alarm ALL(260807 맵) */
+	else if (!strcmp(cmd, "clear_event")) addr = 7481;   /* clear event ALL */
+	else if (!strcmp(cmd, "ack_alarm"))   addr = 7493;   /* alarm ack ALL */
+	else if (!strcmp(cmd, "ack_event"))   addr = 7497;   /* event ack ALL */
 	else return webJsonStatus(c, 400, "{\"ok\":false,\"error\":\"bad cmd\"}");
 
 	writeMemCb(addr, 0x1234);   /* ALL 대상(offset 0) */
@@ -915,16 +915,25 @@ typedef struct {
 	uint8_t     type, card, ro, nw;
 } GField;
 
-/* card: 0=Device Information, 1=Communication, 2=ETC */
+/* card: 0=Device Information, 1=Communication, 2=ETC, 3=Status */
 static const GField GEN[] = {
 	{ "name",            "Name",                 7134, WT_STR,    0, 1, 16 },
 	{ "serial",          "Serial Number",        7070, WT_SERIAL, 0, 1, 0 },
 	{ "mac",             "MAC Address",          7076, WT_MAC,    0, 1, 0 },
-	{ "hw_model",        "HW Model",             7086, WT_U16,    0, 1, 0 },
-	{ "hw_version",      "HW Version",           7087, WT_U16,    0, 1, 0 },
-	{ "fw_version",      "FW Version",           7088, WT_U16,    0, 1, 0 },
-	{ "fw_build",        "FW Build Date",        7089, WT_FWDATE, 0, 1, 0 },
-	{ "timezone",        "Timezone",             7413, WT_I16,    0, 0, 0 },
+	{ "hw_version",      "HW Version",           7086, WT_U16,    0, 1, 0 },
+	{ "fw_version",      "FW Version",           7087, WT_U16,    0, 1, 0 },
+	{ "fw_build",        "FW Build Date",        7088, WT_FWDATE, 0, 1, 0 },
+	{ "timezone",        "Timezone",             7401, WT_I16,    0, 0, 0 },
+	{ "heartbit",        "Heart Bit",            7091, WT_U16,  3, 1, 0 },
+	{ "mbus_rx",         "Modbus RX",            7092, WT_U16,  3, 1, 0 },
+	{ "alarm_sts",       "Alarm STS",            7093, WT_U16,  3, 1, 0 },
+	{ "event_sts",       "Event STS",            7094, WT_U16,  3, 1, 0 },
+	{ "rstp_sts0",       "RSTP STS #0",          7095, WT_U16,  3, 1, 0 },
+	{ "rstp_sts1",       "RSTP STS #1",          7096, WT_U16,  3, 1, 0 },
+	{ "sntp_sts",        "SNTP STS",             7097, WT_U16,  3, 1, 0 },
+	{ "dev_sts",         "DEV STS",              7098, WT_U16,  3, 1, 0 },
+	{ "net_sts",         "NET STS",              7099, WT_U16,  3, 1, 0 },
+	{ "tot_sts",         "TOT STS",              7100, WT_U16,  3, 1, 0 },
 	{ "device_id",       "Device ID",            7110, WT_U16,  1, 0, 0 },
 	{ "tcp_port",        "TCP Port",             7111, WT_U16,  1, 0, 0 },
 	{ "dhcp",            "DHCP",                 7154, WT_BOOL, 1, 0, 0 },
@@ -939,12 +948,12 @@ static const GField GEN[] = {
 	{ "pf_sign",         "PF Sign",              7389, WT_U16,  2, 0, 0 },
 	{ "demand_interval", "Demand Interval (min)",7390, WT_U16,  2, 0, 0 },
 	{ "target_demand",   "Target Demand (W)",    7392, WT_U32,  2, 0, 0 },
-	{ "backlight_off",   "Backlight Off (sec)",  7410, WT_U16,  2, 0, 0 },
-	{ "brightness",      "Brightness",           7411, WT_U16,  2, 0, 0 },
-	{ "auto_rotation",   "Auto Rotation",        7412, WT_BOOL, 2, 0, 0 },
-	{ "test_mode",       "Test Mode",            7415, WT_BOOL, 2, 0, 0 },
-	{ "update_interval", "Update Interval (sec)",7416, WT_U16,  2, 0, 0 },
-	{ "minmax_reset",    "Max/Min Reset",        7414, WT_U16,  2, 0, 0 },
+	{ "backlight_off",   "Backlight Off (sec)",  7398, WT_U16,  2, 0, 0 },
+	{ "brightness",      "Brightness",           7399, WT_U16,  2, 0, 0 },
+	{ "auto_rotation",   "Auto Rotation",        7400, WT_BOOL, 2, 0, 0 },
+	{ "test_mode",       "Test Mode",            7403, WT_BOOL, 2, 0, 0 },
+	{ "update_interval", "Update Interval (sec)",7404, WT_U16,  2, 0, 0 },
+	{ "minmax_reset",    "Max/Min Reset",        7402, WT_U16,  2, 0, 0 },
 };
 #define GEN_N ((int)(sizeof(GEN) / sizeof(GEN[0])))
 
@@ -1060,12 +1069,12 @@ static error_t apiSetReg(HttpConnection *c)
 	return httpCloseStream(c);
 }
 
-/* POST /api/savecfg — admin, save settings(7457) 명령으로 설정 영속화 */
+/* POST /api/savecfg — admin, save settings(7449) 명령으로 설정 영속화 */
 static error_t apiSaveCfg(HttpConnection *c)
 {
 	if (webRole(c) != ROLE_ADMIN)
 		return webJsonStatus(c, 403, "{\"ok\":false,\"error\":\"admin only\"}");
-	writeMemCb(7457, 0x1234);
+	writeMemCb(7449, 0x1234);
 	if (beginJson(c)) return ERROR_WRITE_FAILED;
 	w(c, "{\"ok\":true}");
 	return httpCloseStream(c);
@@ -1275,6 +1284,7 @@ static const char INDEX_HTML[] =
 "   <a id='nav-dash' class='on' onclick=\"go('dash')\">Dashboard</a>\n"
 "   <a id='nav-feeder' onclick=\"go('feeder')\">Feeder</a>\n"
 "   <a id='nav-channel' onclick=\"go('channel')\">Channel</a>\n"
+"   <a id='nav-io' onclick=\"go('io')\">IO</a>\n"
 "   <a id='nav-setup' onclick=\"go('setup')\">Setup</a>\n"
 "  </nav>\n"
 "  <div class='status'>\n"
@@ -1290,6 +1300,7 @@ static const char INDEX_HTML[] =
 "   <a class='sitem active' id='si-dash' onclick=\"go('dash')\"><span class='ico'>&#128202;</span>Dashboard</a>\n"
 "   <a class='sitem' id='si-feeder' onclick=\"go('feeder')\"><span class='ico'>&#128268;</span>Feeder</a>\n"
 "   <a class='sitem' id='si-channel' onclick=\"go('channel')\"><span class='ico'>&#128225;</span>Channel</a>\n"
+"   <a class='sitem' id='si-io' onclick=\"go('io')\"><span class='ico'>&#128268;</span>IO (DI/TEMP)</a>\n"
 "   <div class='sgroup'>Setup</div>\n"
 "   <a class='sitem' id='si-setup' onclick=\"go('setup')\"><span class='ico'>&#128421;</span>Main Setting</a>\n"
 "   <a class='sitem' id='si-chset' onclick=\"go('setup','chan')\"><span class='ico'>&#9881;</span>Channel Setting</a>\n"
@@ -1344,7 +1355,6 @@ static const char INDEX_HTML[] =
 "     <div class='dcard e2'><div class='dct'>Alarm Log<button class='ebtn' id='b-clral' onclick=\"svCmd('clear_alarm')\" disabled>Clear Alarm</button></div><div class='elist'><table class='etbl' id='al-tbl'></table></div></div>\n"
 "     <div class='dcard e3'><div class='dct'>Event Log<button class='ebtn' id='b-clrev' onclick=\"svCmd('clear_event')\" disabled>Clear Event</button><button class='ebtn' id='b-ackev' onclick=\"svCmd('ack_event')\" disabled>ACK Event</button></div><div class='elist'><table class='etbl' id='el-tbl'></table></div><div class='esum' id='el-sum'></div></div>\n"
 "    </div>\n"
-"    <div class='dcard' style='margin-top:14px'><div class='dct'>IOM DATA <span class='ph2'>7050~7069</span></div><div id='d-iom'></div></div>\n"
 "   </div>\n"
 /* setup page (Phase 2에서 구현) */
 "   <div id='p-feeder' style='display:none'>\n"
@@ -1373,6 +1383,10 @@ static const char INDEX_HTML[] =
 "     <span class='ph2' style='margin-left:6px'>Voltage: CH1 (M0~M2 shared) &middot; Current: CH1~3</span>\n"
 "    </div>\n"
 "    <div id='chbody'></div>\n"
+"   </div>\n"
+"   <div id='p-io' style='display:none'>\n"
+"    <h1 class='pgh'>IO (DI / TEMP)</h1>\n"
+"    <div class='dcard'><div class='dct'>IO DATA <span class='ph2'>7050~7069</span></div><div id='d-iom'></div></div>\n"
 "   </div>\n"
 "   <div id='p-setup' style='display:none'>\n"
 "    <div class='gp-head'><h1>Settings</h1><span class='gp-badge' id='setBadge'>Main Setting</span>\n"
@@ -1420,8 +1434,8 @@ static const char INDEX_HTML[] =
 "  else{$('lerr').textContent='Invalid username or password';$('lerr').style.display='';}\n"
 " }).catch(function(){$('lerr').textContent='Login failed';$('lerr').style.display='';});});\n"
 /* nav */
-"function go(pg,tab){cur=pg;\n"
-" ['dash','feeder','channel','setup'].forEach(function(p){var pe=$('p-'+p);if(pe)pe.style.display=(p===pg)?'':'none';var ne=$('nav-'+p);if(ne)ne.className=(p===pg)?'on':'';var se=$('si-'+p);if(se)se.className='sitem'+(p===pg?' active':'');});\n"
+"function go(pg,tab){cur=pg;ioEd=0;\n"
+" ['dash','feeder','channel','io','setup'].forEach(function(p){var pe=$('p-'+p);if(pe)pe.style.display=(p===pg)?'':'none';var ne=$('nav-'+p);if(ne)ne.className=(p===pg)?'on':'';var se=$('si-'+p);if(se)se.className='sitem'+(p===pg?' active':'');});\n"
 " if(pg!=='setup')$('si-chset').className='sitem';\n"
 " if(pg==='setup')setEnter(tab);else if(pg==='channel')chEnter();else pollLoop();}\n"
 "(function(){var t=$('pollToggle');window.__pollOn=true;t.addEventListener('change',function(){window.__pollOn=t.checked;$('pollState').textContent=t.checked?'ON':'OFF';$('pollState').className='poll-state'+(t.checked?'':' off');});})();\n"
@@ -1440,12 +1454,12 @@ static const char INDEX_HTML[] =
 "  $('d-pf').textContent=n(d.pf,2);setGauge(d.pf);\n"
 "  setBar('d-vunb','d-vunb-bar',d.u_unbal);setBar('d-iunb','d-iunb-bar',d.i_unbal);\n"
 "  $('d-thdu').textContent=n(d.thd_u,1)+'%';$('d-thdi').textContent=n(d.thd_i,1)+'%';$('d-tddi').textContent=n(d.tdd_i,1)+'%';\n"
-"  if(d.iom){iomDat=d.iom;if(!ioEd)renderIom();}\n"
 "  $('dmeas').textContent='Measured: '+fdt(new Date());dstat(true);\n"
 " }).catch(function(){dstat(false)});}\n"
+"function loadIom(){return j('/api/dashboard').then(function(r){if(!r.d.ok)return;var d=r.d.data;if(d&&d.iom){iomDat=d.iom;if(!ioEd)renderIom();}}).catch(function(){});}\n"
 "var ioEd=0,iomDat=null;\n"
 "function renderIom(){var io=iomDat;if(!io)return;var k,ed=ioEd&&IS_ADMIN,di=\"<div class='hsub'>DI</div><table class='ctbl hsm'><tr><th>P</th><th>Type</th><th>Deb</th><th>Scale</th><th>St</th><th>Pulse</th></tr>\";\n"
-" for(k=0;k<4;k++){var ty,de,sc;if(ed){ty=\"<select data-addr='\"+(7420+k)+\"' data-type='u16' data-orig='\"+io.dt[k]+\"'><option value='0'\"+(io.dt[k]==0?' selected':'')+\">DI</option><option value='1'\"+(io.dt[k]==1?' selected':'')+\">PI</option></select>\";de=\"<input type='number' min='4' max='64' data-addr='\"+(7424+k)+\"' data-type='u16' data-orig='\"+io.db[k]+\"' value='\"+io.db[k]+\"' style='width:50px'>\";sc=\"<input type='number' data-addr='\"+(7428+k)+\"' data-type='u16' data-orig='\"+io.sc[k]+\"' value='\"+io.sc[k]+\"' style='width:50px'>\";}else{ty=(io.dt[k]==1?'PI':'DI');de=io.db[k];sc=io.sc[k];}di+=\"<tr><td class='rk'>#\"+k+\"</td><td>\"+ty+\"</td><td>\"+de+\"</td><td>\"+sc+\"</td><td>\"+io.di[k]+\"</td><td>\"+io.pi[k]+\"</td></tr>\";}di+='</table>';\n"
+" for(k=0;k<4;k++){var ty,de,sc;if(ed){ty=\"<select data-addr='\"+(7412+k)+\"' data-type='u16' data-orig='\"+io.dt[k]+\"'><option value='0'\"+(io.dt[k]==0?' selected':'')+\">DI</option><option value='1'\"+(io.dt[k]==1?' selected':'')+\">PI</option></select>\";de=\"<input type='number' min='4' max='64' data-addr='\"+(7416+k)+\"' data-type='u16' data-orig='\"+io.db[k]+\"' value='\"+io.db[k]+\"' style='width:50px'>\";sc=\"<input type='number' data-addr='\"+(7420+k)+\"' data-type='u16' data-orig='\"+io.sc[k]+\"' value='\"+io.sc[k]+\"' style='width:50px'>\";}else{ty=(io.dt[k]==1?'PI':'DI');de=io.db[k];sc=io.sc[k];}di+=\"<tr><td class='rk'>#\"+k+\"</td><td>\"+ty+\"</td><td>\"+de+\"</td><td>\"+sc+\"</td><td>\"+io.di[k]+\"</td><td>\"+io.pi[k]+\"</td></tr>\";}di+='</table>';\n"
 " if(IS_ADMIN)di+=ed?\"<div class='pgctl'><button class='btn primary' onclick='ioSave()'>Save</button><button class='btn' onclick='ioEd=0;renderIom()'>Cancel</button></div>\":\"<div class='pgctl'><button class='btn' onclick='ioEd=1;renderIom()'>Edit</button><button class='btn warn' onclick='clearPI()'>Clear PI</button></div>\";\n"
 " var tp=\"<div class='hsub'>Temperature</div><table class='ctbl hsm'><tr><th>P</th><th>Temp(&#8451;)</th></tr>\";for(k=0;k<4;k++)tp+=\"<tr><td class='rk'>#\"+k+\"</td><td>\"+n(io.temp[k],1)+\"</td></tr>\";tp+='</table>';\n"
 " $('d-iom').innerHTML=\"<div style='display:flex;gap:14px;flex-wrap:wrap'><div style='flex:1;min-width:300px'>\"+di+\"</div><div style='min-width:150px'>\"+tp+\"</div></div>\";}\n"
@@ -1473,12 +1487,12 @@ static const char INDEX_HTML[] =
 "  if(r.s===403){alert('Admin only');return}if(!r.d.ok){alert('Command failed');return}loadEvents();});}\n"
 /* setup */
 "var OPT={va_type:{0:'RMS (S=VA)',1:'Vector'},pf_sign:{0:'IEC',1:'IEEE'},minmax_reset:{0:'Daily',1:'Weekly',2:'Monthly'},timezone:{'-720':'UTC-12:00','-600':'Hawaii -10:00','-540':'Alaska -09:00','-480':'Pacific -08:00','-420':'Mountain -07:00','-360':'Central -06:00','-300':'Eastern -05:00','-180':'-03:00','0':'UTC +00:00','60':'Berlin +01:00','120':'Athens +02:00','180':'Moscow +03:00','210':'Tehran +03:30','240':'Dubai +04:00','300':'Karachi +05:00','330':'India +05:30','345':'Nepal +05:45','360':'Dhaka +06:00','420':'Bangkok +07:00','480':'Shanghai +08:00','540':'Seoul +09:00','570':'Adelaide +09:30','600':'Sydney +10:00','720':'Auckland +12:00'}};\n"
-"var CARDN=['Device Information','Communication','ETC'],setCur='general';\n"
+"var CARDN=['Device Information','Communication','ETC','Status'],setCur='general';\n"
 "var WM={0:'not used',1:'3P4W',2:'3P3W(2CT)',3:'3P3W(3CT)',4:'1P2W(L1)',5:'1P2W(L2)',6:'1P2W(L3)',7:'1P3W',8:'SIM'};\n"
 "var CT2M={0:'5A',1:'100mA/333mV',2:'Rogowski'},ZCTM={1:'200mV:100mV',2:'200mV:1.5mA',3:'200mV:0.1mA'},DIM={0:'DI',1:'PI'},DIRM={0:'+',1:'-'};\n"
 "var PT_F=[{o:0,l:'Wiring Mode',t:'u16',opt:WM},{o:2,l:'V Nominal',t:'u32'},{o:4,l:'PT1',t:'u32'},{o:6,l:'PT2',t:'u16'}];\n"
 "var CT_F=[{o:0,l:'I Nominal',t:'u16'},{o:1,l:'CT1',t:'u16'},{o:2,l:'CT2',t:'u16',opt:CT2M},{o:3,l:'Turns',t:'u16'},{o:4,l:'Start I',t:'u16'},{o:5,l:'CT1 Dir',t:'u16',opt:DIRM},{o:6,l:'CT2 Dir',t:'u16',opt:DIRM},{o:7,l:'CT3 Dir',t:'u16',opt:DIRM},{o:8,l:'Rogowski',t:'u16'},{o:9,l:'Phase Ofs 1',t:'i16'},{o:10,l:'Phase Ofs 2',t:'i16'},{o:11,l:'Phase Ofs 3',t:'i16'},{o:12,l:'ZCT Type',t:'u16',opt:ZCTM},{o:13,l:'ZCT Scale',t:'u16'}];\n"
-"var CMDS=[{g:'System',l:'Reboot',addr:7456,danger:1,note:'reboot'},{g:'System',l:'Save Set',addr:7457},{g:'System',l:'Init Settings',addr:7471,danger:2},{g:'System',l:'Set Time',addr:7446,utc:1}];\n"
+"var CMDS=[{g:'System',l:'Reboot',addr:7448,danger:1,note:'reboot'},{g:'System',l:'Save Set',addr:7449},{g:'System',l:'Init Settings',addr:7463,danger:2},{g:'System',l:'Set Time',addr:7438,utc:1}];\n"
 "var MAIN_TABS=[['general','General'],['pt','PT'],['ct','CT'],['command','Command']];\n"
 "var CHAN_TABS=[['pqevent','PQ Event'],['transient','Transient'],['waveform','Waveform'],['disturb','Disturbance'],['trend','Trend'],['pqreport','PQ Report'],['almdef','Alarm Def'],['alarm','Alarm Settings']];\n"
 "var setMode='main';\n"
@@ -1501,7 +1515,7 @@ static const char INDEX_HTML[] =
 " var tp=(f.type==='ip'||f.type==='str')?'text':'number';\n"
 " return \"<input type='\"+tp+\"' \"+d+\" value='\"+esc(f.val)+\"' \"+dis+\" oninput='setMark(this)'>\";}\n"
 "function loadGeneral(){return j('/api/general').then(function(r){if(!r.d.ok){$('setBody').innerHTML=\"<p class='stub'>load error</p>\";return;}\n"
-" var cs=[[],[],[]];r.d.fields.forEach(function(f){cs[f.card].push(f)});var h=\"<div class='setgrid'>\";\n"
+" var cs=[[],[],[],[]];r.d.fields.forEach(function(f){cs[f.card].push(f)});var h=\"<div class='setgrid'>\";\n"
 " cs.forEach(function(fs,ci){h+=\"<div class='setcard'><h3>\"+CARDN[ci]+'</h3>';fs.forEach(function(f){h+=\"<div class='srow'><span class='sk'>\"+esc(f.label)+'</span>'+ctlOf(f)+'</div>';});h+='</div>';});\n"
 " h+='</div>';$('setBody').innerHTML=h;sn('Save & Apply.');});}\n"
 "function setMark(el){var v=(el.type==='checkbox')?(el.checked?'1':'0'):el.value;if((''+v)!==el.getAttribute('data-orig'))el.classList.add('chg');else el.classList.remove('chg');}\n"
@@ -1644,18 +1658,18 @@ static const char INDEX_HTML[] =
 " h+=\"<table class='ctbl'><tr><th>Type</th><th>Start Time</th><th>Dur(ms)</th><th>Phase</th><th>Level</th></tr>\";\n"
 " if(!el.length)h+=\"<tr><td colspan='5' class='empty'>No events</td></tr>\";el.forEach(function(e){var t=ET[e.type]||['#'+e.type,'oc'],ph=[];if(e.mask&1)ph.push('L1');if(e.mask&2)ph.push('L2');if(e.mask&4)ph.push('L3');h+=`<tr><td><span class='evt ${t[1]}'>${t[0]}</span></td><td class='ts'>${ts2(e.ts)}</td><td>${e.dur}</td><td>${ph.join(',')||'-'}</td><td>${n(e.level,2)}</td></tr>`;});return h+'</table>';}\n"
 "function wrCmd(a,v){if(!IS_ADMIN){alert('Admin only');return;}jp('/api/setreg',{addr:a,type:'u16',val:v}).then(function(){setTimeout(pollLoop,300);});}\n"
-"function pgAlarm(n,c){wrCmd(7497+n,c);}\n"
-"function clrAlarm(n){if(confirm('Clear Alarm CH'+n+'?'))wrCmd(7485+n,4660);}\n"
-"function pgEvent(n,c){wrCmd(7493+n,c);}\n"
-"function clrEvent(n){if(confirm('Clear Event CH'+n+'?'))wrCmd(7489+n,4660);}\n"
-"function pgItic2(n,c){wrCmd(7510,c);}\n"
+"function pgAlarm(n,c){wrCmd(7489+n,c);}\n"
+"function clrAlarm(n){if(confirm('Clear Alarm CH'+n+'?'))wrCmd(7477+n,4660);}\n"
+"function pgEvent(n,c){wrCmd(7485+n,c);}\n"
+"function clrEvent(n){if(confirm('Clear Event CH'+n+'?'))wrCmd(7481+n,4660);}\n"
+"function pgItic2(n,c){wrCmd(7502,c);}\n"
 "function clrBtn(fn,n){return IS_ADMIN?\"<div class='pgctl'><button class='btn warn' onclick='\"+fn+\"(\"+n+\")'>Clear</button></div>\":'';}\n"
-"function clrMinmax(n){if(confirm('Clear Min/Max CH'+n+'?'))wrCmd(7477+n,4660);}\n"
-"function clrEnergy(n){if(confirm('Clear Energy CH'+n+'?'))wrCmd(7481+n,4660);}\n"
-"function clrDemand(n){if(confirm('Clear Demand CH'+n+'?'))wrCmd(7473+n,4660);}\n"
-"function ackAlarm(n){wrCmd(7501+n,4660);}\n"
-"function ackEvent(n){wrCmd(7505+n,4660);}\n"
-"function clearPI(){if(confirm('Clear PI?'))wrCmd(7472,4660);}\n"
+"function clrMinmax(n){if(confirm('Clear Min/Max CH'+n+'?'))wrCmd(7469+n,4660);}\n"
+"function clrEnergy(n){if(confirm('Clear Energy CH'+n+'?'))wrCmd(7473+n,4660);}\n"
+"function clrDemand(n){if(confirm('Clear Demand CH'+n+'?'))wrCmd(7465+n,4660);}\n"
+"function ackAlarm(n){wrCmd(7493+n,4660);}\n"
+"function ackEvent(n){wrCmd(7497+n,4660);}\n"
+"function clearPI(){if(confirm('Clear PI?'))wrCmd(7464,4660);}\n"
 "var egyEd=0,egyD=null;\n"
 "function egyRender(){if(!egyD)return;var b=IS_ADMIN?(egyEd?\"<div class='pgctl'><button class='btn primary' onclick='egyWr()'>Write</button><button class='btn' onclick='egyEd=0;egyRender()'>Cancel</button></div>\":\"<div class='pgctl'><button class='btn' onclick='egyEd=1;egyRender()'>Edit</button></div>\"):'';$('chbody').innerHTML=chCards(egyD.now,function(x){var lg=egyD.log.filter(function(e){return e.n===x.n;})[0];return b+(egyEd?'':clrBtn('clrEnergy',x.n))+bEgyNow(x,egyEd)+(lg?bEgyLog(lg):'');});}\n"
 "function egyWr(){var els=document.querySelectorAll('#chbody .ein'),c=[],i=0;els.forEach(function(e){if(e.value!==e.getAttribute('data-o'))c.push(e);});if(!c.length){egyEd=0;egyRender();return;}(function w(){if(i>=c.length){egyEd=0;setTimeout(pollLoop,300);return;}var e=c[i++],v=Math.round(parseFloat(e.value)*10);if(!isFinite(v)||v<0)v=0;jp('/api/setreg',{addr:+e.getAttribute('data-a'),type:'u32',val:v}).then(w).catch(w);})();}\n"
@@ -1715,6 +1729,7 @@ static const char INDEX_HTML[] =
 " if(cur==='dash'){_busy=true;loadDash().then(function(){if(_tick%3===0)return loadEvents();}).catch(function(){}).then(pollFin);}\n"
 " else if(cur==='feeder'){_busy=true;loadFeeder().catch(function(){}).then(pollFin);}\n"
 " else if(cur==='channel'){_busy=true;loadChannelTab().catch(function(){}).then(pollFin);}\n"
+" else if(cur==='io'){_busy=true;loadIom().catch(function(){}).then(pollFin);}\n"
 "}\n"
 "tbtn();clk();setInterval(clk,1000);setInterval(pollLoop,1000);me();\n"
 "</script></body></html>\n";

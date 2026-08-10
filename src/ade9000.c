@@ -172,7 +172,7 @@ float scaleIgrms(int id, long val) {
 	x1 = meter[id].meter.I[3];				// 현재 계측되는 전류의 평균
 	x2 = meter[id].cntl.In_offset_I[0];		// seq 0 일때 입력 전류
 
-	v1 = pcal->In_Slope[id]*(x1-x2) + pcal->In_offset[id];
+	v1 = pcal->In_Slope[id][0]*(x1-x2) + pcal->In_offset[id][0];
 	v2 = val*meter[id].cntl.igscale - v1;
 
 	if(v2<0)
@@ -183,29 +183,25 @@ float scaleIgrms(int id, long val) {
 
 void writeGainI(int id) {
 	int	addr=AD9X_IGAIN, j;
+	int32_t *pig = (db.ct[id].CT2 == CT_RCT) ? pcal->R_igain[id] : pcal->igain[id];	/* 로고스키 */
 
 	for(j=0; j<3; j++, addr+=AD9X_GAINSZ){
-		write_reg32(id, addr, (uint32_t*)&pcal->igain[id][j]);
-	}	
+		write_reg32(id, addr, (uint32_t*)&pig[j]);
+	}
 }
 
-// PT2 < 150 이면 vgain x2 사용한다 
+/* 결선Z 인덱스: 1P2W(L1/L2/L3)=0/1/2, 그 외(3P4W/3P3W)=phase(j) */
+static int uGainZ(int w, int j) {
+	return IS_WM_1LN1CT(w) ? (w - WM_1LN1CT_L1) : j;
+}
+/* AD9X_UGAIN: wiring이 3P3W(3LL2CT/3LL3CT)면 vppgain, 그 외 vgain. PT2<150이면 x2([1]). */
 void writeGainU(int id) {
-	int	addr=AD9X_UGAIN, j, *pvg;
+	int	addr=AD9X_UGAIN, j, w = db.pt[id].wiring;
+	int pt = (db.pt[id].PT2 < 150) ? 1 : 0;
+	int32_t (*pvg)[3][2] = (w == WM_3LL3CT || w == WM_3LL2CT) ? pcal->vppgain[id] : pcal->vgain[id];
 
-#ifdef	PT_HV	
-	if (db.pt[id].PT2 < 150) {
-		pvg = (db.pt[id].wiring == WM_3LL3CT || db.pt[id].wiring == WM_3LL2CT) ? pcal->vppgainx2 : pcal->vgainx2;
-	}
-	else {
-		pvg = (db.pt[id].wiring == WM_3LL3CT || db.pt[id].wiring == WM_3LL2CT) ? pcal->vppgain : pcal->vgain;
-	}
-#else
-	pvg = (db.pt[id].wiring == WM_3LL3CT || db.pt[id].wiring == WM_3LL2CT) ? pcal->vppgain[id] : pcal->vgain[id];
-#endif	
-		
 	for (j=0;j<3;j++, addr+=AD9X_GAINSZ) {
-		write_reg32(id, addr,(uint32_t*)&pvg[j]);
+		write_reg32(id, addr,(uint32_t*)&pvg[j][uGainZ(w,j)][pt]);
 	}
 }
 
@@ -216,8 +212,8 @@ void resetGainInOffset(int id){
 		meter[id].cntl.In_offset_I[i] = 0;
 	}
 	meter[id].cntl.In_Slope = 0;
-	pcal->In_offset[id] = 0;
-	pcal->In_Slope[id] = 0;
+	pcal->In_offset[id][0] = 0;
+	pcal->In_Slope[id][0] = 0;
 }
 
 void setGainInOffset(int id, int seq)
@@ -234,25 +230,26 @@ void setGainInOffset(int id, int seq)
 void writeInOffset(int id) {
 	meter[id].cntl.In_Slope = (meter[id].cntl.In_offset[1] - meter[id].cntl.In_offset[0])/(meter[id].cntl.In_offset_I[1]-meter[id].cntl.In_offset_I[0]);
 
-	pcal->In_offset[id] = meter[id].cntl.In_offset[0];
-	pcal->In_Slope[id] = meter[id].cntl.In_Slope;
+	pcal->In_offset[id][0] = meter[id].cntl.In_offset[0];
+	pcal->In_Slope[id][0] = meter[id].cntl.In_Slope;
 
-	printf("writeOffsetIn : id[%d] --> I slope[%.1f], In offset[%.4f]\n", id, pcal->In_offset[id], pcal->In_Slope[id]);
+	printf("writeOffsetIn : id[%d] --> I slope[%.1f], In offset[%.4f]\n", id, pcal->In_offset[id][0], pcal->In_Slope[id][0]);
 
 //	meter[id].cntl.In_offset = pcal->In_offset[id];
 }
 
 void writeGainPh(int id) {
 	int addr=AD9X_PHCAL, j;
-	
+	int32_t *pph = (db.ct[id].CT2 == CT_RCT) ? pcal->R_phcal[id] : pcal->phcal[id];	/* 로고스키 */
+
 	for(j=0;j<3;j++, addr+=AD9X_GAINSZ) {
-		write_reg32(id, addr, (uint32_t*)&pcal->phcal[id][j]);
-	}		
+		write_reg32(id, addr, (uint32_t*)&pph[j]);
+	}
 }
 
 void writeGainIn(int id) {
 	int addr=AD9X_INGAIN;
-	write_reg32(id, addr, (uint32_t*)&pcal->Ingain[id]);
+	write_reg32(id, addr, (uint32_t*)&pcal->Ingain[id][0]);
 }
 
 void writeGainW(int id) {
@@ -268,80 +265,61 @@ void writeGainW(int id) {
 void setGainU(int id, float ref)
 {
 	float fg;
-	int i, *pvg;
+	int i, w=db.pt[id].wiring, pt=(db.pt[id].PT2<150)?1:0, z;
+	int32_t (*pvg)[3][2] = pcal->vgain[id];
 
-#ifdef	PT_HV
-	pvg = (db.pt[id].PT2 < 150) ? pcal->vgainx2 : pcal->vgain;
-#else
-	pvg = pcal->vgain[id];
-#endif	
-	
 	// Vab: vrms[0] -> vgain[0]
 	for (i=0; i<3; i++) {
+		z = uGainZ(w,i);
 		fg = ref/meter[id].meter.U[i];
-		pvg[i] = (fg-1)*GAIN_MAX;
+		pvg[i][z][pt] = (fg-1)*GAIN_MAX;
 	}
 
 	meter[id].cntl.wCalF[0] = meter[id].cntl.wCalF[1] = 1;
-	printf("vg : %d, %d, %d\n", pvg[0], pvg[1], pvg[2]);
+	printf("vg : %d, %d, %d\n", pvg[0][uGainZ(w,0)][pt], pvg[1][uGainZ(w,1)][pt], pvg[2][uGainZ(w,2)][pt]);
 }
 // V0: Va-Vb -> U[0]
 // V1: Vc-Va -> U[2]
-// V2: Vc-Vb -> U[1]
+// V2: Vc-Vb -> U[1]  (3P3W → Z=phase)
 void setGainUpp(int id, float ref)
 {
 	float fg;
-	int i, *pvg;
-	
-#ifdef	PT_HV	
-	pvg = (db.pt[id].PT2 < 150) ? pcal->vppgainx2 : pcal->vppgain;
-#else
-	pvg = pcal->vppgain[id];
-#endif	
+	int pt=(db.pt[id].PT2<150)?1:0;
+	int32_t (*pvg)[3][2] = pcal->vppgain[id];
 
 	fg = ref/meter[id].meter.U[0];
-	pvg[0] = (fg-1)*GAIN_MAX;
-	
+	pvg[0][0][pt] = (fg-1)*GAIN_MAX;
+
 	fg = ref/meter[id].meter.U[1];
-	pvg[2] = (fg-1)*GAIN_MAX;
-	
+	pvg[2][2][pt] = (fg-1)*GAIN_MAX;
+
 	fg = ref/meter[id].meter.U[2];
-	pvg[1] = (fg-1)*GAIN_MAX;
+	pvg[1][1][pt] = (fg-1)*GAIN_MAX;
 
 	meter[id].cntl.wCalF[0] = meter[id].cntl.wCalF[1] = 1;
-	printf("vpp_g : ref(%f), %d, %d, %d\n", ref, pvg[0], pvg[1], pvg[2]);
+	printf("vpp_g : ref(%f), %d, %d, %d\n", ref, pvg[0][0][pt], pvg[1][1][pt], pvg[2][2][pt]);
 }
 
 
 void clrGainU(int id)
 {
-	int i, *pvg;
-
-#ifdef	PT_HV	
-	pvg = (db.pt[id].PT2 < 150) ? pcal->vgainx2 : pcal->vgain;
-#else
-	pvg = pcal->vgain[id];
-#endif	
+	int i, w=db.pt[id].wiring, pt=(db.pt[id].PT2<150)?1:0;
+	int32_t (*pvg)[3][2] = pcal->vgain[id];
 
 	for (i=0; i<3; i++) {
-		pvg[i] = 0;
+		pvg[i][uGainZ(w,i)][pt] = 0;
 	}
-	
+
 	meter[id].cntl.wCalF[0] = meter[id].cntl.wCalF[1] = 1;
 	printf("clear volt gain\n");
 }
 void clrGainUpp(int id)
 {
-	int i, *pvg;
-
-#ifdef	PT_HV	
-	pvg = (db.pt[id].PT2 < 150) ? pcal->vppgainx2 : pcal->vppgain;
-#else
-	pvg = pcal->vppgain[id];
-#endif	
+	int i, pt=(db.pt[id].PT2<150)?1:0;
+	int32_t (*pvg)[3][2] = pcal->vppgain[id];
 
 	for (i=0; i<3; i++) {
-		pvg[i] = 0;
+		pvg[i][i][pt] = 0;
 	}
 	
 	meter[id].cntl.wCalF[0] = meter[id].cntl.wCalF[1] = 1;
@@ -378,26 +356,28 @@ void setGainI(int id, float ref)
 {
 	float 					fg, error;
 	int 						i;
+	int32_t *pig = (db.ct[id].CT2 == CT_RCT) ? pcal->R_igain[id] : pcal->igain[id];	/* 로고스키 */
 
 	for (i=0; i<3; i++) {
 		error = (ref-meter[id].meter.I[i])/ref;
-		
-		if (fabs(error) > 0.2) 
+
+		if (fabs(error) > 0.2)
 			continue;
-		
+
 		fg = ref/meter[id].meter.I[i];
-		pcal->igain[id][i] = (fg-1) * GAIN_MAX;
+		pig[i] = (fg-1) * GAIN_MAX;
 	}
-	
+
 	meter[id].cntl.wCalF[0] = meter[id].cntl.wCalF[1] = 2;
-	printf("ig : ref=%f, (%f, %f, %f), %d, %d, %d\n", ref, meter[id].meter.I[0], meter[id].meter.I[1], meter[id].meter.I[2], pcal->igain[0], pcal->igain[1], pcal->igain[2]);
+	printf("ig : ref=%f, (%f, %f, %f), %d, %d, %d\n", ref, meter[id].meter.I[0], meter[id].meter.I[1], meter[id].meter.I[2], pig[0], pig[1], pig[2]);
 }
 void clrGainI(int id)
 {
 	int i;
+	int32_t *pig = (db.ct[id].CT2 == CT_RCT) ? pcal->R_igain[id] : pcal->igain[id];
 
 	for (i=0; i<3; i++) {
-		pcal->igain[id][i] = 0;
+		pig[i] = 0;
 	}
 	meter[id].cntl.wCalF[0] = meter[id].cntl.wCalF[1] = 2;
 }
@@ -446,29 +426,31 @@ void setGainPh(int id)
 {
 	float a, b, c, omega;
 	int i;
-		
+	int32_t *pph = (db.ct[id].CT2 == CT_RCT) ? pcal->R_phcal[id] : pcal->phcal[id];	/* 로고스키 */
+
 	omega = (db.freq == 60) ? CONST_OMEGA_60 : CONST_OMEGA_50;
-	
+
 	for (i=0; i<3; i++) {
 		a = meter[id].cntl.wh[i]*CONST_SIN_60 - meter[id].cntl.varh[i]*CONST_COS_60;
 		b = meter[id].cntl.wh[i]*CONST_COS_60 + meter[id].cntl.varh[i]*CONST_SIN_60;
 		c = -atan(a/b);
-		
+
 		a = sin(c-omega) + sin(omega);
 		b = sin(2*omega-c);
 		c = a/b*GAIN_MAX;
-		
-		pcal->phcal[id][i] = c;
+
+		pph[i] = c;
 	}
-	
+
 	meter[id].cntl.wCalF[0] = meter[id].cntl.wCalF[1] = 4;
 }
 void clrGainPh(int id)
 {
 	int i;
+	int32_t *pph = (db.ct[id].CT2 == CT_RCT) ? pcal->R_phcal[id] : pcal->phcal[id];
 
 	for (i=0; i<3; i++) {
-		pcal->phcal[id][i] = 0;
+		pph[i] = 0;
 	}
 	meter[id].cntl.wCalF[0] = meter[id].cntl.wCalF[1] = 4;
 }
@@ -480,14 +462,14 @@ void setGainIn(int id, float ref)
 	error = (ref-meter[id].meter.In)/ref;
 	if (fabs(error) <= 0.2) {
 		fg = ref/meter[id].meter.In;
-		pcal->Ingain[id] = (fg-1) * GAIN_MAX;
+		pcal->Ingain[id][0] = (fg-1) * GAIN_MAX;
 		meter[id].cntl.wCalF[0] = meter[id].cntl.wCalF[1] = 5;
 	}
-	printf("zgain : %d\n", pcal->Ingain[id]);
+	printf("zgain : %d\n", pcal->Ingain[id][0]);
 }
 void clrGainIn(int id)
 {																																																									
-	pcal->Ingain[id] = 0;
+	pcal->Ingain[id][0] = 0;
 	meter[id].cntl.wCalF[0] = meter[id].cntl.wCalF[1] = 5;
 }
 

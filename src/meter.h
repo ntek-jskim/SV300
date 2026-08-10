@@ -871,16 +871,15 @@ typedef struct {
 	uint16_t	PF_sign;
 	uint16_t	interval;
 	uint16_t  	Iload;	
-	uint32_t	P_target[MAX_CH];	
+	uint32_t	P_target[3];	/* Target Demand #1~3 (260810 맵: 9→3ch 축소) */
 	uint16_t  	backlightTime;		// 0: always, 1 ~ 15분
 	uint16_t  	brightness;		// 0 ~ 9
-	uint16_t  	autorotation;	// 0: hold, 1: auto rotation	
+	uint16_t  	autorotation;	// 0: hold, 1: auto rotation
 	int16_t 	timezone;			// 분 단위로 환산한 시간, seoul(9h, 540m)
 	uint16_t  	maxminItv;
 	uint16_t  	testMode;
 	uint16_t  	testMode_Period;
-	uint16_t  	r;
-//	uint16_t  	r3[9];
+	uint16_t  	r[5];	/* 예약(iom을 7410에 정렬) */
 } ETC_DEF;
 
 typedef struct {
@@ -1417,24 +1416,25 @@ typedef struct {
 
 
 typedef struct {
-	int32_t		vgain[METER_CH_COUNT][3];		// phase-to-neutral gain 튜닝, x1
-	int32_t		vppgain[METER_CH_COUNT][3];	// phase-to-phase gain 튜닝, x1
-	int32_t 	igain[METER_CH_COUNT][3];		
-	int32_t		vgainx2[METER_CH_COUNT][3];	// phase-to-neutral gain 튜닝, x2
-	int32_t		Ingain[METER_CH_COUNT];
+	/* [chip][phase][결선Z][PT2] — Z: 1P2W L1/L2/L3=0/1/2, 그 외=phase / PT2: [0]=x1(PT2>=150), [1]=x2(PT2<150) */
+	int32_t		vgain[METER_CH_COUNT][3][3][2];		// phase-to-neutral (3P4W/1P2W 등)
+	int32_t		vppgain[METER_CH_COUNT][3][3][2];	// phase-to-phase (3P3W)
+	int32_t 	igain[METER_CH_COUNT][3];
+	int32_t 	R_igain[METER_CH_COUNT][3];		// Rogowski(CT2==CT_RCT) i gain
+	int32_t		Ingain[METER_CH_COUNT][3];
 
 	int32_t		wgain[METER_CH_COUNT][3];
-	int32_t		vppgainx2[METER_CH_COUNT][3];	// phase-to-phase gain 튜닝, x2
 	int32_t		phcal[METER_CH_COUNT][3];
+	int32_t		R_phcal[METER_CH_COUNT][3];		// Rogowski phase cal
 	float		v_thd_offset;
 	float		i_thd_offset;
-	float		In_offset[METER_CH_COUNT];			// offset 
-	float		In_Slope[METER_CH_COUNT];			// 기울기
-	int32_t		vdcos[METER_CH_COUNT][3], idcos[METER_CH_COUNT][3];	// waveform에서 DC offset 제거위해 사용한다 
-	
-	uint32_t 	hwModel;	// 0: 5A, 1:100mA, 2:10mA, 3:Rogowski
-	uint32_t 	hwVer;	// hw version
-	uint32_t 	fwVer;	// fw version
+	float		In_offset[METER_CH_COUNT][3];		// offset
+	float		In_Slope[METER_CH_COUNT][3];		// 기울기
+	int32_t		vdcos[METER_CH_COUNT][3], idcos[METER_CH_COUNT][3];	// waveform에서 DC offset 제거위해 사용한다
+
+//	uint32_t 	hwModel;	// 미사용(삭제)
+	uint16_t 	hwVer;	// hw version (U32->U16)
+	uint16_t 	fwVer;	// fw version (U32->U16)
 	uint8_t 	mac[4];
 	uint32_t 	sn[2];
 	uint16_t 	magic, crc;
@@ -1530,7 +1530,7 @@ typedef struct {
 	uint16_t mac_msb[2];
 	uint16_t mac[4];
 	uint16_t ipAddr[4];		// dhcp or static ip
-	uint16_t hwModel;				// 0: 5A, 1:100mA, 2:10mA, 3:Rogowski
+//	uint16_t hwModel;				// 0: 5A, 1:100mA, 2:10mA, 3:Rogowski
 	uint16_t hwVer;
 	uint16_t fwVer;
 	uint16_t fwBuildYear;
@@ -1546,7 +1546,7 @@ typedef struct {
 	uint16_t DEV_sts;
 	uint16_t NET_sts;
 	uint16_t TOT_sts;
-	uint16_t r1[8];
+	uint16_t r1[9];
 } METER_INFO;
 
 
@@ -2026,16 +2026,16 @@ typedef struct {
 #define MBAD_SETTING_END		MBAD_RW_OFF_END			/* P2~P4 설정 끝 = iom(7050) */
 /* P1 설정: device id/comm/PT/CT/ETC/IOM (SETTINGS 구조체) — R/W, save settings로 db 반영 */
 #define MBAD_P1_SETTING			MB_FIELD_OFF(setting)	/* = 7110 (device id) */
-#define MBAD_P1_SETTING_END		MB_FIELD_OFF(cmds)		/* = 7446 (cmds 시작 = UTC) */
-/* 260626 맵: UTC/명령 블록 = COMMANDS(cmds) 구조체 기준.
- *   cmds[0..1] = UTC Time(7446), cmds[10] = reboot(7456) ... */
-#define MBAD_SET_TS				MB_FIELD_OFF(cmds)			/* UTC Time  = 7446 */
-#define MBAD_SET_CMD			(MBAD_SET_TS + 10u)			/* 명령 시작 = 7456 */
-#define MBAD_SET_END			(MBAD_SET_TS + 127u)		/* 명령 끝   = 7573 */
-#define MBAD_CMD_FETCH_EVENT		(MBAD_SET_CMD + 37)		/* load event ALL,#1~3 = 7493 */
-#define MBAD_CMD_FETCH_ALARM		(MBAD_SET_CMD + 41)		/* load alarm ALL,#1~3 = 7497 */
-#define MBAD_CMD_FETCH_ITIC			(MBAD_SET_CMD + 53)		/* load itic  = 7509 (단일 레지스터) */
-#define MBAD_CMD_FETCH_ITIC2		(MBAD_SET_CMD + 54)		/* load itic2 = 7510 (단일 레지스터) */
+#define MBAD_P1_SETTING_END		MB_FIELD_OFF(cmds)		/* = 7438 (cmds 시작 = UTC) */
+/* 260810 맵: ETC Target Demand 9→3ch 축소로 iom(7410)·cmds 블록 -8 이동.
+ *   cmds[0..1] = UTC Time(7438), cmds[10] = reboot(7448) ... */
+#define MBAD_SET_TS				MB_FIELD_OFF(cmds)			/* UTC Time  = 7438 */
+#define MBAD_SET_CMD			(MBAD_SET_TS + 10u)			/* 명령 시작 = 7448 */
+#define MBAD_SET_END			(MBAD_SET_TS + 127u)		/* 명령 끝   = 7565 */
+#define MBAD_CMD_FETCH_EVENT		(MBAD_SET_CMD + 37)		/* load event ALL,#1~3 = 7485 */
+#define MBAD_CMD_FETCH_ALARM		(MBAD_SET_CMD + 41)		/* load alarm ALL,#1~3 = 7489 */
+#define MBAD_CMD_FETCH_ITIC			(MBAD_SET_CMD + 53)		/* load itic  = 7501 (단일 레지스터) */
+#define MBAD_CMD_FETCH_ITIC2		(MBAD_SET_CMD + 54)		/* load itic2 = 7502 (단일 레지스터) */
 
 #define METER_MB_SETTING_REGS(m)	((uint16_t *)&(m).pqevt)
 

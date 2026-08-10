@@ -165,15 +165,11 @@ uint8_t getHwVersion()
 
 uint8_t getHwModel()
 {
-	return pInfo->hwModel;
+	return 0;	// hwModel 미사용(삭제)
 }
 uint8_t getHwCh()
 {
-	int	mask = 1 << 15;
-
-	int result = pInfo->hwModel & mask;
-
-	return result >> 15;
+	return 0;	// hwModel 미사용(삭제)
 }
 
 void setMeterInfo() {
@@ -187,7 +183,7 @@ void setMeterInfo() {
 	pInfo->sn[5] = (pcal->sn[1]) & 0xff;
 	
 	pInfo->hwVer = pcal->hwVer;
-	pInfo->hwModel = pcal->hwModel;
+	/* pInfo->hwModel = pcal->hwModel; (hwModel 미사용) */
 	pInfo->fwVer = FW_VER;
 	pInfo->fwBuildYear = FW_BUILD_YEAR;
 	pInfo->fwBuildMon  = FW_BUILD_MON;
@@ -465,8 +461,8 @@ int buildSettings(int id)
 		ret = -1;
 	}
 
-	db.ct[id].CT2 = getHwModel();
-	printf("[HW : Model = %d, Version = %d]\n", db.ct[id].CT2, getHwVersion());
+	/* CT type(CT2)은 설정(CT_DEF)에서 사용 — hwModel 미사용으로 덮어쓰기 제거 */
+	printf("[CT type = %d, HW Version = %d]\n", db.ct[id].CT2, getHwVersion());
 
 	_pcntl->I_start = (float)(db.ct[id].inorm) * db.ct[id].I_start/1000.;
 	printf("[start Current = %f, %d, %d]\n", _pcntl->I_start, db.ct[id].inorm, db.ct[id].I_start);
@@ -1989,7 +1985,7 @@ void copyModbusWaveData(int id) {
 	
 	// scale이 작으면 계단파로 보이는 문제 있다
 	for (j=0; j<3; j++) {
-		vscl[j] = (1 + (pcal->vgain[id][j]/134217728.)) * meter[id].cntl.wv_vscale * sqrt(2);
+		vscl[j] = (1 + (pcal->vgain[id][j][IS_WM_1LN1CT(db.pt[id].wiring)?(db.pt[id].wiring-WM_1LN1CT_L1):j][(db.pt[id].PT2<150)?1:0]/134217728.)) * meter[id].cntl.wv_vscale * sqrt(2);
 		iscl[j] = (1 + (pcal->igain[id][j]/134217728.)) * meter[id].cntl.wv_iscale * sqrt(2);
 	}
 	
@@ -2067,7 +2063,7 @@ int copyGUIWaveData(int id,int sel) {
 	}
 	
 	for (j=0; j<3; j++) {
-		vscl[j] = (1 + (pcal->vgain[id][j]/134217728.)) * meter[id].cntl.wv_vscale * sqrt(2);
+		vscl[j] = (1 + (pcal->vgain[id][j][IS_WM_1LN1CT(db.pt[id].wiring)?(db.pt[id].wiring-WM_1LN1CT_L1):j][(db.pt[id].PT2<150)?1:0]/134217728.)) * meter[id].cntl.wv_vscale * sqrt(2);
 		iscl[j] = (1 + (pcal->igain[id][j]/134217728.)) * meter[id].cntl.wv_iscale * sqrt(2);
 	}
 	

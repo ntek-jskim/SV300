@@ -289,7 +289,7 @@ void getMeterInfoV1(RESP_NETINF *sb) {
 	for (i=0; i<6; i++) {
 		sb->sn[i] = pInfo->sn[i];
 	}
-	sb->hwModel = pInfo->hwModel;
+	sb->hwModel = 0;	// hwModel 미사용
 	sb->hwVer = pInfo->hwVer;
 	sb->fwVer = pInfo->fwVer;
 	sb->fwDate[0] = pInfo->fwBuildYear;

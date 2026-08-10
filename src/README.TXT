@@ -20,6 +20,8 @@
 26/08/10 FW V00.02
   1) Web/FW: Energy 웹 전체편집(U32 R/W) 완료 + 대시보드 IOM DATA 개편(DI+Temp 가로배치·설정 통합편집·Clear PI/Ack) + PI 기능 구현(DI Type별 펄스카운트·디바운스 4~64ms/기본16·PI Scale 적용), 로그인 viewer→sv300
   2) 빌드 최적화: 필드앱 -O1(-O2 홀딩 회피·코드 68KB↓), 부트로더 -O2(72→67KB, SV300_boot 별도), 디버그 -O0 유지; flash 확보 위해 웹 UI 영문화·jp/sn/pbar 헬퍼 통합
+  3) FW/Web: 메모리맵 260810(Command -8 시프트) + METER_CAL 4D화(vgain/vppgain[chip][phase][결선Z][PT2]·R_igain/R_phcal 로고스키·hwModel 삭제·hwVer/fwVer U16, GEMS3500식) + METER_INFO 상태필드(HEART BIT~TOT STS)·mBusRxCnt·checkIO(3s). web General HWMODEL 제거+Status 표시, IOM DATA를 별도 IO(DI/TEMP) 화면으로 분리
+  4) ★홀딩 근본수정: 웹 화면 빠른전환 시 Meter1_Task 스택오버플로우(os_error STACK_OVF) — meter_scan_2 PQM경로+웹 이더넷 인터럽트 프레임이 2048B 초과 → Meter1/Meter2 스택 512→1024워드·Meter0 256→384 상향 (실기 재빌드·플래시·검증 필요)
 
 NOSDMEM : SD MEMORY Y/N
 HWV1 : CH3(METER CHIP SELECT)

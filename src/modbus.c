@@ -175,7 +175,7 @@ static void smpFillCommon(SMP_MAP *dst)
 
 	c->utc         = meter[0].meter.utc;
 	c->heartBit    = pi->HeartBit;
-	c->hwModel     = pi->hwModel;
+	c->hwModel     = 0;	// hwModel 미사용
 	c->hwVer       = pi->hwVer;
 	c->fwVer       = pi->fwVer;
 	c->fwBuildYear = pi->fwBuildYear;
@@ -308,7 +308,9 @@ int modbusSlvProcFrame(uint8_t *prx, uint16_t rxsize, uint8_t *ptx, int longFram
 	uint8_t			fc, exceptCode;
 	int i;
 
-// 2017-8-16, 삭제 
+	pInfo->mBusRxCnt++;		/* Modbus RX 수신 카운트(RTU/TCP 공통) */
+
+// 2017-8-16, 삭제
 //	addr	= prx[0];
 //	if (addr == 0) {
 //		printf("modbusSlvProcFrame, bad address(%d)\n", addr);
@@ -1221,7 +1223,7 @@ void getMeterInfoV1(RESP_NETINF *sb) {
 	for (i=0; i<6; i++) {
 		sb->sn[i] = pInfo->sn[i];
 	}
-	sb->hwModel = pInfo->hwModel;
+	sb->hwModel = 0;	// hwModel 미사용
 	sb->hwVer = pInfo->hwVer;
 	sb->fwVer = pInfo->fwVer;
 	sb->fwDate[0] = pInfo->fwBuildYear;

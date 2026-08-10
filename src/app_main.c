@@ -618,7 +618,7 @@ void app_init(void *params) {
 #if 1
 		// Meter
 		taskParams.priority = OS_TASK_PRIORITY_REALTIME;
-		taskParams.stackSize = 256;
+		taskParams.stackSize = 384;   // 256->384: 인터럽트 프레임(FPU 스태킹) 여유 마진
 		tid_meter[0] = osCreateTask("meter", Meter0_Task, NULL, &taskParams);
 		if(tid_meter[0] == OS_INVALID_TASK_ID)
 		{
@@ -627,7 +627,7 @@ void app_init(void *params) {
 #ifndef CH1
 		/* M1/M2: 채널 수는 CH3 빌드 매크로로 결정(getHwCh 무관) */
 		taskParams.priority = OS_TASK_PRIORITY_HIGH;
-		taskParams.stackSize = 512;
+		taskParams.stackSize = 1024;   // 512->1024: meter_scan_2 PQM경로+웹부하 인터럽트 프레임 스택오버플로우 방지
 		tid_meter[1] = osCreateTask("meter1", Meter1_Task, NULL, &taskParams);
 		if(tid_meter[1] == OS_INVALID_TASK_ID)
 		{
@@ -635,7 +635,7 @@ void app_init(void *params) {
 		}
 #ifdef CH3
 		taskParams.priority = OS_TASK_PRIORITY_HIGH;
-		taskParams.stackSize = 512;
+		taskParams.stackSize = 1024;   // 512->1024: Meter1과 동일(RR PQM 경로)
 		tid_meter[2] = osCreateTask("meter2", Meter2_Task, NULL, &taskParams);
 		if(tid_meter[2] == OS_INVALID_TASK_ID)
 		{
@@ -780,7 +780,30 @@ void app_init(void *params) {
 }
 
 
-void Shell_Task(void *arg) 
+/* 3sec 마다 호출 — 각 상태를 종합해 TOT_sts 설정.
+ * iPSM/iPSMDI/Io_sts는 SV300 미사용(gateway 미사용)으로 제외 */
+void checkIO(void) {
+	int		i, errcnt=0;
+
+	for(i=0; i<2; i++) {
+		if(pInfo->RSTP_sts[i])
+			errcnt++;
+	}
+
+	if(pInfo->SNTP_sts)
+		errcnt++;
+	if(pInfo->DEV_sts)
+		errcnt++;
+	if(pInfo->NET_sts)
+		errcnt++;
+
+	if(errcnt)
+		pInfo->TOT_sts = STS_ERROR;
+	else
+		pInfo->TOT_sts = STS_OK;
+}
+
+void Shell_Task(void *arg)
 {
 	int	lastSec=0;
 
@@ -857,8 +880,8 @@ void Shell_Task(void *arg)
 			else
 				pInfo->NET_sts = STS_OK;
 
-			// if(ts1s % 3 == 0)
-			// 	checkIO();	
+			if(ts1s % 3 == 0)
+				checkIO();
 	   }
 	   osDelayTask(100);    
 	}

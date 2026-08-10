@@ -651,8 +651,7 @@ static void cmd_macset(char *par) {
 
 	if (i == 4) {	
 #if 1
-    pcal->sn[0] = (pcal->hwModel << 16)& 0xffff0000;
-    pcal->sn[0] |= pcal->hwVer& 0x0000ffff;
+    pcal->sn[0] = pcal->hwVer & 0x0000ffff;	// hwModel 미사용(삭제)
     pcal->sn[1] = (mac[0]<<24)&0xff000000;
     pcal->sn[1] |= (mac[1]<<16)&0x00ff0000;
     pcal->sn[1] |= (mac[2]<<8)&0x0000ff00;
@@ -681,8 +680,8 @@ static void cmd_hwModel(char *par) {
 
 	p = get_entry (par, &next);
 	if (p != NULL) {
-		sscanf(p, "%d", &pcal->hwModel);
-		printf("HwModel = %d\n", pcal->hwModel);
+		(void)p; /* hwModel 미사용(삭제) */
+		printf("HwModel = %d\n", 0);/*hwModel 미사용*/
 		storeHwSettings(pcal);
 	}
 	else {
@@ -729,7 +728,7 @@ static void cmd_hwVersion(char *par) {
 
 	p = get_entry (par, &next);
 	if (p != NULL) {
-		sscanf(p, "%d", &pcal->hwVer);
+		{ int _v=0; sscanf(p, "%d", &_v); pcal->hwVer = _v; }  /* hwVer U16 */
 		printf("HwVersion = %d\n", pcal->hwVer);
 		storeHwSettings(pcal);
 	}
@@ -740,7 +739,7 @@ static void cmd_hwVersion(char *par) {
 
 static void cmd_devInfo(char *par) {
 	printf("FW VERSION = %02x.%02x\n", pInfo->fwVer >> 8, pInfo->fwVer & 0xff);
-	printf("HW MODE    = %d\n", pcal->hwModel);
+	printf("HW MODE    = %d\n", 0);/*hwModel 미사용*/
 	printf("HW VERSION = %d\n", pcal->hwVer);
 	printf("HW MACress = %d:%d:%d:%d (%02x:%02x:%02x:%02x)\n", 
 			pcal->mac[0], pcal->mac[1], pcal->mac[2], pcal->mac[3],
