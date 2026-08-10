@@ -3,7 +3,7 @@
  *  참조: d:\PROJECT\confWebApp (Python FastAPI Modbus 웹앱) — 화면/기능 원본.
  *  방식: 다중 페이지(Jinja) → 단일 임베디드 SPA(로그인 + Dashboard + Setup).
  *  구성:
- *   - 인증: 폼 로그인(admin ntek/0300, viewer viewer/0000) + 쿠키 세션.
+ *   - 인증: 폼 로그인(admin ntek/0300, viewer sv300/0000) + 쿠키 세션.
  *           쓰기(명령/설정)는 admin 권한 게이트(서버측 재확인).
  *   - Dashboard: /api/dashboard(CH1 순시) + /api/sv300/events(3CH 알람/이벤트).
  *   - 데이터: meter[id].meter(METERING) 및 meter[id].alarm/alist/elist 직렬화.
@@ -227,7 +227,7 @@ static error_t apiLogin(HttpConnection *c)
 	formField(body, "password", pass, sizeof(pass));
 
 	if (!strcmp(user, "ntek")   && !strcmp(pass, "0300")) role = ROLE_ADMIN;
-	else if (!strcmp(user, "viewer") && !strcmp(pass, "0000")) role = ROLE_VIEWER;
+	else if (!strcmp(user, "sv300") && !strcmp(pass, "0000")) role = ROLE_VIEWER;
 
 	if (role == ROLE_NONE)
 		return webJsonStatus(c, 401, "{\"ok\":false,\"error\":\"invalid\"}");
@@ -282,7 +282,7 @@ static error_t apiMe(HttpConnection *c)
 	else {
 		snprintf(b, sizeof(b),
 			"{\"ok\":true,\"auth\":true,\"user\":\"%s\",\"role\":\"%s\"}",
-			r == ROLE_ADMIN ? "ntek" : "viewer", roleName(r));
+			r == ROLE_ADMIN ? "ntek" : "sv300", roleName(r));
 		w(c, b);
 	}
 	return httpCloseStream(c);
@@ -315,11 +315,18 @@ static error_t apiDashboard(HttpConnection *c)
 	w(c, b);
 	{
 		IOM_DATA *io = &meter[0].iom;   /* IOM DATA 7050~7069: DI status/pulse/TEMP */
+		IO_CFG   *cf = &meter[0].setting.iom;   /* dt=diType(0=DI,1=PI), db=debounce, sc=piConst */
 		snprintf(b, sizeof(b),
-			"\"iom\":{\"di\":[%u,%u,%u,%u],\"pi\":[%u,%u,%u,%u],\"temp\":[%.1f,%.1f,%.1f,%.1f]}}}",
+			"\"iom\":{\"di\":[%u,%u,%u,%u],\"pi\":[%u,%u,%u,%u],\"temp\":[%.1f,%.1f,%.1f,%.1f],",
 			(unsigned)io->diStatus[0], (unsigned)io->diStatus[1], (unsigned)io->diStatus[2], (unsigned)io->diStatus[3],
 			(unsigned)io->piData[0], (unsigned)io->piData[1], (unsigned)io->piData[2], (unsigned)io->piData[3],
 			io->aiData[0], io->aiData[1], io->aiData[2], io->aiData[3]);
+		w(c, b);
+		snprintf(b, sizeof(b),
+			"\"dt\":[%u,%u,%u,%u],\"db\":[%u,%u,%u,%u],\"sc\":[%u,%u,%u,%u]}}}",
+			(unsigned)cf->diType[0], (unsigned)cf->diType[1], (unsigned)cf->diType[2], (unsigned)cf->diType[3],
+			(unsigned)cf->debounce[0], (unsigned)cf->debounce[1], (unsigned)cf->debounce[2], (unsigned)cf->debounce[3],
+			(unsigned)cf->piConst[0], (unsigned)cf->piConst[1], (unsigned)cf->piConst[2], (unsigned)cf->piConst[3]);
 		w(c, b);
 	}
 	return httpCloseStream(c);
@@ -1257,7 +1264,7 @@ static const char INDEX_HTML[] =
 "   <label>Password<input name='p' id='li-p' type='password' autocomplete='current-password' required></label>\n"
 "   <button class='btn primary' type='submit' style='width:100%'>Login</button>\n"
 "  </form>\n"
-"  <p class='hint'>Admin (settings): <b>ntek</b> &middot; Viewer (read-only): <b>viewer</b></p>\n"
+"  <p class='hint'>Admin (settings): <b>ntek</b> &middot; Viewer (read-only): <b>sv300</b></p>\n"
 " </div>\n"
 "</div>\n"
 /* ---------- app view ---------- */
@@ -1337,7 +1344,7 @@ static const char INDEX_HTML[] =
 "     <div class='dcard e2'><div class='dct'>Alarm Log<button class='ebtn' id='b-clral' onclick=\"svCmd('clear_alarm')\" disabled>Clear Alarm</button></div><div class='elist'><table class='etbl' id='al-tbl'></table></div></div>\n"
 "     <div class='dcard e3'><div class='dct'>Event Log<button class='ebtn' id='b-clrev' onclick=\"svCmd('clear_event')\" disabled>Clear Event</button><button class='ebtn' id='b-ackev' onclick=\"svCmd('ack_event')\" disabled>ACK Event</button></div><div class='elist'><table class='etbl' id='el-tbl'></table></div><div class='esum' id='el-sum'></div></div>\n"
 "    </div>\n"
-"    <div class='dcard' style='margin-top:14px'><div class='dct'>IOM DATA <span class='ph2'>ADDR 7050~7069</span></div><div id='d-iom'></div></div>\n"
+"    <div class='dcard' style='margin-top:14px'><div class='dct'>IOM DATA <span class='ph2'>7050~7069</span></div><div id='d-iom'></div></div>\n"
 "   </div>\n"
 /* setup page (Phase 2에서 구현) */
 "   <div id='p-feeder' style='display:none'>\n"
@@ -1386,6 +1393,8 @@ static const char INDEX_HTML[] =
 "function acn(i){return AC[i]||('#'+i)}\n"
 "function j(u,o){o=o||{};var ac=('AbortController'in window)?new AbortController():null,tm=null;if(ac){o.signal=ac.signal;tm=setTimeout(function(){ac.abort()},6000);}\n"
 " return fetch(u,o).then(function(r){return r.text().then(function(t){if(tm)clearTimeout(tm);return{s:r.status,d:JSON.parse((t||'{}').replace(/-?\\b(inf|nan)\\b/gi,'0'))}})}).catch(function(e){if(tm)clearTimeout(tm);throw e;})}\n"
+"function jp(u,o){return j(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(o)});}\n"
+"function sn(a){$('setNote').textContent=IS_ADMIN?a:'Viewer: read-only.';}\n"
 "function n(v,d){return(v==null||isNaN(v))?'-':Number(v).toFixed(d)}\n"
 "function esc(s){return String(s).replace(/[&<>]/g,function(x){return{'&':'&amp;','<':'&lt;','>':'&gt;'}[x]})}\n"
 /* theme + clock */
@@ -1431,9 +1440,16 @@ static const char INDEX_HTML[] =
 "  $('d-pf').textContent=n(d.pf,2);setGauge(d.pf);\n"
 "  setBar('d-vunb','d-vunb-bar',d.u_unbal);setBar('d-iunb','d-iunb-bar',d.i_unbal);\n"
 "  $('d-thdu').textContent=n(d.thd_u,1)+'%';$('d-thdi').textContent=n(d.thd_i,1)+'%';$('d-tddi').textContent=n(d.tdd_i,1)+'%';\n"
-"  if(d.iom){var io=d.iom,ih=\"<table class='ctbl hsm'><tr><th>Ch</th><th>DI Status</th><th>Pulse</th><th>Temp(&#8451;)</th></tr>\";for(var k=0;k<4;k++)ih+=\"<tr><td class='rk'>#\"+k+\"</td><td>\"+io.di[k]+\"</td><td>\"+io.pi[k]+\"</td><td>\"+n(io.temp[k],1)+\"</td></tr>\";$('d-iom').innerHTML=ih+'</table>';}\n"
+"  if(d.iom){iomDat=d.iom;if(!ioEd)renderIom();}\n"
 "  $('dmeas').textContent='Measured: '+fdt(new Date());dstat(true);\n"
 " }).catch(function(){dstat(false)});}\n"
+"var ioEd=0,iomDat=null;\n"
+"function renderIom(){var io=iomDat;if(!io)return;var k,ed=ioEd&&IS_ADMIN,di=\"<div class='hsub'>DI</div><table class='ctbl hsm'><tr><th>P</th><th>Type</th><th>Deb</th><th>Scale</th><th>St</th><th>Pulse</th></tr>\";\n"
+" for(k=0;k<4;k++){var ty,de,sc;if(ed){ty=\"<select data-addr='\"+(7420+k)+\"' data-type='u16' data-orig='\"+io.dt[k]+\"'><option value='0'\"+(io.dt[k]==0?' selected':'')+\">DI</option><option value='1'\"+(io.dt[k]==1?' selected':'')+\">PI</option></select>\";de=\"<input type='number' min='4' max='64' data-addr='\"+(7424+k)+\"' data-type='u16' data-orig='\"+io.db[k]+\"' value='\"+io.db[k]+\"' style='width:50px'>\";sc=\"<input type='number' data-addr='\"+(7428+k)+\"' data-type='u16' data-orig='\"+io.sc[k]+\"' value='\"+io.sc[k]+\"' style='width:50px'>\";}else{ty=(io.dt[k]==1?'PI':'DI');de=io.db[k];sc=io.sc[k];}di+=\"<tr><td class='rk'>#\"+k+\"</td><td>\"+ty+\"</td><td>\"+de+\"</td><td>\"+sc+\"</td><td>\"+io.di[k]+\"</td><td>\"+io.pi[k]+\"</td></tr>\";}di+='</table>';\n"
+" if(IS_ADMIN)di+=ed?\"<div class='pgctl'><button class='btn primary' onclick='ioSave()'>Save</button><button class='btn' onclick='ioEd=0;renderIom()'>Cancel</button></div>\":\"<div class='pgctl'><button class='btn' onclick='ioEd=1;renderIom()'>Edit</button><button class='btn warn' onclick='clearPI()'>Clear PI</button></div>\";\n"
+" var tp=\"<div class='hsub'>Temperature</div><table class='ctbl hsm'><tr><th>P</th><th>Temp(&#8451;)</th></tr>\";for(k=0;k<4;k++)tp+=\"<tr><td class='rk'>#\"+k+\"</td><td>\"+n(io.temp[k],1)+\"</td></tr>\";tp+='</table>';\n"
+" $('d-iom').innerHTML=\"<div style='display:flex;gap:14px;flex-wrap:wrap'><div style='flex:1;min-width:300px'>\"+di+\"</div><div style='min-width:150px'>\"+tp+\"</div></div>\";}\n"
+"function ioSave(){var els=document.querySelectorAll('#d-iom [data-addr]'),c=[],i=0;els.forEach(function(e){if(e.value!==e.getAttribute('data-orig'))c.push(e);});if(!c.length){ioEd=0;renderIom();return;}(function w(){if(i>=c.length){ioEd=0;j('/api/savecfg',{method:'POST'}).then(function(){setTimeout(pollLoop,300);});return;}var e=c[i++],v=+e.value,mn=e.getAttribute('min'),mx=e.getAttribute('max');if(mn)v=Math.max(+mn,v);if(mx)v=Math.min(+mx,v);jp('/api/setreg',{addr:+e.getAttribute('data-addr'),type:'u16',val:v}).then(w).catch(w);})();}\n"
 "function chip(c){return \"<span class='chchip'>CH\"+c+'</span>'}\n"
 "function ts2(s){return s?fdt(new Date(s*1000)):'-'}\n"
 "function loadEvents(){return j('/api/sv300/events').then(function(r){if(!r.d.ok)return;var d=r.d;\n"
@@ -1453,7 +1469,7 @@ static const char INDEX_HTML[] =
 " }).catch(function(){});}\n"
 "function svCmd(cmd){var lbl={ack_alarm:'ACK Alarm',clear_alarm:'Clear Alarm',clear_event:'Clear Event',ack_event:'ACK Event'}[cmd];\n"
 " if(!confirm(lbl+' - proceed?'))return;\n"
-" j('/api/sv300/command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cmd:cmd})}).then(function(r){\n"
+" jp('/api/sv300/command',{cmd:cmd}).then(function(r){\n"
 "  if(r.s===403){alert('Admin only');return}if(!r.d.ok){alert('Command failed');return}loadEvents();});}\n"
 /* setup */
 "var OPT={va_type:{0:'RMS (S=VA)',1:'Vector'},pf_sign:{0:'IEC',1:'IEEE'},minmax_reset:{0:'Daily',1:'Weekly',2:'Monthly'},timezone:{'-720':'UTC-12:00','-600':'Hawaii -10:00','-540':'Alaska -09:00','-480':'Pacific -08:00','-420':'Mountain -07:00','-360':'Central -06:00','-300':'Eastern -05:00','-180':'-03:00','0':'UTC +00:00','60':'Berlin +01:00','120':'Athens +02:00','180':'Moscow +03:00','210':'Tehran +03:30','240':'Dubai +04:00','300':'Karachi +05:00','330':'India +05:30','345':'Nepal +05:45','360':'Dhaka +06:00','420':'Bangkok +07:00','480':'Shanghai +08:00','540':'Seoul +09:00','570':'Adelaide +09:30','600':'Sydney +10:00','720':'Auckland +12:00'}};\n"
@@ -1462,21 +1478,21 @@ static const char INDEX_HTML[] =
 "var CT2M={0:'5A',1:'100mA/333mV',2:'Rogowski'},ZCTM={1:'200mV:100mV',2:'200mV:1.5mA',3:'200mV:0.1mA'},DIM={0:'DI',1:'PI'},DIRM={0:'+',1:'-'};\n"
 "var PT_F=[{o:0,l:'Wiring Mode',t:'u16',opt:WM},{o:2,l:'V Nominal',t:'u32'},{o:4,l:'PT1',t:'u32'},{o:6,l:'PT2',t:'u16'}];\n"
 "var CT_F=[{o:0,l:'I Nominal',t:'u16'},{o:1,l:'CT1',t:'u16'},{o:2,l:'CT2',t:'u16',opt:CT2M},{o:3,l:'Turns',t:'u16'},{o:4,l:'Start I',t:'u16'},{o:5,l:'CT1 Dir',t:'u16',opt:DIRM},{o:6,l:'CT2 Dir',t:'u16',opt:DIRM},{o:7,l:'CT3 Dir',t:'u16',opt:DIRM},{o:8,l:'Rogowski',t:'u16'},{o:9,l:'Phase Ofs 1',t:'i16'},{o:10,l:'Phase Ofs 2',t:'i16'},{o:11,l:'Phase Ofs 3',t:'i16'},{o:12,l:'ZCT Type',t:'u16',opt:ZCTM},{o:13,l:'ZCT Scale',t:'u16'}];\n"
-"var CMDS=[{g:'System',l:'Reboot',addr:7456,danger:1,note:'reboot'},{g:'System',l:'Save Settings',addr:7457},{g:'System',l:'Init Settings',addr:7471,danger:2},{g:'System',l:'Set Time',addr:7446,utc:1},{g:'Clear / Reset',l:'Clear PI',addr:7472,danger:1},{g:'Clear / Reset',l:'Clear Demand',addr:7473,tgt:1},{g:'Clear / Reset',l:'Clear Min/Max',addr:7477,tgt:1},{g:'Clear / Reset',l:'Clear Energy',addr:7481,tgt:1,danger:1},{g:'Acknowledge',l:'Alarm Ack',addr:7501,tgt:1},{g:'Acknowledge',l:'Event Ack',addr:7505,tgt:1}];\n"
-"var MAIN_TABS=[['general','General'],['pt','PT'],['ct','CT'],['iom','IO'],['command','Command']];\n"
+"var CMDS=[{g:'System',l:'Reboot',addr:7456,danger:1,note:'reboot'},{g:'System',l:'Save Set',addr:7457},{g:'System',l:'Init Settings',addr:7471,danger:2},{g:'System',l:'Set Time',addr:7446,utc:1}];\n"
+"var MAIN_TABS=[['general','General'],['pt','PT'],['ct','CT'],['command','Command']];\n"
 "var CHAN_TABS=[['pqevent','PQ Event'],['transient','Transient'],['waveform','Waveform'],['disturb','Disturbance'],['trend','Trend'],['pqreport','PQ Report'],['almdef','Alarm Def'],['alarm','Alarm Settings']];\n"
 "var setMode='main';\n"
 "function setEnter(arg){setMode=(arg==='chan')?'chan':'main';$('setBadge').textContent=(setMode==='chan')?'Channel Setting':'Main Setting';$('si-setup').className='sitem'+(setMode==='main'?' active':'');$('si-chset').className='sitem'+(setMode==='chan'?' active':'');setTab(((setMode==='chan')?CHAN_TABS:MAIN_TABS)[0][0]);}\n"
 "function setTab(t){setCur=t;var L=(setMode==='chan')?CHAN_TABS:MAIN_TABS,h='';L.forEach(function(p){h+=\"<a class='gp-tab\"+(p[0]===t?' on':'')+\"' data-t='\"+p[0]+\"'>\"+esc(p[1])+'</a>';});var st=$('setTabs');st.innerHTML=h;st.onclick=function(e){var a=e.target.closest('a[data-t]');if(a)setTab(a.getAttribute('data-t'));};\n"
 " $('setSave').style.display=((t!=='command')&&IS_ADMIN)?'':'none';$('setRes').textContent='';$('setBody').innerHTML=\"<p class='stub'>loading...</p>\";reloadSet();}\n"
-"function reloadSet(){var t=setCur;if(t==='general')loadGeneral();else if(t==='pt')loadGroup('pt');else if(t==='ct')loadGroup('ct');else if(t==='iom')loadIO();else if(t==='command')loadCommand();else if(t==='alarm')loadAlarm();else loadCSect(t);}\n"
+"function reloadSet(){var t=setCur;if(t==='general')loadGeneral();else if(t==='pt')loadGroup('pt');else if(t==='ct')loadGroup('ct');else if(t==='command')loadCommand();else if(t==='alarm')loadAlarm();else loadCSect(t);}\n"
 "var CSECT={pqevent:[[6700,'Level','Over Current'],[6701,'Cycle','Over Current'],[6702,'Trigger Action','Over Current'],[6703,'holdOff Cycle','Over Current'],[6706,'Level(%)','Sag',1],[6707,'Cycle','Sag',1],[6708,'Trigger Action','Sag',1],[6709,'holdOff Cycle','Sag',1],[6712,'Level(%)','Swell',1],[6713,'Cycle','Swell',1],[6714,'Trigger Action','Swell',1],[6715,'holdOff Cycle','Swell',1],[6718,'Level(%)','Interruption',1],[6719,'Time(s)','Interruption',1],[6720,'Trigger Action','Interruption',1],[6721,'holdOff Cycle','Interruption',1]],transient:[[6724,'HoldOff(ms)','Voltage',1],[6725,'Abs Peak(%)','Voltage',1],[6726,'Fast Change','Voltage',1],[6727,'Trigger Action','Voltage',1],[6728,'HoldOff','Current'],[6729,'Abs Peak','Current'],[6730,'Fast Change','Current'],[6731,'Trigger Action','Current']],waveform:[[6744,'Resolution(32k/8k)'],[6745,'Param(U/I)'],[6746,'Pre trig(0.1s)'],[6747,'Post trig(1s)']],disturb:[[6748,'Resolution(HalfCyc)'],[6749,'Param(U/I)'],[6750,'Pre trig(smp)'],[6751,'Post trig(smp)']],pqreport:[[6844,'Active'],[6845,'Start Day']],almdef:[[6854,'compare Time Delay(s)']]};\n"
 "(function(){var t=[];[[1,6764,6766,6767],[2,6783,6785,6786],[3,6802,0,6805],[4,6821,0,6824]].forEach(function(g){var gn='Group '+g[0];t.push([g[1],'Active',gn]);t.push([g[1]+1,'Interval',gn]);if(g[2])t.push([g[2],'Version',gn]);for(var k=0;k<16;k++)t.push([g[3]+k,'Ch'+(k+1),gn]);});CSECT.trend=t;})();\n"
 "function loadCSect(key){var f=CSECT[key];if(!f){$('setBody').innerHTML=\"<p class='stub'>-</p>\";return;}var lo=f[0][0],hi=f[0][0];f.forEach(function(p){if(p[0]<lo)lo=p[0];if(p[0]>hi)hi=p[0];});var nn=hi-lo+1;\n"
 " Promise.all([1,2,3].map(function(ch){return j('/api/regs?addr='+(lo+(ch-1)*10000)+'&n='+nn).then(function(r){return (r.d&&r.d.ok)?r.d.words:null;}).catch(function(){return null;});})).then(function(bl){if(setCur!==key)return;\n"
 "  var h=\"<div class='setgrid'>\";for(var ch=1;ch<=3;ch++){var wds=bl[ch-1];h+=\"<div class='setcard'><h3>CH\"+ch+'</h3>';\n"
 "   if(!wds){h+=\"<p class='stub'>no data</p>\";}else{var pg=null;f.forEach(function(p){if(ch>1&&p[3])return;var g=p[2]||'';if(g&&g!==pg){h+=\"<div class='sgrp'>\"+esc(g)+\"</div>\";}pg=g;var addr=p[0]+(ch-1)*10000,v=wds[p[0]-lo]||0;h+=\"<div class='srow'><span class='sk'>\"+esc(p[1])+\"</span><input type='number' data-addr='\"+addr+\"' data-type='u16' data-orig='\"+v+\"' value='\"+v+\"' \"+(IS_ADMIN?'':'disabled')+\" oninput='setMark(this)'></div>\";});}\n"
-"   h+='</div>';}h+='</div>';$('setBody').innerHTML=h;$('setNote').textContent=IS_ADMIN?'변경 후 Save & Apply(재부팅 없이 저장).':'Viewer 모드 - 읽기 전용.';});}\n"
+"   h+='</div>';}h+='</div>';$('setBody').innerHTML=h;sn('Save & Apply.');});}\n"
 "function fmtV(f){return (f.type==='bool')?(f.val?'On':'Off'):esc(f.val)}\n"
 "function ctlOf(f){var d=\"data-addr='\"+f.addr+\"' data-type='\"+f.type+\"' data-orig='\"+esc(f.val)+\"'\",dis=IS_ADMIN?'':'disabled';\n"
 " if(f.ro)return \"<span class='sv'>\"+fmtV(f)+\"</span><span class='rtag'>R</span>\";\n"
@@ -1487,13 +1503,13 @@ static const char INDEX_HTML[] =
 "function loadGeneral(){return j('/api/general').then(function(r){if(!r.d.ok){$('setBody').innerHTML=\"<p class='stub'>load error</p>\";return;}\n"
 " var cs=[[],[],[]];r.d.fields.forEach(function(f){cs[f.card].push(f)});var h=\"<div class='setgrid'>\";\n"
 " cs.forEach(function(fs,ci){h+=\"<div class='setcard'><h3>\"+CARDN[ci]+'</h3>';fs.forEach(function(f){h+=\"<div class='srow'><span class='sk'>\"+esc(f.label)+'</span>'+ctlOf(f)+'</div>';});h+='</div>';});\n"
-" h+='</div>';$('setBody').innerHTML=h;$('setNote').textContent=IS_ADMIN?'변경 후 Save & Apply. 네트워크·PT/CT는 재부팅 후 완전 적용.':'Viewer 모드 - 읽기 전용.';});}\n"
+" h+='</div>';$('setBody').innerHTML=h;sn('Save & Apply.');});}\n"
 "function setMark(el){var v=(el.type==='checkbox')?(el.checked?'1':'0'):el.value;if((''+v)!==el.getAttribute('data-orig'))el.classList.add('chg');else el.classList.remove('chg');}\n"
 "function setRes(m){$('setRes').textContent=m}\n"
 "function saveSet(){var els=document.querySelectorAll('#setBody [data-addr]'),chg=[];\n"
 " els.forEach(function(el){var v=(el.type==='checkbox')?(el.checked?'1':'0'):el.value;if((''+v)!==el.getAttribute('data-orig'))chg.push({el:el,v:v});});\n"
-" if(!chg.length){setRes('No changes');return;}if(!confirm(chg.length+'개 설정을 저장합니다. 계속?'))return;setRes('Writing...');\n"
-" var i=0;function wr(a,t,v){return j('/api/setreg',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({addr:a,type:t,val:v})});}\n"
+" if(!chg.length){setRes('No changes');return;}if(!confirm(chg.length+' change(s). Save?'))return;setRes('Writing...');\n"
+" var i=0;function wr(a,t,v){return jp('/api/setreg',{addr:a,type:t,val:v});}\n"
 " function next(){if(i>=chg.length){j('/api/savecfg',{method:'POST'}).then(function(){setRes('Saved ('+chg.length+')');reloadSet();});return;}\n"
 "  var it=chg[i++],addr=+it.el.getAttribute('data-addr'),type=it.el.getAttribute('data-type');\n"
 "  if(type==='ip'){var p=(it.v||'0.0.0.0').split('.'),k=0;(function nip(){if(k>=4){next();return;}wr(addr+k,'u16',+(p[k]||0)).then(function(){k++;nip();});})();}\n"
@@ -1509,19 +1525,15 @@ static const char INDEX_HTML[] =
 " return j('/api/regs?addr='+cfg.base+'&n='+(cfg.step*9)).then(function(r){if(!r.d.ok){$('setBody').innerHTML=\"<p class='stub'>load error</p>\";return;}var wds=r.d.words,h=\"<div class='setgrid'>\";\n"
 "  for(var s=0;s<9;s++){var sb=cfg.base+s*cfg.step,so=s*cfg.step;h+=\"<div class='setcard'><h3>\"+cfg.ti+' #'+(s+1)+'</h3>';\n"
 "   cfg.fields.forEach(function(f){var val=decodeF(wds,so+f.o,f.t);h+=\"<div class='srow'><span class='sk'>\"+f.l+'</span>'+grpCtl(f,sb+f.o,val)+'</div>';});h+='</div>';}\n"
-"  h+='</div>';$('setBody').innerHTML=h;$('setNote').textContent=IS_ADMIN?'변경 후 Save & Apply(재부팅 없이 저장). 결선/CT비 등은 재부팅 후 완전 적용될 수 있습니다.':'Viewer 모드 - 읽기 전용.';});}\n"
-"function ioRow(l,addr,val,opt){return \"<div class='srow'><span class='sk'>\"+l+'</span>'+grpCtl({t:'u16',opt:opt},addr,val||0)+'</div>';}\n"
-"function loadIO(){return j('/api/regs?addr=7418&n=14').then(function(r){if(!r.d.ok){$('setBody').innerHTML=\"<p class='stub'>load error</p>\";return;}var wds=r.d.words,h=\"<div class='setgrid'>\";\n"
-"  for(var k=0;k<4;k++){h+=\"<div class='setcard'><h3>IO #\"+k+'</h3>'+ioRow('DI Type',7420+k,wds[2+k],DIM)+ioRow('DI Debounce',7424+k,wds[6+k],null)+ioRow('PI Scale',7428+k,wds[10+k],null)+'</div>';}\n"
-"  h+='</div>';$('setBody').innerHTML=h;$('setNote').textContent=IS_ADMIN?'변경 후 Save & Apply(재부팅 없이 저장).':'Viewer 모드 - 읽기 전용.';});}\n"
+"  h+='</div>';$('setBody').innerHTML=h;sn('Save & Apply.');});}\n"
 "function tgtOpts(id){var s=\"<select id='t_\"+id+\"' style='width:80px'><option value='0'>ALL</option>\";for(var t=1;t<=3;t++)s+=\"<option value='\"+t+\"'>#\"+t+'</option>';return s+'</select>';}\n"
 "function loadCommand(){var gr={},od=[];CMDS.forEach(function(c){if(!gr[c.g]){gr[c.g]=[];od.push(c.g);}gr[c.g].push(c);});var h='';\n"
 " od.forEach(function(g){h+=\"<div class='setcard'><h3>\"+g+'</h3>';gr[g].forEach(function(c){var gi=CMDS.indexOf(c),id='c'+gi,ctl='';\n"
 "  if(c.utc)ctl=\"<input type='datetime-local' step='1' id='u_\"+id+\"' style='width:200px'>\";else if(c.tgt)ctl=tgtOpts(id);\n"
 "  h+=\"<div class='srow'><span class='sk'>\"+c.l+\"</span><span style='display:flex;gap:8px;align-items:center'>\"+ctl+\"<button class='btn\"+(c.danger?' warn':'')+\"' \"+(IS_ADMIN?'':'disabled')+\" onclick='runCmd(\"+gi+\")'>Run</button></span></div>\";});h+='</div>';});\n"
-" $('setBody').innerHTML=\"<div class='setgrid'>\"+h+'</div>';$('setNote').textContent=IS_ADMIN?'명령은 즉시 실행됩니다. Reboot / Init Settings 주의.':'Viewer 모드 - 실행 불가.';}\n"
+" $('setBody').innerHTML=\"<div class='setgrid'>\"+h+'</div>';$('setNote').textContent=IS_ADMIN?'Reboot/Init.':'Viewer: no execute.';}\n"
 "function waitReboot(){var tr=0;setTimeout(function pl(){tr++;fetch('/api/me',{cache:'no-store'}).then(function(){location.reload();}).catch(function(){if(tr<40)setTimeout(pl,2000);else location.reload();});},8000);}\n"
-"function cmdDone(r,c){if(r.s===403){alert('Admin only');return;}if(!r.d.ok){alert('명령 실패');return;}setRes(c.l+' 실행됨');if(c.note==='reboot'){$('setNote').textContent='재부팅 중... 복귀되면 자동으로 로그인 화면으로 전환됩니다.';waitReboot();}}\n"
+"function cmdDone(r,c){if(r.s===403){alert('Admin only');return;}if(!r.d.ok){alert('Command failed');return;}setRes(c.l+' done');if(c.note==='reboot'){$('setNote').textContent='Rebooting...';waitReboot();}}\n"
 /* Feeder */
 "function fbadge(w){return `<span class='wb'>${WM[w]||('mode '+w)}</span>`;}\n"
 "function kv(k,v,u){return `<div class='kvi'><span class='kk'>${k}</span><span class='kvv'>${v}<small> ${u}</small></span></div>`;}\n"
@@ -1538,7 +1550,7 @@ static const char INDEX_HTML[] =
 "var chTabCur='meter',CHN=[{n:1},{n:2},{n:3}];\n"
 "var harmOpt='pv',harmView='table',PCOL=['#8b5cf6','#38bdf8','#84cc16'];\n"
 "function chEnter(){chSetTab(chTabCur);}\n"
-"function chSetTab(t){chTabCur=t;['meter','phase','minmax','harmonics','waveform','report','monthly','energy','demand','alarm','event'].forEach(function(x){var e=$('ct-'+x);if(e)e.className='gp-tab'+(x===t?' on':'');});var cc=$('chctl');if(cc)cc.style.display=(t==='harmonics')?'flex':'none';syncHv();$('chbody').innerHTML=\"<p class='stub'>loading...</p>\";pollLoop();}\n"
+"function chSetTab(t){chTabCur=t;egyEd=0;['meter','phase','minmax','harmonics','waveform','report','monthly','energy','demand','alarm','event'].forEach(function(x){var e=$('ct-'+x);if(e)e.className='gp-tab'+(x===t?' on':'');});var cc=$('chctl');if(cc)cc.style.display=(t==='harmonics')?'flex':'none';syncHv();$('chbody').innerHTML=\"<p class='stub'>loading...</p>\";pollLoop();}\n"
 "function chStat(ok){var e=$('chstat');if(e){e.className='ph2 '+(ok?'on':'bad');e.innerHTML=ok?'&#9679; live &#8635; 1s':'&#9679; read error';}}\n"
 "function chFail(){chStat(false);var b=$('chbody');if(b&&b.innerHTML.indexOf('loading')>=0)b.innerHTML=\"<p class='stub'>read error - retrying...</p>\";}\n"
 "function chCards(list,fn){var h=\"<div class='chgrid'>\";list.forEach(function(x){h+=`<div class='chcard'><div class='chh'>CH${x.n}</div>${fn(x)}</div>`;});return h+'</div>';}\n"
@@ -1571,9 +1583,9 @@ static const char INDEX_HTML[] =
 " h+=r3('U mag (V)',x.u,1)+r3('U angle (&deg;)',x.uang,1)+r3('I mag (A)',x.i,2)+r3('I angle (&deg;)',x.iang,1);return h+'</table>';}\n"
 "function bMm(x){var h=clrBtn('clrMinmax',x.n)+`<div class='cmeta'>Reset: ${ts2(x.reset_ts)}</div><table class='ctbl mmtbl'><tr><th>Metric</th><th></th><th>Value</th><th>Time</th></tr>`;\n"
 " x.m.forEach(function(m){h+=`<tr><td class='rk' rowspan='2'>${m.nm}</td><td class='mk'>Max</td><td>${n(m.mx,2)}</td><td class='ts'>${ts2(m.mxt)}</td></tr><tr><td class='mk'>Min</td><td>${n(m.mn,2)}</td><td class='ts'>${ts2(m.mnt)}</td></tr>`;});return h+'</table>';}\n"
-"function bEgyNow(x){var C=[['import_kwh','Imp kWh'],['export_kwh','Exp kWh'],['import_kvarh','Imp kVarh'],['export_kvarh','Exp kVarh'],['kvah','kVAh']];\n"
+"function bEgyNow(x,ed){var C=[['import_kwh','Imp kWh'],['export_kwh','Exp kWh'],['import_kvarh','Imp kVarh'],['export_kvarh','Exp kVarh'],['kvah','kVAh']];\n"
 " var h=\"<table class='ctbl hsm'><tr><th></th>\";C.forEach(function(c){h+='<th>'+c[1]+'</th>';});h+='</tr>';\n"
-" x.periods.forEach(function(pr){h+=`<tr><td class='rk' colspan='6' style='color:var(--accent)'>${pr.name}</td></tr>`;pr.groups.forEach(function(g){h+=`<tr><td class='rk'>${g.name}</td>`;C.forEach(function(c){h+='<td>'+n(g[c[0]],1)+'</td>';});h+='</tr>';});});return h+'</table>';}\n"
+" x.periods.forEach(function(pr,pi){h+=`<tr><td class='rk' colspan='6' style='color:var(--accent)'>${pr.name}</td></tr>`;pr.groups.forEach(function(g,gi){h+=`<tr><td class='rk'>${g.name}</td>`;C.forEach(function(c,ti){var v=g[c[0]];if(ed){var a=240+pi*48+gi*12+ti*2+(x.n-1)*10000;h+=\"<td><input class='ein' data-a='\"+a+\"' data-o='\"+n(v,1)+\"' value='\"+n(v,1)+\"' style='width:58px'></td>\";}else h+='<td>'+n(v,1)+'</td>';});h+='</tr>';});});return h+'</table>';}\n"
 "function bEgyLog(lg){var h=`<div class='hsub'>Hourly kWh (This ${n(lg.this_total,1)} / Last ${n(lg.last_total,1)})</div><table class='ctbl hsm'><tr><th>H</th><th>This</th><th>Last</th></tr>`;\n"
 " for(var k=0;k<24;k++){h+=`<tr><td class='rk'>${k}</td><td>${n(lg.this[k],2)}</td><td>${n(lg.last[k],2)}</td></tr>`;}return h+'</table>';}\n"
 "function drawDemand(id,vals,peak){var cv=$(id);if(!cv)return;var w=cv.clientWidth||300;cv.width=w;cv.height=200;var g=cv.getContext('2d'),pl=36,pb=18,pt=10,nn=96,ymax=(peak>0?peak:1)*1.15,i;\n"
@@ -1624,30 +1636,36 @@ static const char INDEX_HTML[] =
 "function bAlarm(x,ev){var st=ev.status.filter(function(s){return s.chn===x.n;}),lg=ev.alarmlog.filter(function(s){return s.chn===x.n;});\n"
 " var h=`<div class='hsub'>Alarm Status <span class='ph2'>(${st.length} active)</span></div><table class='ctbl'><tr><th>Alarm Channel</th><th>State</th><th>Count</th></tr>`;\n"
 " if(!st.length)h+=\"<tr><td colspan='3' class='empty'>No active alarms</td></tr>\";st.forEach(function(s){h+=`<tr><td class='rk'>${esc(acn(s.chan))}</td><td><span class='st set'>Set</span></td><td>${s.count}</td></tr>`;});\n"
-" h+=\"</table><div class='hsub'>Alarm Log</div>\";if(IS_ADMIN)h+=\"<div class='pgctl'><button class='btn' onclick='pgAlarm(\"+x.n+\",3)'>&#8593;&#8593; Top</button><button class='btn' onclick='pgAlarm(\"+x.n+\",2)'>&#8593; Up</button><button class='btn' onclick='pgAlarm(\"+x.n+\",1)'>&#8595; Down</button><button class='btn' onclick='pgAlarm(\"+x.n+\",4)'>&#8595;&#8595; Bottom</button><button class='btn warn' onclick='clrAlarm(\"+x.n+\")'>Clear</button></div>\";\n"
+" h+=\"</table><div class='hsub'>Alarm Log</div>\"+pbar('pgAlarm',x.n,'clrAlarm','ackAlarm');\n"
 " h+=\"<table class='ctbl'><tr><th>Channel</th><th>State</th><th>Value</th><th>Time</th></tr>\";\n"
 " if(!lg.length)h+=\"<tr><td colspan='4' class='empty'>No alarm log</td></tr>\";lg.forEach(function(s){h+=`<tr><td class='rk'>${esc(acn(s.chan))}</td><td><span class='st ${s.set?'set':'clr'}'>${s.set?'Set':'Clear'}</span></td><td>${n(s.value,2)}</td><td class='ts'>${ts2(s.ts)}</td></tr>`;});return h+'</table>';}\n"
 "function bEvent(x,ev){var el=ev.eventlog.filter(function(s){return s.chn===x.n;});\n"
-" var h='';if(IS_ADMIN)h+=\"<div class='pgctl'><button class='btn' onclick='pgEvent(\"+x.n+\",3)'>&#8593;&#8593; Top</button><button class='btn' onclick='pgEvent(\"+x.n+\",2)'>&#8593; Up</button><button class='btn' onclick='pgEvent(\"+x.n+\",1)'>&#8595; Down</button><button class='btn' onclick='pgEvent(\"+x.n+\",4)'>&#8595;&#8595; Bottom</button><button class='btn warn' onclick='clrEvent(\"+x.n+\")'>Clear</button></div>\";\n"
+" var h=pbar('pgEvent',x.n,'clrEvent','ackEvent');\n"
 " h+=\"<table class='ctbl'><tr><th>Type</th><th>Start Time</th><th>Dur(ms)</th><th>Phase</th><th>Level</th></tr>\";\n"
 " if(!el.length)h+=\"<tr><td colspan='5' class='empty'>No events</td></tr>\";el.forEach(function(e){var t=ET[e.type]||['#'+e.type,'oc'],ph=[];if(e.mask&1)ph.push('L1');if(e.mask&2)ph.push('L2');if(e.mask&4)ph.push('L3');h+=`<tr><td><span class='evt ${t[1]}'>${t[0]}</span></td><td class='ts'>${ts2(e.ts)}</td><td>${e.dur}</td><td>${ph.join(',')||'-'}</td><td>${n(e.level,2)}</td></tr>`;});return h+'</table>';}\n"
-"function wrCmd(a,v){if(!IS_ADMIN){alert('Admin only');return;}j('/api/setreg',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({addr:a,type:'u16',val:v})}).then(function(){setTimeout(pollLoop,300);});}\n"
+"function wrCmd(a,v){if(!IS_ADMIN){alert('Admin only');return;}jp('/api/setreg',{addr:a,type:'u16',val:v}).then(function(){setTimeout(pollLoop,300);});}\n"
 "function pgAlarm(n,c){wrCmd(7497+n,c);}\n"
-"function clrAlarm(n){if(confirm('Clear Alarm Log CH'+n+'?'))wrCmd(7485+n,4660);}\n"
+"function clrAlarm(n){if(confirm('Clear Alarm CH'+n+'?'))wrCmd(7485+n,4660);}\n"
 "function pgEvent(n,c){wrCmd(7493+n,c);}\n"
-"function clrEvent(n){if(confirm('Clear Event Log CH'+n+'?'))wrCmd(7489+n,4660);}\n"
-"function pgItic2(c){wrCmd(7510,c);}\n"
+"function clrEvent(n){if(confirm('Clear Event CH'+n+'?'))wrCmd(7489+n,4660);}\n"
+"function pgItic2(n,c){wrCmd(7510,c);}\n"
 "function clrBtn(fn,n){return IS_ADMIN?\"<div class='pgctl'><button class='btn warn' onclick='\"+fn+\"(\"+n+\")'>Clear</button></div>\":'';}\n"
 "function clrMinmax(n){if(confirm('Clear Min/Max CH'+n+'?'))wrCmd(7477+n,4660);}\n"
-"function clrEnergy(n){if(confirm('Clear Energy CH'+n+'? (irreversible)'))wrCmd(7481+n,4660);}\n"
+"function clrEnergy(n){if(confirm('Clear Energy CH'+n+'?'))wrCmd(7481+n,4660);}\n"
 "function clrDemand(n){if(confirm('Clear Demand CH'+n+'?'))wrCmd(7473+n,4660);}\n"
-"function iticBar(fn){if(!IS_ADMIN)return '';return \"<div class='pgctl'><button class='btn' onclick='\"+fn+\"(3)'>&#8593;&#8593; Top</button><button class='btn' onclick='\"+fn+\"(2)'>&#8593; Up</button><button class='btn' onclick='\"+fn+\"(1)'>&#8595; Down</button><button class='btn' onclick='\"+fn+\"(4)'>&#8595;&#8595; Bottom</button></div>\";}\n"
-"function bItic(list,title,fn){var h=\"<div class='hsub'>\"+title+\"</div>\"+iticBar(fn)+\"<table class='ctbl'><tr><th>Type</th><th>Start Time</th><th>Dur(ms)</th><th>Phase</th><th>Level</th></tr>\";\n"
+"function ackAlarm(n){wrCmd(7501+n,4660);}\n"
+"function ackEvent(n){wrCmd(7505+n,4660);}\n"
+"function clearPI(){if(confirm('Clear PI?'))wrCmd(7472,4660);}\n"
+"var egyEd=0,egyD=null;\n"
+"function egyRender(){if(!egyD)return;var b=IS_ADMIN?(egyEd?\"<div class='pgctl'><button class='btn primary' onclick='egyWr()'>Write</button><button class='btn' onclick='egyEd=0;egyRender()'>Cancel</button></div>\":\"<div class='pgctl'><button class='btn' onclick='egyEd=1;egyRender()'>Edit</button></div>\"):'';$('chbody').innerHTML=chCards(egyD.now,function(x){var lg=egyD.log.filter(function(e){return e.n===x.n;})[0];return b+(egyEd?'':clrBtn('clrEnergy',x.n))+bEgyNow(x,egyEd)+(lg?bEgyLog(lg):'');});}\n"
+"function egyWr(){var els=document.querySelectorAll('#chbody .ein'),c=[],i=0;els.forEach(function(e){if(e.value!==e.getAttribute('data-o'))c.push(e);});if(!c.length){egyEd=0;egyRender();return;}(function w(){if(i>=c.length){egyEd=0;setTimeout(pollLoop,300);return;}var e=c[i++],v=Math.round(parseFloat(e.value)*10);if(!isFinite(v)||v<0)v=0;jp('/api/setreg',{addr:+e.getAttribute('data-a'),type:'u32',val:v}).then(w).catch(w);})();}\n"
+"function pbar(fn,n,cf,af){if(!IS_ADMIN)return '';var s=\"<div class='pgctl'>\",L=[[3,'&#8593;&#8593; Top'],[2,'&#8593; Up'],[1,'&#8595; Down'],[4,'&#8595;&#8595; Bottom']];L.forEach(function(t){s+=\"<button class='btn' onclick='\"+fn+\"(\"+n+\",\"+t[0]+\")'>\"+t[1]+\"</button>\";});if(af)s+=\"<button class='btn' onclick='\"+af+\"(\"+n+\")'>Ack</button>\";if(cf)s+=\"<button class='btn warn' onclick='\"+cf+\"(\"+n+\")'>Clear</button>\";return s+'</div>';}\n"
+"function bItic(list,title,fn){var h=\"<div class='hsub'>\"+title+\"</div>\"+pbar(fn,1)+\"<table class='ctbl'><tr><th>Type</th><th>Start Time</th><th>Dur(ms)</th><th>Phase</th><th>Level</th></tr>\";\n"
 " if(!list||!list.length)h+=\"<tr><td colspan='5' class='empty'>No data</td></tr>\";(list||[]).forEach(function(e){var t=ET[e.type]||['#'+e.type,'oc'],ph=[];if(e.mask&1)ph.push('L1');if(e.mask&2)ph.push('L2');if(e.mask&4)ph.push('L3');h+=\"<tr><td><span class='evt \"+t[1]+\"'>\"+t[0]+\"</span></td><td class='ts'>\"+ts2(e.ts)+\"</td><td>\"+e.dur+\"</td><td>\"+(ph.join(',')||'-')+\"</td><td>\"+n(e.level,2)+\"</td></tr>\";});return h+'</table>';}\n"
 "function loadChannelTab(){var t=chTabCur;\n"
 " if(t==='meter'||t==='phase')return j('/api/channels').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=chCards(r.d.ch,t==='meter'?bMeter:bPhase);}).catch(chFail);\n"
 " if(t==='minmax')return j('/api/minmax').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=chCards(r.d.ch,bMm);}).catch(chFail);\n"
-" if(t==='energy')return j('/api/energynow').then(function(r){if(chTabCur!==t)return null;if(!r.d.ok){chStat(false);return null;}return j('/api/energylog').then(function(r2){return{now:r.d.ch,log:(r2.d&&r2.d.ok)?r2.d.ch:[]};});}).then(function(d){if(!d||chTabCur!=='energy')return;chStat(true);$('chbody').innerHTML=chCards(d.now,function(x){var lg=d.log.filter(function(e){return e.n===x.n;})[0];return clrBtn('clrEnergy',x.n)+bEgyNow(x)+(lg?bEgyLog(lg):'');});}).catch(chFail);\n"
+" if(t==='energy'){if(egyEd)return Promise.resolve();return j('/api/energynow').then(function(r){if(chTabCur!==t||egyEd)return null;if(!r.d.ok){chStat(false);return null;}return j('/api/energylog').then(function(r2){return{now:r.d.ch,log:(r2.d&&r2.d.ok)?r2.d.ch:[]};});}).then(function(d){if(!d||chTabCur!=='energy'||egyEd)return;egyD=d;chStat(true);egyRender();}).catch(chFail);}\n"
 " if(t==='demand')return j('/api/demandlog').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);\n"
 "  $('chbody').innerHTML=chCards(r.d.ch,function(x){var pm=x.peaki*15,ph=Math.floor(pm/60),pmm=pm%60;return clrBtn('clrDemand',x.n)+`<div class='cmeta'>peak ${n(x.peak,2)} kW @ ${p2(ph)}:${p2(pmm)} · avg ${n(x.avg,2)} kW · ${ts2(x.ts)}</div><canvas id='dm${x.n}' class='dmcv'></canvas>`;});\n"
 "  r.d.ch.forEach(function(x){drawDemand('dm'+x.n,x.vals,x.peak);});\n"
@@ -1667,10 +1685,10 @@ static const char INDEX_HTML[] =
 " if(t==='alarm'||t==='event')return j('/api/sv300/events').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=chCards(CHN,function(x){return (t==='alarm'?bAlarm:bEvent)(x,r.d);});}).catch(chFail);\n"
 " return Promise.resolve();}\n"
 "function runCmd(ci){var c=CMDS[ci],id='c'+ci;\n"
-" if(c.utc){var v=$('u_'+id).value;if(!v){alert('시간을 입력하세요');return;}var m=v.split(/[-T:]/),ep=Math.floor(Date.UTC(+m[0],+m[1]-1,+m[2],+m[3],+m[4],+m[5]||0)/1000);if(!confirm('Set Time to '+v.replace('T',' ')+' ?'))return;j('/api/setreg',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({addr:c.addr,type:'u32',val:ep})}).then(function(r){cmdDone(r,c);});return;}\n"
-" var addr=c.addr+(c.tgt?(+$('t_'+id).value):0),msg=c.l+' 실행?';if(c.danger)msg=c.l+' - '+(c.danger==2?'공장초기화(모든 설정 삭제, 되돌릴 수 없음)':(c.note==='reboot'?'장치가 재부팅됩니다':'되돌릴 수 없습니다'))+'. 계속?';\n"
-" if(!confirm(msg))return;if(c.danger==2&&!confirm('정말 초기화하시겠습니까?'))return;\n"
-" j('/api/setreg',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({addr:addr,type:'u16',val:4660})}).then(function(r){cmdDone(r,c);});}\n"
+" if(c.utc){var v=$('u_'+id).value;if(!v){alert('Enter time');return;}var m=v.split(/[-T:]/),ep=Math.floor(Date.UTC(+m[0],+m[1]-1,+m[2],+m[3],+m[4],+m[5]||0)/1000);if(!confirm('Set Time to '+v.replace('T',' ')+' ?'))return;jp('/api/setreg',{addr:c.addr,type:'u32',val:ep}).then(function(r){cmdDone(r,c);});return;}\n"
+" var addr=c.addr+(c.tgt?(+$('t_'+id).value):0),msg=c.l+' run?';if(c.danger)msg=c.l+' - '+(c.danger==2?'Factory reset':(c.note==='reboot'?'Device will reboot':'Irreversible'))+'. Continue?';\n"
+" if(!confirm(msg))return;if(c.danger==2&&!confirm('Really reset?'))return;\n"
+" jp('/api/setreg',{addr:addr,type:'u16',val:4660}).then(function(r){cmdDone(r,c);});}\n"
 /* setup: Channel Setting - Alarm Settings 32행 */
 "function u16toF(lo,hi){var b=new ArrayBuffer(4),d=new DataView(b);d.setUint16(0,lo,true);d.setUint16(2,hi,true);return d.getFloat32(0,true);}\n"
 "function fToU16(f){var b=new ArrayBuffer(4),d=new DataView(b);d.setFloat32(0,f,true);return [d.getUint16(0,true),d.getUint16(2,true)];}\n"
@@ -1689,7 +1707,7 @@ static const char INDEX_HTML[] =
 "   h+=\"<tr class='\"+(en?'aon':'aoff')+\"'><td>\"+(n+1)+'</td><td>'+alSelCell(b,chan,acOpt,'awide')+'</td><td>'+alSelCell(b+1,w[o+1],COND_OPT,'')+'</td><td>'+alNum(b+2,w[o+2])+'</td><td>'+alSelCell(b+3,w[o+3],ACT_OPT,'')+'</td><td>'+alFloat(b+4,u16toF(w[o+4],w[o+5]))+'</td></tr>';}\n"
 "  h+='</table></div>';$('setBody').innerHTML=h;\n"
 "  document.querySelectorAll('#setBody select[data-val]').forEach(function(s){s.value=s.getAttribute('data-val');});\n"
-"  $('setNote').textContent=IS_ADMIN?'Channel>0 = 사용. 변경 후 Save & Apply(라이브 반영).':'Viewer 모드 - 읽기 전용.';});}\n"
+"  sn('Channel>0=on. Save & Apply.');});}\n"
 /* boot */
 "var _busy=false,_tick=0,_busyT=0;\n"
 "function pollFin(){_busy=false;_tick++;}\n"
@@ -1815,7 +1833,7 @@ void webServerStart(NetInterface *interface)
 	if (e) { printf("[WEB] init failed (%d)\n", (int)e); return; }
 	e = httpServerStart(&webCtx);
 	if (e) { printf("[WEB] start failed (%d)\n", (int)e); return; }
-	printf("[WEB] HTTP on :80 (login: ntek/0300, viewer/0000)\n");
+	printf("[WEB] HTTP on :80 (login: ntek/0300, sv300/0000)\n");
 
 	webMdnsStart(interface);
 }

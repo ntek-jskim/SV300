@@ -15,7 +15,7 @@
 #define	FW_VER	0002
 #define	FW_BUILD_YEAR 26
 #define	FW_BUILD_MON  8
-#define	FW_BUILD_DAY  7
+#define	FW_BUILD_DAY  10
 
 #define	SQRT_2	 1.414213562 
 
@@ -814,7 +814,7 @@ void initExtSettings(int id)
 	// 2018-4-17, DIM8로 수정
 	for (i=0; i<8; i++) {
 		piom[0].diType[i] = 0;
-		piom[0].debounce[i] = 20;
+		piom[0].debounce[i] = 16;	/* DI Debounce 기본 16ms (운영범위 4~64) */
 	}
 	for (i=0; i<8; i++) {
 		piom[0].piConst[i] = 1;
@@ -880,7 +880,7 @@ int buildExtSettings(int id)
 				ret = -1;
 			}
 			
-			if (piom->debounce[i] < 4 || piom[i].debounce[j] > 999) {
+			if (piom[i].debounce[j] < 4 || piom[i].debounce[j] > 64) {
 				printf("!!! (%d,%d) Out of range DI debounce = %d\n", i, j, piom[i].debounce[j]);
 				ret = -1;
 			}

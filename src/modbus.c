@@ -529,9 +529,9 @@ static uint16_t *getMeterRegBaseById(int id) {
 
 static int meterRwRangeValid(uint16_t offset, uint16_t count)
 {
-	/* Energy 영역(260807 맵: R/W) — egy 구조체 범위 허용 */
+	/* Energy 영역(260807 맵: R/W) — U32 누적값 구간만 허용([START, U64_START)) */
 	if (offset >= MBAD_ENERGY_START &&
-	    (uint32_t)offset + count <= (uint32_t)MBAD_ENERGY_START + MBAD_ENERGY_SIZE)
+	    (uint32_t)offset + count <= MBAD_ENERGY_U64_START)
 		return 1;
 	if (offset < MBAD_RW_OFF_START)
 		return 0;
@@ -1122,8 +1122,8 @@ int writeMemCb(uint16_t address, uint16_t value) {
 	if (decodeMeterAddress(address, &id, &offset) != 0)
 		return -1;
 
-	/* Energy 영역(260807 맵 R/W) — CH1(id0)/CH2/CH3 모두 egy 구조체에 직접 기록 */
-	if (offset >= MBAD_ENERGY_START && offset < MBAD_ENERGY_START + MBAD_ENERGY_SIZE)
+	/* Energy U32 누적값 구간만 R/W(260807 맵) — CH1(id0)/CH2/CH3 egy에 직접 기록 */
+	if (offset >= MBAD_ENERGY_START && offset < MBAD_ENERGY_U64_START)
 		return (writeMeterHoldReg(id, offset, value) < 0) ? -1 : 0;
 
 	if (id == 1 && offset >= MBAD_RW_OFF_START && offset < MBAD_RW_OFF_END) {

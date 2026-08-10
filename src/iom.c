@@ -802,13 +802,31 @@ void eventOutput(int state)
 // 	}
 // }
 
+/* DI 스캔(약 1ms 주기) — 디바운스 후 상태 확정.
+ * IO Type=PI(diType==1)면 디바운스된 상승엣지마다 piData 카운트(펄스 적산). */
 void scanDI() {
 	int i;
+	IO_CFG   *cfg = &meter[0].setting.iom;
+	IOM_DATA *io  = &meter[0].iom;
 	for (i=0; i<4; i++) {
-		dibuf[i].val = DI_Read(i);
-		if (dibuf[i].val != dibuf[i].lastVal) {
-			printf("DI%d changed (was %d -> %d)\n", i + 1, dibuf[i].lastVal, dibuf[i].val);
-			dibuf[i].lastVal = dibuf[i].val;
+		uint8_t  raw = (uint8_t)(DI_Read(i) ? 1 : 0);
+		uint16_t db  = cfg->debounce[i]; if (db < 4) db = 4; else if (db > 64) db = 64;	/* 운영범위 4~64ms */
+		dibuf[i].val = raw;
+		if (raw != dibuf[i].lastVal) {
+			if (++dibuf[i].accept >= db) {			/* 디바운스 통과 → 상태 확정 */
+				uint8_t rising = (raw && !dibuf[i].lastVal);
+				dibuf[i].lastVal = raw;
+				dibuf[i].accept  = 0;
+				io->diStatus[i]  = raw;
+				if (cfg->diType[i] == 1 && rising) {	/* PI: 상승엣지마다 PI Scale 적용 적산 */
+					uint16_t sc = cfg->piConst[i];		/* 0~1 → ×1, 그 외 → ×sc */
+					io->piData[i] += (sc <= 1) ? 1u : sc;
+				}
+			}
+		}
+		else {
+			dibuf[i].accept = 0;
+			io->diStatus[i] = raw;					/* 안정 상태 반영 */
 		}
 	}
 }
@@ -833,6 +851,7 @@ void scanTemp() {
 	for (ch=0; ch<TEMP_SENSOR_NUM_CHANNELS; ch++) {
 		if (TempSensor_ReadTempC(ch, &temp_c)) {
 			temp[ch] = temp_c;
+			if (ch < 4) meter[0].iom.aiData[ch] = (float)temp_c;   /* IOM DATA TEMP */
 			if (ntDebugLevel==31) printf("ADC0_%d Temp : %d\n", ch + 1, (int)temp_c);
 		}
 		else
@@ -855,7 +874,8 @@ void IOM_Task(void *arg)
 	TempSensor_Init();
 
 	for (i=0; i<4; i++) {
-		dibuf[i].lastVal = DI_Read(i);
+		dibuf[i].lastVal = (uint8_t)(DI_Read(i) ? 1 : 0);
+		dibuf[i].accept  = 0;
 	}
 	keybuf[0].lastVal = (uint8_t)KEY_Read(0);
 	keybuf[1].lastVal = (uint8_t)KEY_Read(1);

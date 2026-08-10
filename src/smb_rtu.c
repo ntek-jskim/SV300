@@ -553,7 +553,7 @@ void cmdProc()
 			break;
 		case 16:
 			printf("[CLEAR PI]\n");
-//			reqFactoryReset(c);
+			{ int k; for (k = 0; k < 4; k++) meter[0].iom.piData[k] = 0; }	/* PI 펄스 적산 초기화 */
 			break;
 		/* 260807 맵: ALL+#1~3(4개), spacing 4. load event/alarm(37~44)은 handleFetchCmd 동기처리 */
 		// clear demand: base+0=all, base+1~3=CH0~2  (7473~7476)
