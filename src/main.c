@@ -82,6 +82,8 @@
 #include "proxy.h"
 #include "web.h"
 
+extern volatile uint8_t g_meterReady;   /* 계측 준비완료(웹/Modbus 통신 허용) — meter.c 정의 */
+
 
 #if 1	// IP Scan Listener(cskang)
 	#include "ipv4/ipv4.h"
@@ -750,16 +752,17 @@ void init(void)
    }	 
 #endif	// _FTP_SERVER
 
-   //Start the web dashboard (CycloneTCP HTTP server, port 80, LOW priority)
-   webServerStart(&netInterface[0]);
-
-
    //Set task parameters
    taskParams = OS_TASK_DEFAULT_PARAMS;
    taskParams.stackSize = 200;
    taskParams.priority = OS_TASK_PRIORITY_NORMAL;
 
-   app_init(0);
+   app_init(0);   // 계측/RMSLog 등 태스크 생성(먼저)
+
+   //Start the web dashboard (CycloneTCP HTTP :80) — 계측 M0~M(ACTIVE-1) Buffer Ready 후 기동
+   //(미초기화=제품불량 시 g_meterReady=0 유지 → 웹 기동 안 함, 통신 차단)
+   while (!g_meterReady) osDelayTask(100);
+   webServerStart(&netInterface[0]);
    
 #ifdef __FREERTOS   
    vTaskSuspend(NULL);

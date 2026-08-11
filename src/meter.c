@@ -73,6 +73,7 @@ ENERGY_NVRAM 	egyNvr;
 extern void assertEventOutput(int, int);
 
 int		saveLockEnergy=0;
+volatile uint8_t g_meterReady = 0;   /* 계측 M0~M(ACTIVE-1) Buffer Ready 완료 → 웹/Modbus 통신 게이트 */
 
 static const void *fsMsgPayload(const FS_MSG *p)
 {
@@ -2716,6 +2717,7 @@ void FS_task(void *arg)
 			memcpy(&db, &meter[0].setting, sizeof(SETTINGS));
 			saveSettings(&db);
 			storeAlarmDef();	/* 알람설정(almSet) 영속화 — SETTINGS에 미포함이라 별도 저장 */
+			storeEnergy();		/* 에너지 편집(Energy Edit) 영속화 — Save Set에서만 FRAM 저장 */
 
 			meter[id].cntl.saveSetting = 0;
 			/* 재부팅 없이 설정 저장(웹 설정 저장 지원) — 기존 runFlag=0(→taskMonitor 재부팅)·
@@ -3264,9 +3266,30 @@ void copyEreg32(int id) {
 
 void copyEreg64(ENERGY_REG64 *pdst, ENERGY_REG64 *psrc) {
 	int ix=0, j;
-	
+
 	// j: kwh, kvarh, kvah
 	memcpy(pdst, psrc, sizeof(ENERGY_REG64));
+}
+
+// meter 표시미러(Ereg32)를 nvram(egyNvr)으로 역복사한다 — 웹/Modbus Energy Edit 영구화.
+//  copyEreg32()의 역방향(미러→마스터). 이후 storeEnergy()로 FRAM에 저장되어 리부팅 후에도 유지된다.
+void applyEregEdit(int id) {
+	int grp, mode, sign;
+
+	for (grp = 0; grp < ENERGY_GROUP_COUNT; grp++) {
+		for (mode = 0; mode < ENERGY_MODE_COUNT; mode++) {
+			for (sign = 0; sign < ENERGY_SIGN_COUNT; sign++) {
+				EGY_VAL(egyNvr.Ereg64[id], mode, sign, grp) =
+					(uint64_t)EGY_VAL(meter[id].egy.Ereg32[EGY_PERIOD_TOTAL], mode, sign, grp) * EREG32_UNIT;
+				EGY_VAL(egyNvr.month_wh[id], mode, sign, grp) =
+					EGY_VAL(meter[id].egy.Ereg32[EGY_PERIOD_THIS_MONTH], mode, sign, grp) * EREG32_UNIT;
+				EGY_VAL(egyNvr.Ereg32_last[id], mode, sign, grp) =
+					EGY_VAL(meter[id].egy.Ereg32[EGY_PERIOD_LAST_MONTH], mode, sign, grp);
+			}
+		}
+	}
+	// 잔여 float 누산기 클리어(편집값 위에 이전 소수부가 재가산되지 않도록)
+	memset(&meter[id].cntl.Ereg, 0, sizeof(meter[id].cntl.Ereg));
 }
 
 
@@ -3509,7 +3532,7 @@ void storeEnergyLogFs(int id, int sel, ENERGY_LOG *pEgyLog)
 
 // energy
 
-void storeEnergy() {
+void storeEnergy(void) {
 	int	i;
 	egyNvr.ts = sysTick1s;
 	egyNvr.crc = gencrc_modbus((uint8_t *)&egyNvr, sizeof(ENERGY_NVRAM)-2);	
@@ -3962,9 +3985,19 @@ void energy_scan(int id, METER_EH_REGS *ereg, ENERGY_NVRAM *pEgyNvr) {
 		copyEreg64(&meter[id].egy.Ereg64, &egyNvr.Ereg64[id]);
 		ewF += (1<<3);
 	}
-	
-	
-	if(ewF != 0) {	// 달이 변경되거나 0.1kw 이상 변경되면 저장한다 		
+
+	// 에너지 편집 적용(웹 Energy Edit): 미러(Ereg32) → nvram(egyNvr) 역복사(RAM만 반영).
+	//  clear energy 명령(7473)의 값으로 구분: 0x1234=클리어, 0x5678=편집적용.
+	//  ★FLASH(FRAM) 저장은 여기서 하지 않는다 — 영속화는 Main Setting/Command/Save Set(7449)에서만
+	//    storeEnergy()로 수행(설정 저장과 동일 흐름). Save Set 전 리부팅하면 편집 폐기됨.
+	if (meter[id].cntl.rstEgy == 0x5678) {
+		printf("+++ apply energy edit M%d (RAM only, persist on Save Set) ...\n", id);
+		meter[id].cntl.rstEgy = 0;
+		applyEregEdit(id);
+	}
+
+
+	if(ewF != 0) {	// 달이 변경되거나 0.1kw 이상 변경되면 저장한다
 		//printf("+++ storeEnergy, %x...\n", ewF);
 		if(saveLockEnergy ==0) {
 			for (i=0; i<ENERGY_CH_COUNT; i++) {
@@ -4357,6 +4390,17 @@ void RMSLog_Task(void *arg)
 				}
 			}
 		}
+		/* 통신 게이트: 활성 CH 전부 Buffer Ready([Buffer Ready M#], fr>10=bF) 시 허용.
+		   빠른 게이트(fr>=1)는 실기 홀딩 → 안정 우선으로 원복. 제품불량 미초기화 시 g_meterReady=0 유지→통신 차단. */
+		if (!g_meterReady) {
+			int _rdy = 1;
+			for (id = 0; id < ACTIVE_METER_CH_COUNT; id++)
+				if (!bF[id]) { _rdy = 0; break; }
+			if (_rdy) {
+				g_meterReady = 1;
+				printf("[Meter Ready - web/modbus enabled]\n");
+			}
+		}
       osDelayTask(100);
 	}
 }
@@ -4567,7 +4611,7 @@ void PostScan_Task(void *arg)
  * Kept as reference only; runtime path now uses meter[id].eventFifo directly. */
 #endif
 
-void Meter0_Task(void *param) 
+void Meter0_Task(void *param)
 {
 	uint32_t stat, ldata;
 	uint16_t wdata;
@@ -4658,7 +4702,7 @@ void Meter0_Task(void *param)
 	initPQHeader(2);
 #endif
 #endif
-	
+
 	_enableTaskMonitor(Tid_Meter, 50);
 	
 	while (1) {

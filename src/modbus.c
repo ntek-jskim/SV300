@@ -310,6 +310,10 @@ int modbusSlvProcFrame(uint8_t *prx, uint16_t rxsize, uint8_t *ptx, int longFram
 
 	pInfo->mBusRxCnt++;		/* Modbus RX 수신 카운트(RTU/TCP 공통) */
 
+	/* 계측 초기화(M0~M(ACTIVE-1) Buffer Ready) 전엔 무응답 — 미초기화(제품불량) 시 통신 차단 */
+	if (!g_meterReady)
+		return 0;
+
 // 2017-8-16, 삭제
 //	addr	= prx[0];
 //	if (addr == 0) {

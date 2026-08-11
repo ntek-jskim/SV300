@@ -194,7 +194,7 @@
 //쿠키 세션(로그인 유지) — request.cookie / response.setCookie 파싱·출력 활성
 #define HTTP_SERVER_COOKIE_SUPPORT ENABLED
 //커넥션 태스크 스택 — 기본 650워드는 JSON snprintf(부동소수 다수)에 부족(홀딩 유발). 여유 확보.
-#define HTTP_SERVER_STACK_SIZE 1200
+#define HTTP_SERVER_STACK_SIZE 1200   /* 참고: os_port_rtx osCreateTask는 stack=NULL(정적스택 미제공)이면 이 값을 무시하고 RTX OS_STKSIZE를 사용함 → 실제 HTTP 태스크 스택은 RTX_Conf_CM.c의 OS_STKSIZE가 결정 */
 //keep-alive idle 타임아웃 — 기본 10s는 max=2 슬롯을 오래 점유해 페이지 이동 시 홀딩. 3s로 단축.
 #define HTTP_SERVER_TIMEOUT 3000
 //★지속 커넥션(keep-alive) — 기본 DISABLED면 매 요청 커넥션 신규/종료 → 처닝(TIME_WAIT)·큰 응답 close-truncation으로 홀딩. 활성화해 커넥션 재사용.

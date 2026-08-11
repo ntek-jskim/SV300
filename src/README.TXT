@@ -23,6 +23,11 @@
   3) FW/Web: 메모리맵 260810(Command -8 시프트) + METER_CAL 4D화(vgain/vppgain[chip][phase][결선Z][PT2]·R_igain/R_phcal 로고스키·hwModel 삭제·hwVer/fwVer U16, GEMS3500식) + METER_INFO 상태필드(HEART BIT~TOT STS)·mBusRxCnt·checkIO(3s). web General HWMODEL 제거+Status 표시, IOM DATA를 별도 IO(DI/TEMP) 화면으로 분리
   4) ★홀딩 근본수정: 웹 화면 빠른전환 시 Meter1_Task 스택오버플로우(os_error STACK_OVF) — meter_scan_2 PQM경로+웹 이더넷 인터럽트 프레임이 2048B 초과 → Meter1/Meter2 스택 512→1024워드·Meter0 256→384 상향 (실기 재빌드·플래시·검증 필요)
 
+26/08/11 FW V00.02
+  1) ★홀딩 근본수정 재확정(OS_STKSIZE): osCreateTask가 stack=NULL(정적스택 미제공)이면 per-task stackSize를 무시하고 RTX 기본 OS_STKSIZE를 전 태스크에 적용(OS_PRIVCNT=0) → httpConnectionTask(/api/channels 부동소수 snprintf)가 375워드(1500B) 초과·인접 Meter0 침범→os_error(STACK_OVF). OS_STKSIZE 375→640(2560B)로 해소(web+confWebApp 2서버 1시간+ 안정). 초기화 게이팅: Buffer Ready(M0~M2) 전 웹 listen·Modbus 통신 차단(g_meterReady)
+  2) Energy Edit 영속화: 웹 Energy 편집이 표시미러(Ereg32)에만 기록돼 리부팅 원복되던 문제 — applyEregEdit(미러→egyNvr 역복사) 신설, FLASH 저장은 Main Setting/Command/Save Set(7449)에서만(Write 후 "Save to FLASH?" 확인창→OK 시 저장, clear energy 명령값 0x5678=적용/0x1234=클리어)
+  3) web.c Channel: WIRING 배지(3P4W식) + 페이저 IEC색(전압 갈/흑/회 실선·전류 갈/흑/회/흑 점선·LN 벡터합), IOM DATA를 IO(DI/TEMP) 별도화면 분리. iom.c DI active-low 보정(무신호=1)·3CH TEMP 제외. SD_File.c 제거(FS.c 중복)
+
 NOSDMEM : SD MEMORY Y/N
 HWV1 : CH3(METER CHIP SELECT)
 HWV2 : SPI FLASH 16MB

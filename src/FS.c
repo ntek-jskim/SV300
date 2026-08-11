@@ -1015,7 +1015,7 @@ static const SCMD cmd[] = {
 	"DCOS",  cmd_dcos,
 	"TIME", cmd_datetime,
 	"INITQUAL", cmd_initQual,
-	"MACSET", cmd_macset,
+	"SNSET", cmd_macset,
 	"MODEL", cmd_hwModel,
 	"HWVER", cmd_hwVersion,
 //	"GWENABLE", cmd_gwEnable,

@@ -380,9 +380,10 @@ static error_t apiChannels(HttpConnection *c)
 		METERING *m = &meter[i].meter;
 		CNTL_DATA *cn = &meter[i].cntl;
 		snprintf(b, sizeof(b),
-			"%s{\"n\":%d,\"st\":%u,\"freq\":%.2f,\"temp\":%.1f,"
+			"%s{\"n\":%d,\"wiring\":%u,\"st\":%u,\"freq\":%.2f,\"temp\":%.1f,"
 			"\"u\":[%.1f,%.1f,%.1f,%.1f],\"upp\":[%.1f,%.1f,%.1f,%.1f],",
-			i ? "," : "", i + 1, (unsigned)(m->meterStatus ? 1 : 0), m->Freq, m->Temp,
+			i ? "," : "", i + 1, (unsigned)meter[0].setting.pt[i].wiring,
+			(unsigned)(m->meterStatus ? 1 : 0), m->Freq, m->Temp,
 			m->U[0], m->U[1], m->U[2], m->U[3], m->Upp[0], m->Upp[1], m->Upp[2], m->Upp[3]);
 		w(c, b);
 		snprintf(b, sizeof(b),
@@ -1567,7 +1568,7 @@ static const char INDEX_HTML[] =
 "function chSetTab(t){chTabCur=t;egyEd=0;['meter','phase','minmax','harmonics','waveform','report','monthly','energy','demand','alarm','event'].forEach(function(x){var e=$('ct-'+x);if(e)e.className='gp-tab'+(x===t?' on':'');});var cc=$('chctl');if(cc)cc.style.display=(t==='harmonics')?'flex':'none';syncHv();$('chbody').innerHTML=\"<p class='stub'>loading...</p>\";pollLoop();}\n"
 "function chStat(ok){var e=$('chstat');if(e){e.className='ph2 '+(ok?'on':'bad');e.innerHTML=ok?'&#9679; live &#8635; 1s':'&#9679; read error';}}\n"
 "function chFail(){chStat(false);var b=$('chbody');if(b&&b.innerHTML.indexOf('loading')>=0)b.innerHTML=\"<p class='stub'>read error - retrying...</p>\";}\n"
-"function chCards(list,fn){var h=\"<div class='chgrid'>\";list.forEach(function(x){h+=`<div class='chcard'><div class='chh'>CH${x.n}</div>${fn(x)}</div>`;});return h+'</div>';}\n"
+"function chCards(list,fn){var h=\"<div class='chgrid'>\";list.forEach(function(x){h+=`<div class='chcard'><div class='chh'>CH${x.n}${x.wiring!==undefined?' '+fbadge(x.wiring):''}</div>${fn(x)}</div>`;});return h+'</div>';}\n"
 "function r4(nm,a,d){return `<tr><td class='rk'>${nm}</td><td>${n(a[0],d)}</td><td>${n(a[1],d)}</td><td>${n(a[2],d)}</td><td>${n(a[3],d)}</td></tr>`;}\n"
 "function r3(nm,a,d){return `<tr><td class='rk'>${nm}</td><td>${n(a[0],d)}</td><td>${n(a[1],d)}</td><td>${n(a[2],d)}</td><td></td></tr>`;}\n"
 "function rs(nm,v,d){return `<tr><td class='rk'>${nm}</td><td></td><td></td><td></td><td>${n(v,d)}</td></tr>`;}\n"
@@ -1585,13 +1586,14 @@ static const char INDEX_HTML[] =
 " h+=r3('THD I (%)',x.thdi,2)+r3('TDD I (%)',x.tddi,2)+r3('K-Factor I',x.kfi,2)+r3('CF I',x.cfi,2);\n"
 " h+=r4('fU (V)',x.fu,1)+r4('fI (A)',x.fi,2);\n"
 " return h+'</table>';}\n"
-"function phVec(cx,cy,ang,len,col,mk){var r=ang*Math.PI/180,x=(cx+len*Math.cos(r)).toFixed(1),y=(cy-len*Math.sin(r)).toFixed(1);return `<line x1='${cx}' y1='${cy}' x2='${x}' y2='${y}' stroke='${col}' stroke-width='2.2' marker-end='url(#${mk})'/>`;}\n"
-"function phasorSVG(x){var cx=130,cy=130,R=110,mk='ar'+x.n,a,k,r,um=Math.max(Math.abs(x.u[0]),Math.abs(x.u[1]),Math.abs(x.u[2]))||1,im=Math.max(Math.abs(x.i[0]),Math.abs(x.i[1]),Math.abs(x.i[2]))||1;\n"
+"function phVec(cx,cy,ang,len,col,mk,dash){var r=ang*Math.PI/180,x=(cx+len*Math.cos(r)).toFixed(1),y=(cy-len*Math.sin(r)).toFixed(1);return `<line x1='${cx}' y1='${cy}' x2='${x}' y2='${y}' stroke='${col}' stroke-width='2.2'${dash?\" stroke-dasharray='6,4'\":\"\"} marker-end='url(#${mk})'/>`;}\n"
+"function phasorSVG(x){var cx=130,cy=130,R=110,mk='ar'+x.n,a,k,r,PHV=['#8B4513','#000000','#808080'],PHI=['#8B4513','#000000','#808080','#000000'],um=Math.max(Math.abs(x.u[0]),Math.abs(x.u[1]),Math.abs(x.u[2]))||1,im=Math.max(Math.abs(x.i[0]),Math.abs(x.i[1]),Math.abs(x.i[2]))||1;\n"
 " var s=`<svg class='phsvg' viewBox='0 0 260 260'><defs><marker id='${mk}' markerWidth='8' markerHeight='8' refX='6' refY='3' orient='auto'><path d='M0,0 L6,3 L0,6 Z' class='ph-mk'/></marker></defs>`;\n"
 " s+=`<circle cx='${cx}' cy='${cy}' r='${R}' class='ph-bg'/><circle cx='${cx}' cy='${cy}' r='55' class='ph-grid'/>`;\n"
 " for(a=0;a<360;a+=30){r=a*Math.PI/180;s+=`<line x1='${cx}' y1='${cy}' x2='${(cx+R*Math.cos(r)).toFixed(1)}' y2='${(cy-R*Math.sin(r)).toFixed(1)}' class='ph-grid'/>`;}\n"
-" for(k=0;k<3;k++)s+=phVec(cx,cy,x.uang[k],R*0.92*Math.abs(x.u[k])/um,'#3b82f6',mk);\n"
-" for(k=0;k<3;k++)s+=phVec(cx,cy,x.iang[k],R*0.6*Math.abs(x.i[k])/im,'#22c55e',mk);\n"
+" for(k=0;k<3;k++)s+=phVec(cx,cy,x.uang[k],R*0.92*Math.abs(x.u[k])/um,PHV[k],mk,0);\n"
+" for(k=0;k<3;k++)s+=phVec(cx,cy,x.iang[k],R*0.6*Math.abs(x.i[k])/im,PHI[k],mk,1);\n"
+" var ix=0,iy=0;for(k=0;k<3;k++){var rr=x.iang[k]*Math.PI/180,mm=Math.abs(x.i[k]);ix+=mm*Math.cos(rr);iy+=mm*Math.sin(rr);}var iM=Math.sqrt(ix*ix+iy*iy);if(iM>0.001)s+=phVec(cx,cy,Math.atan2(-iy,-ix)*180/Math.PI,R*0.6*iM/im,PHI[3],mk,1);\n"
 " return s+'</svg>';}\n"
 "function bPhase(x){var h=\"<div class='phbox'>\"+phasorSVG(x)+\"</div><table class='ctbl'><tr><th></th><th>L1</th><th>L2</th><th>L3</th><th></th></tr>\";\n"
 " h+=r3('U mag (V)',x.u,1)+r3('U angle (&deg;)',x.uang,1)+r3('I mag (A)',x.i,2)+r3('I angle (&deg;)',x.iang,1);return h+'</table>';}\n"
@@ -1672,7 +1674,7 @@ static const char INDEX_HTML[] =
 "function clearPI(){if(confirm('Clear PI?'))wrCmd(7464,4660);}\n"
 "var egyEd=0,egyD=null;\n"
 "function egyRender(){if(!egyD)return;var b=IS_ADMIN?(egyEd?\"<div class='pgctl'><button class='btn primary' onclick='egyWr()'>Write</button><button class='btn' onclick='egyEd=0;egyRender()'>Cancel</button></div>\":\"<div class='pgctl'><button class='btn' onclick='egyEd=1;egyRender()'>Edit</button></div>\"):'';$('chbody').innerHTML=chCards(egyD.now,function(x){var lg=egyD.log.filter(function(e){return e.n===x.n;})[0];return b+(egyEd?'':clrBtn('clrEnergy',x.n))+bEgyNow(x,egyEd)+(lg?bEgyLog(lg):'');});}\n"
-"function egyWr(){var els=document.querySelectorAll('#chbody .ein'),c=[],i=0;els.forEach(function(e){if(e.value!==e.getAttribute('data-o'))c.push(e);});if(!c.length){egyEd=0;egyRender();return;}(function w(){if(i>=c.length){egyEd=0;setTimeout(pollLoop,300);return;}var e=c[i++],v=Math.round(parseFloat(e.value)*10);if(!isFinite(v)||v<0)v=0;jp('/api/setreg',{addr:+e.getAttribute('data-a'),type:'u32',val:v}).then(w).catch(w);})();}\n"
+"function egyWr(){var els=document.querySelectorAll('#chbody .ein'),c=[],i=0,chs={};els.forEach(function(e){if(e.value!==e.getAttribute('data-o'))c.push(e);});if(!c.length){egyEd=0;egyRender();return;}(function w(){if(i>=c.length){Object.keys(chs).forEach(function(ch){wrCmd(7473+parseInt(ch),0x5678);});if(confirm('Save energy edit to FLASH now? (OK=persist via Save Set / Cancel=RAM only, revert on reboot)'))setTimeout(function(){wrCmd(7449,0x1234);},1200);egyEd=0;setTimeout(pollLoop,400);return;}var e=c[i++],v=Math.round(parseFloat(e.value)*10);if(!isFinite(v)||v<0)v=0;var a=+e.getAttribute('data-a');chs[Math.floor(a/10000)+1]=1;jp('/api/setreg',{addr:a,type:'u32',val:v}).then(w).catch(w);})();}\n"
 "function pbar(fn,n,cf,af){if(!IS_ADMIN)return '';var s=\"<div class='pgctl'>\",L=[[3,'&#8593;&#8593; Top'],[2,'&#8593; Up'],[1,'&#8595; Down'],[4,'&#8595;&#8595; Bottom']];L.forEach(function(t){s+=\"<button class='btn' onclick='\"+fn+\"(\"+n+\",\"+t[0]+\")'>\"+t[1]+\"</button>\";});if(af)s+=\"<button class='btn' onclick='\"+af+\"(\"+n+\")'>Ack</button>\";if(cf)s+=\"<button class='btn warn' onclick='\"+cf+\"(\"+n+\")'>Clear</button>\";return s+'</div>';}\n"
 "function bItic(list,title,fn){var h=\"<div class='hsub'>\"+title+\"</div>\"+pbar(fn,1)+\"<table class='ctbl'><tr><th>Type</th><th>Start Time</th><th>Dur(ms)</th><th>Phase</th><th>Level</th></tr>\";\n"
 " if(!list||!list.length)h+=\"<tr><td colspan='5' class='empty'>No data</td></tr>\";(list||[]).forEach(function(e){var t=ET[e.type]||['#'+e.type,'oc'],ph=[];if(e.mask&1)ph.push('L1');if(e.mask&2)ph.push('L2');if(e.mask&4)ph.push('L3');h+=\"<tr><td><span class='evt \"+t[1]+\"'>\"+t[0]+\"</span></td><td class='ts'>\"+ts2(e.ts)+\"</td><td>\"+e.dur+\"</td><td>\"+(ph.join(',')||'-')+\"</td><td>\"+n(e.level,2)+\"</td></tr>\";});return h+'</table>';}\n"

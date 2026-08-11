@@ -75,15 +75,15 @@ int smbTcpProc(uint8_t *prb, int nr, uint8_t *ptb, int *nw, int longFrame)
 		dprtbuffer(1, "[RX]", prb, nr); 
 		len = (uint16_t)prb[0] << 8 | prb[1];
 		len = modbusSlvProcFrame(&prb[6], len, &ptb[6], longFrame);
-		len = modbusMakeTcpFrame(prb, ptb, len);  
 		//nr = readSlaveData(seq, len, largeF, &psrc[6], pdst);
-		if (len > 0) {
+		if (len > 0) {                              // 무응답(계측 미준비 g_meterReady=0 등)이면 TX 생략
+			len = modbusMakeTcpFrame(prb, ptb, len);
 			Board_LED_Toggle(LED_COMM);
 			dprtbuffer(1, "[TX]", ptb, len); 
 			ret = 0;
 		}
 		else {
-			printf("Erron on modbusSlvProcFrame ...\n");
+			//printf("Erron on modbusSlvProcFrame ...\n");
 		}	
 		*nw = len;
 	}

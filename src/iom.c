@@ -809,7 +809,7 @@ void scanDI() {
 	IO_CFG   *cfg = &meter[0].setting.iom;
 	IOM_DATA *io  = &meter[0].iom;
 	for (i=0; i<4; i++) {
-		uint8_t  raw = (uint8_t)(DI_Read(i) ? 1 : 0);
+		uint8_t  raw = (uint8_t)(DI_Read(i) ? 0 : 1);	/* DI active-low: 핀 High(무신호)=0, Low(신호인가)=1 */
 		uint16_t db  = cfg->debounce[i]; if (db < 4) db = 4; else if (db > 64) db = 64;	/* 운영범위 4~64ms */
 		dibuf[i].val = raw;
 		if (raw != dibuf[i].lastVal) {
@@ -844,6 +844,7 @@ void scanKey(void)
 }
 
 void scanTemp() {
+#ifndef CH3   /* 3CH: TEMP 미탑재(DI4만), 2CH: DI4+TEMP4 */
 	int ch;
 	int16_t temp_c, temp_c10;
 	int16_t temp[TEMP_SENSOR_NUM_CHANNELS];
@@ -859,6 +860,7 @@ void scanTemp() {
 	}
 	
 //	printf("temp: %d %d %d %d\n", temp[0], temp[1], temp[2], temp[3]);
+#endif
 }
 
 #ifdef __RTX

@@ -39,7 +39,7 @@
 //   <i> Set the stack size for tasks which is assigned by the system.
 //   <i> Default: 200
 #ifndef OS_STKSIZE
- #define OS_STKSIZE     375
+ #define OS_STKSIZE     640	/* 375(1500B)->640(2560B): os_port_rtx osCreateTask가 stack=NULL이면 stackSize 무시하고 이 값을 모든 태스크에 적용. httpConnectionTask(/api/channels 서빙)·Meter 태스크 스택 부족(오버플로우) 해소 */
 #endif
 
 // <q>Check for the stack overflow

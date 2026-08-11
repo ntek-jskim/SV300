@@ -2206,6 +2206,8 @@ extern void setMeterInfo(void);
 extern int loadMaxMin(void);
 extern void copyEreg64(ENERGY_REG64 *, ENERGY_REG64 *);
 extern void copyEreg32(int id);
+extern void storeEnergy(void);
+extern void applyEregEdit(int id);
 extern int updateEhGrp(int id, int mode, int group, float diff);
 extern uint32_t sysTick32, sysTick1s, sysTick10s, sysTick10m, sysTick15m, sysTickDemand, WM_tick32;
 extern uint64_t sysTick64;
@@ -2233,5 +2235,7 @@ extern void updateQualReport(int meterIdx, QualWeek *pqw, int pos);
 extern void getQualLogFN(char *path, int id);
 extern void getQualWeekFN(char *path, int id);
 extern void getQualLastWeekFN(char *path, int id);
+
+extern volatile uint8_t g_meterReady;   /* 계측 준비완료(웹/Modbus 통신 허용) 플래그 */
 
 #endif
