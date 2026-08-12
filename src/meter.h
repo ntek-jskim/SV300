@@ -1430,11 +1430,13 @@ typedef struct {
 	float		i_thd_offset;
 	float		In_offset[METER_CH_COUNT][3];		// offset
 	float		In_Slope[METER_CH_COUNT][3];		// 기울기
+	float		tempOfs[METER_CH_COUNT];			// Temp 교정 오프셋: 측정온도를 기준(TEMP_CAL_REF)에 맞춤
 	int32_t		vdcos[METER_CH_COUNT][3], idcos[METER_CH_COUNT][3];	// waveform에서 DC offset 제거위해 사용한다
 
-//	uint32_t 	hwModel;	// 미사용(삭제)
+	uint16_t 	hwModel;	// 0=3CH, 1=2CH (추후 HV/Rogowski 등 확장). 콘솔 'HWMODEL <n>' 로 설정, 여기(FRAM) 저장
 	uint16_t 	hwVer;	// hw version (U32->U16)
 	uint16_t 	fwVer;	// fw version (U32->U16)
+	uint16_t 	_rsv;	// 4바이트 정렬용 명시 패딩(뒤 sn[] uint32 정렬 — 숨은 패딩 방지)
 	uint8_t 	mac[4];
 	uint32_t 	sn[2];
 	uint16_t 	magic, crc;
@@ -1530,9 +1532,9 @@ typedef struct {
 	uint16_t mac_msb[2];
 	uint16_t mac[4];
 	uint16_t ipAddr[4];		// dhcp or static ip
-//	uint16_t hwModel;				// 0: 5A, 1:100mA, 2:10mA, 3:Rogowski
-	uint16_t hwVer;
-	uint16_t fwVer;
+	uint16_t hwModel;		// 7086 HW MODEL(260812): 0=3CH, 1=2CH (확장 예정)	<- pcal->hwModel
+	uint16_t hwVer;			// 7087
+	uint16_t fwVer;			// 7088
 	uint16_t fwBuildYear;
 	uint16_t fwBuildMon;
 	uint16_t fwBuildDay;
@@ -1546,7 +1548,7 @@ typedef struct {
 	uint16_t DEV_sts;
 	uint16_t NET_sts;
 	uint16_t TOT_sts;
-	uint16_t r1[9];
+	uint16_t r1[8];		/* hwModel 추가(+1)로 [9]→[8] (블록 크기 유지) */
 } METER_INFO;
 
 
@@ -1832,9 +1834,9 @@ typedef struct {
  *  Modbus FC 3,4 / base 50000 / word(uint16_t) 단위 주소
  *
  *   50000              SMP_COMMON     common     20w
- *   50020 + 90*n       SMP_CHANNEL    ch[n]      90w  × MAX_CH
- *   50830 + 246*n      SMP_HARMONICS  harm[n]   246w  × MAX_CH
- *   53044              end
+ *   50020 + 100*n      SMP_CHANNEL    ch[n]     100w  × MAX_CH  (260812: Angle U/I 추가)
+ *   50920 + 246*n      SMP_HARMONICS  harm[n]   246w  × MAX_CH
+ *   53134              end
  *
  *  1P: #1~#9 사용, 3P: #1~#3 사용 (사용 안 하는 채널은 0)
  *  값은 '#1~3CH modbus' 시트 = METER_DEF(meter[n]) 에서 복사해 채운다.
@@ -1842,7 +1844,7 @@ typedef struct {
  * --------------------------------------------------------------------------- */
 #define	ADD_SIMPLE_MAP		50000
 #define	SMP_COMMON_WORDS	20
-#define	SMP_CH_WORDS		90
+#define	SMP_CH_WORDS		100		/* 260812: Angle U/I 추가로 90→100 */
 #define	SMP_HARM_WORDS		246
 #define	SMP_HARM_ORDER		41		/* 1~41차 */
 
@@ -1869,25 +1871,27 @@ typedef struct {
 	float		Freq;			// +4  Frequency			<- meter.Freq
 	float		U[4];			// +6  U1,U2,U3,평균		<- meter.U[0..3] (U[3]=상전압 평균)
 	float		Upp[4];			// +14 U12,U23,U31,평균		<- meter.Upp[0..3] (Upp[3]=선간전압 평균)
-	float		I[4];			// +22 I1,I2,I3,평균		<- meter.I[0..3] (I[3]=상전류 평균, cbStatus 기준)
-	float		In;				// +30 누설전류			<- meter.In
-	float		P[3];			// +32 P1,P2,P3			<- meter.P[0..2]
-	float		Ptot;			// +38 P total			<- meter.P[3]
-	float		Qtot;			// +40 Q total			<- meter.Q[3]
-	float		Stot;			// +42 S total			<- meter.S[3]
-	float		PFtot;			// +44 PF total			<- meter.PF[3]
-	uint32_t	kWh_imp;		// +46					<- egy.Ereg32[EGY_PERIOD_TOTAL]      kWh/import
-	uint32_t	kWh_imp_thisM;	// +48					<- egy.Ereg32[EGY_PERIOD_THIS_MONTH] kWh/import
-	uint32_t	kWh_imp_lastM;	// +50					<- egy.Ereg32[EGY_PERIOD_LAST_MONTH] kWh/import
-	uint32_t	kVARh_imp;		// +52					<- egy.Ereg32[EGY_PERIOD_TOTAL]      kvarh/import
-	uint32_t	kVAh;			// +54					<- egy.Ereg32[EGY_PERIOD_TOTAL]      kVAh
-	float		Uunb;			// +56 Volt. Unbalance	<- meter.Ubal[0]
-	float		Iunb;			// +58 Current Unbalance<- meter.Ibal[0]
-	float		THD_U[3];		// +60 THD V1,V2,V3		<- meter.THD_U[0..2]
-	float		THD_I[3];		// +66 THD I1,I2,I3		<- meter.THD_I[0..2]
-	float		TDD_I[3];		// +72 TDD I1,I2,I3		<- meter.TDD_I[0..2]
-	float		_r1[6];			// +78 ~ +89
-} SMP_CHANNEL;					// 90w
+	float		Uangle[3];		// +22 Angle U1,U2,U3 (V Phase)	<- meter.Uangle[0..2]  (260812 신설)
+	float		I[4];			// +28 I1,I2,I3,평균		<- meter.I[0..3] (I[3]=상전류 평균, cbStatus 기준)
+	float		In;				// +36 누설전류			<- meter.In
+	float		Iangle[3];		// +38 Angle I1,I2,I3 (Cur Phase)	<- meter.Iangle[0..2]  (260812 신설)
+	float		P[3];			// +44 P1,P2,P3			<- meter.P[0..2]
+	float		Ptot;			// +50 P total			<- meter.P[3]
+	float		Qtot;			// +52 Q total			<- meter.Q[3]
+	float		Stot;			// +54 S total			<- meter.S[3]
+	float		PFtot;			// +56 PF total			<- meter.PF[3]
+	uint32_t	kWh_imp;		// +58					<- egy.Ereg32[EGY_PERIOD_TOTAL]      kWh/import
+	uint32_t	kWh_imp_thisM;	// +60					<- egy.Ereg32[EGY_PERIOD_THIS_MONTH] kWh/import
+	uint32_t	kWh_imp_lastM;	// +62					<- egy.Ereg32[EGY_PERIOD_LAST_MONTH] kWh/import
+	uint32_t	kVARh_imp;		// +64					<- egy.Ereg32[EGY_PERIOD_TOTAL]      kvarh/import
+	uint32_t	kVAh;			// +66					<- egy.Ereg32[EGY_PERIOD_TOTAL]      kVAh
+	float		Uunb;			// +68 Volt. Unbalance	<- meter.Ubal[0]
+	float		Iunb;			// +70 Current Unbalance<- meter.Ibal[0]
+	float		THD_U[3];		// +72 THD V1,V2,V3		<- meter.THD_U[0..2]
+	float		THD_I[3];		// +78 THD I1,I2,I3		<- meter.THD_I[0..2]
+	float		TDD_I[3];		// +84 TDD I1,I2,I3		<- meter.TDD_I[0..2]
+	float		_r1[5];			// +90 ~ +99
+} SMP_CHANNEL;					// 100w (260812: Angle U/I 추가로 90→100)
 
 /* Harmonics by order — 시트 TYPE S16, 원본 hd.U/hd.I 는 [3][64] 중 1~41차만 복사 */
 typedef struct {
@@ -1897,9 +1901,9 @@ typedef struct {
 
 typedef struct {
 	SMP_COMMON		common;		// 50000
-	SMP_CHANNEL		ch[MAX_CH];	// 50020 + 90*n
-	SMP_HARMONICS	harm[MAX_CH];	// 50830 + 246*n
-} SMP_MAP;						// 3044w (50000~53043)
+	SMP_CHANNEL		ch[MAX_CH];	// 50020 + 100*n
+	SMP_HARMONICS	harm[MAX_CH];	// 50920 + 246*n
+} SMP_MAP;						// 3134w (50000~53133)
 
 /* 패딩으로 워드 배치가 어긋나면 컴파일 에러 */
 typedef char smp_map_layout_check[

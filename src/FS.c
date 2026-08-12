@@ -680,12 +680,12 @@ static void cmd_hwModel(char *par) {
 
 	p = get_entry (par, &next);
 	if (p != NULL) {
-		(void)p; /* hwModel 미사용(삭제) */
-		printf("HwModel = %d\n", 0);/*hwModel 미사용*/
-		storeHwSettings(pcal);
+		pcal->hwModel = (uint16_t)atoi(p);		/* 0=3CH, 1=2CH (추후 HV/Rogowski 등 확장) */
+		storeHwSettings(pcal);					/* METER_CAL(FRAM)에 저장 */
+		printf("HwModel = %d (%s) saved\n", pcal->hwModel, (pcal->hwModel == 1) ? "2CH" : "3CH");
 	}
 	else {
-		printf("*** not enough input arguments ...\n");
+		printf("HwModel = %d (%s)\n", pcal->hwModel, (pcal->hwModel == 1) ? "2CH" : "3CH");
 	}
 }
 
@@ -1017,6 +1017,7 @@ static const SCMD cmd[] = {
 	"INITQUAL", cmd_initQual,
 	"SNSET", cmd_macset,
 	"MODEL", cmd_hwModel,
+	"HWMODEL", cmd_hwModel,
 	"HWVER", cmd_hwVersion,
 //	"GWENABLE", cmd_gwEnable,
 	"DEVINFO", cmd_devInfo,

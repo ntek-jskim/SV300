@@ -28,6 +28,11 @@
   2) Energy Edit 영속화: 웹 Energy 편집이 표시미러(Ereg32)에만 기록돼 리부팅 원복되던 문제 — applyEregEdit(미러→egyNvr 역복사) 신설, FLASH 저장은 Main Setting/Command/Save Set(7449)에서만(Write 후 "Save to FLASH?" 확인창→OK 시 저장, clear energy 명령값 0x5678=적용/0x1234=클리어)
   3) web.c Channel: WIRING 배지(3P4W식) + 페이저 IEC색(전압 갈/흑/회 실선·전류 갈/흑/회/흑 점선·LN 벡터합), IOM DATA를 IO(DI/TEMP) 별도화면 분리. iom.c DI active-low 보정(무신호=1)·3CH TEMP 제외. SD_File.c 제거(FS.c 중복)
 
+26/08/12 FW V00.02
+  1) Calibration 지원: confWebApp Calibration 화면(ADMIN) 신설 — V/A/Power/Phase/IN 교정(명령 7450 code) + Temp 교정 신설(METER_CAL tempOfs·TEMP_CAL_REF 25℃·calibration case17=Temp Cali/18=Temp Init·readTemp 반영) + 피더 실측 검증표 + 엑셀 리포트(튜닝일자/SN/장비/담당자/버전/결과). 타깃 Feeder 1~9(각 칩 3상, 교정은 칩 단위)
+  2) 260812 맵: 피더 Simple에 Angle U1~3(V Phase)·Angle I1~3(Cur Phase) 신설 → SMP_CHANNEL 90→100w(harmonics 50830→50920), smpFill3ph/1ph·api_feeders 정합. 벡터도 전류 LN 색상 청색(#1E64FF, I2 검정과 구분)
+  3) HWMODEL 복원(common 7086, 0=3CH/1=2CH): METER_CAL(FRAM) 저장 + 콘솔 'MODEL/HWMODEL <n>' 설정 + getHwModel/getHwCh + setMeterInfo 노출, confWebApp이 읽어 3CH면 Temp 숨김·칩범위 적응. METER_CAL 4바이트 정렬(_rsv, 숨은패딩 방지). ※METER_CAL 구조 변경(hwModel/tempOfs)으로 업데이트 후 교정값 재초기화 필요(hwModel은 빌드 기본값 2CH=1/3CH=0)
+
 NOSDMEM : SD MEMORY Y/N
 HWV1 : CH3(METER CHIP SELECT)
 HWV2 : SPI FLASH 16MB

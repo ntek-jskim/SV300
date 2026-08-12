@@ -385,10 +385,16 @@ void calibration(int id, int code) {
 				clrDcOffset(id);
 			}
 			break;
-		case 17:	
+		case 17:	// Temp Cali — 측정온도를 기준(TEMP_CAL_REF)에 맞추는 오프셋 산출(idempotent)
+			if (pc->calEn) {
+				pcal->tempOfs[id] = TEMP_CAL_REF - (meter[id].meter.Temp - pcal->tempOfs[id]);
+			}
 			break;
-		case 18:
-			break;		
+		case 18:	// Temp Init — 오프셋 클리어
+			if (pc->calEn) {
+				pcal->tempOfs[id] = 0;
+			}
+			break;
 	}
 }
 

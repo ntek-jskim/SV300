@@ -193,13 +193,15 @@ static void smpFill3ph(SMP_CHANNEL *d, SMP_HARMONICS *h, int m)
 
 	d->Freq = pm->Freq;
 	for (j = 0; j < 3; j++) {
-		d->U[j]     = pm->U[j];
-		d->Upp[j]   = pm->Upp[j];
-		d->I[j]     = pm->I[j];
-		d->P[j]     = pm->P[j];
-		d->THD_U[j] = pm->THD_U[j];
-		d->THD_I[j] = pm->THD_I[j];
-		d->TDD_I[j] = pm->TDD_I[j];
+		d->U[j]      = pm->U[j];
+		d->Upp[j]    = pm->Upp[j];
+		d->Uangle[j] = pm->Uangle[j];	/* 260812: Angle U (V Phase) */
+		d->I[j]      = pm->I[j];
+		d->Iangle[j] = pm->Iangle[j];	/* 260812: Angle I (Cur Phase) */
+		d->P[j]      = pm->P[j];
+		d->THD_U[j]  = pm->THD_U[j];
+		d->THD_I[j]  = pm->THD_I[j];
+		d->TDD_I[j]  = pm->TDD_I[j];
 	}
 	d->U[3]   = pm->U[3];		/* 상전압 평균 */
 	d->Upp[3] = pm->Upp[3];		/* 선간전압 평균 */
@@ -236,7 +238,9 @@ static void smpFill1ph(SMP_CHANNEL *d, SMP_HARMONICS *h, int m, int slot, int vp
 
 	d->Freq  = pm->Freq;
 	d->U[p]  = pm->U[slot];		/* redirect로 U[slot]가 해당 상 전압 */
+	d->Uangle[p] = pm->Uangle[slot];	/* 260812: Angle U (V Phase) */
 	d->I[p]  = pm->I[slot];
+	d->Iangle[p] = pm->Iangle[slot];	/* 260812: Angle I (Cur Phase) */
 	d->P[p]  = pm->P[slot];
 	d->Ptot  = pm->P[slot];
 	d->Qtot  = pm->Q[slot];

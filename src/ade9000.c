@@ -1116,9 +1116,9 @@ void readTemp(uint8_t id) {
 	gain = -((trim & 0xffff) / 65536.);	
 	os   =  ((trim >> 16) & 0xffff) / 32.;
 	
-	// read temp_result
+	// read temp_result (+ 사용자 Temp 교정 오프셋)
 	read_reg16(id, 0x4b7, &wtemp);
-	meter[id].meter.Temp = (wtemp & 0xfff) * gain + os;
+	meter[id].meter.Temp = (wtemp & 0xfff) * gain + os + pcal->tempOfs[id];
 	//printf("readTemp : (%f)\n", meter[id].meter.Temp);
 	
 	// restart

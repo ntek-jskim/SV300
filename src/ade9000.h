@@ -19,6 +19,9 @@
 #define	PI							3.14159265358979323846
 #define	SQRT_3					1.732051
 
+// Temp 교정 기준 온도(고정, ℃) — Temp Cali 시 측정온도를 이 값에 맞춤(tempOfs = TEMP_CAL_REF - rawTemp)
+#define	TEMP_CAL_REF			25
+
 // scale factor
 //#define	V_FULL					(792.6667017)
 //#define	V_NORM					(380.)	 				// 380V로 튜닝

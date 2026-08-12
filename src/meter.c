@@ -166,11 +166,11 @@ uint8_t getHwVersion()
 
 uint8_t getHwModel()
 {
-	return 0;	// hwModel 미사용(삭제)
+	return (uint8_t)pcal->hwModel;		// 0=3CH, 1=2CH (확장 예정)
 }
 uint8_t getHwCh()
 {
-	return 0;	// hwModel 미사용(삭제)
+	return (pcal->hwModel == 1) ? 2 : 3;	// hwModel 1=2CH, 0=3CH
 }
 
 void setMeterInfo() {
@@ -184,7 +184,7 @@ void setMeterInfo() {
 	pInfo->sn[5] = (pcal->sn[1]) & 0xff;
 	
 	pInfo->hwVer = pcal->hwVer;
-	/* pInfo->hwModel = pcal->hwModel; (hwModel 미사용) */
+	pInfo->hwModel = pcal->hwModel;		/* 7086 HW MODEL(260812): 0=3CH, 1=2CH */
 	pInfo->fwVer = FW_VER;
 	pInfo->fwBuildYear = FW_BUILD_YEAR;
 	pInfo->fwBuildMon  = FW_BUILD_MON;
@@ -955,6 +955,7 @@ int loadHwSettings(METER_CAL *pcal) {
 		printf("{{Can't load HW Settings, crc=%04x/%04x, magic=%04x ...}}\n", crc, pcal->crc, pcal->magic);		
 		dump((void *)pcal, sizeof(METER_CAL));
 		memset(pcal, 0, sizeof(METER_CAL));
+		pcal->hwModel = (METER_CH_COUNT == 2) ? 1 : 0;	/* 빌드 기본값: 2CH=1, 3CH=0 (콘솔로 변경 가능) */
 		storeHwSettings(pcal);
 		return -1;
 	}

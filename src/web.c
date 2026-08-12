@@ -1587,7 +1587,7 @@ static const char INDEX_HTML[] =
 " h+=r4('fU (V)',x.fu,1)+r4('fI (A)',x.fi,2);\n"
 " return h+'</table>';}\n"
 "function phVec(cx,cy,ang,len,col,mk,dash){var r=ang*Math.PI/180,x=(cx+len*Math.cos(r)).toFixed(1),y=(cy-len*Math.sin(r)).toFixed(1);return `<line x1='${cx}' y1='${cy}' x2='${x}' y2='${y}' stroke='${col}' stroke-width='2.2'${dash?\" stroke-dasharray='6,4'\":\"\"} marker-end='url(#${mk})'/>`;}\n"
-"function phasorSVG(x){var cx=130,cy=130,R=110,mk='ar'+x.n,a,k,r,PHV=['#8B4513','#000000','#808080'],PHI=['#8B4513','#000000','#808080','#000000'],um=Math.max(Math.abs(x.u[0]),Math.abs(x.u[1]),Math.abs(x.u[2]))||1,im=Math.max(Math.abs(x.i[0]),Math.abs(x.i[1]),Math.abs(x.i[2]))||1;\n"
+"function phasorSVG(x){var cx=130,cy=130,R=110,mk='ar'+x.n,a,k,r,PHV=['#8B4513','#000000','#808080'],PHI=['#8B4513','#000000','#808080','#1E64FF'],um=Math.max(Math.abs(x.u[0]),Math.abs(x.u[1]),Math.abs(x.u[2]))||1,im=Math.max(Math.abs(x.i[0]),Math.abs(x.i[1]),Math.abs(x.i[2]))||1;\n"
 " var s=`<svg class='phsvg' viewBox='0 0 260 260'><defs><marker id='${mk}' markerWidth='8' markerHeight='8' refX='6' refY='3' orient='auto'><path d='M0,0 L6,3 L0,6 Z' class='ph-mk'/></marker></defs>`;\n"
 " s+=`<circle cx='${cx}' cy='${cy}' r='${R}' class='ph-bg'/><circle cx='${cx}' cy='${cy}' r='55' class='ph-grid'/>`;\n"
 " for(a=0;a<360;a+=30){r=a*Math.PI/180;s+=`<line x1='${cx}' y1='${cy}' x2='${(cx+R*Math.cos(r)).toFixed(1)}' y2='${(cy-R*Math.sin(r)).toFixed(1)}' class='ph-grid'/>`;}\n"
