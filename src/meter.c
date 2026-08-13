@@ -15,7 +15,7 @@
 #define	FW_VER	0002
 #define	FW_BUILD_YEAR 26
 #define	FW_BUILD_MON  8
-#define	FW_BUILD_DAY  10
+#define	FW_BUILD_DAY  13
 
 #define	SQRT_2	 1.414213562 
 
@@ -254,7 +254,7 @@ static void apply_cal_preset_all_ch(uint16_t wiring, int inorm, int ct1, int zct
 	int id;
 
 	db.feeder_cnt = METER_CH_COUNT;
-	db.freq = 60;
+	db.freq = 0;	/* 0:60Hz, 1:50Hz */
 	for (id = 0; id < METER_CH_COUNT; id++)
 		set_cal_channel_pt_ct(id, wiring, inorm, ct1, zctScale);
 }
@@ -273,7 +273,7 @@ void build_cal_db2(void)
 
 void build_cal_db3(void)
 {
-	apply_cal_preset_all_ch(0, 250, 250, 1250);
+	apply_cal_preset_all_ch(0, 100, 250, 1250);	/* inorm=100%(In=CT1), CT1=250 */
 	commit_db_settings();
 }
 
@@ -282,13 +282,13 @@ void build_set_db(void)
 	int id = 0;
 
 	db.feeder_cnt = METER_CH_COUNT;
-	db.freq = 60;
+	db.freq = 0;	/* 0:60Hz, 1:50Hz */
 
 	db.pt[0].wiring = 1;	/* 3P3W */
 	db.pt[0].vnorm = 220;
 	db.pt[0].PT1 = 220;
 	db.pt[0].PT2 = 220;
-	db.ct[0].inorm = 100;
+	db.ct[0].inorm = 50;	/* 정격전류 default 50% */
 	db.ct[0].CT1 = 100;
 	db.ct[0].CT2 = 1;
 	db.ct[0].zctScale = 1000;
@@ -299,7 +299,7 @@ void build_set_db(void)
 	db.pt[id].vnorm = 220;
 	db.pt[id].PT1 = 220;
 	db.pt[id].PT2 = 220;
-	db.ct[id].inorm = 100;
+	db.ct[id].inorm = 50;	/* 정격전류 default 50% */
 	db.ct[id].CT1 = 100;
 	db.ct[id].CT2 = 1;
 	db.ct[id].zctScale = 1000;
@@ -311,7 +311,7 @@ void build_set_db(void)
 	db.pt[id].vnorm = 220;
 	db.pt[id].PT1 = 220;
 	db.pt[id].PT2 = 220;
-	db.ct[id].inorm = 100;
+	db.ct[id].inorm = 50;	/* 정격전류 default 50% */
 	db.ct[id].CT1 = 100;
 	db.ct[id].CT2 = 1;
 	db.ct[id].zctScale = 1000;
@@ -379,8 +379,11 @@ int initSettings(int id)
 		db.comm.ip0[0] = 192;
 		db.comm.ip0[1] = 168;
 		db.comm.ip0[2] = 9;
+#ifdef	DTEST
+		db.comm.ip0[3] = 125;
+#else
 		db.comm.ip0[3] = 124;
-
+#endif
 		db.comm.sm0[0] = 255;
 		db.comm.sm0[1] = 255;
 		db.comm.sm0[2] = 255;
@@ -413,7 +416,7 @@ int initSettings(int id)
 		db.etc.autorotation = 2;
 		db.etc.maxminItv = 2;
 
-		db.freq = 60;
+		db.freq = 0;	/* 0:60Hz, 1:50Hz */
 		db.feeder_cnt = METER_CH_COUNT;
 	}
 
@@ -422,11 +425,10 @@ int initSettings(int id)
 	db.pt[id].PT1 = 220;
 	db.pt[id].PT2 = 220;
 
+	db.ct[id].inorm = 50;	/* 정격전류 default 50% (CT1 대비) */
 	if (id == 0) {
-		db.ct[id].inorm = 250;
 		db.ct[id].CT1 = 250;
 	} else {
-		db.ct[id].inorm = 100;
 		db.ct[id].CT1 = 100;
 	}
 	db.ct[id].CT2 = 1;
@@ -445,6 +447,17 @@ int buildSettings(int id)
 	int ret=0, i;
 	float ptratio;
 	CNTL_DATA	*_pcntl = &meter[id].cntl;
+
+	/* freq enum(0:60/1:50) 정규화 — 구버전 Hz저장(60/50) 마이그레이션 포함 */
+	db.freq = (db.freq == 50 || db.freq == 1) ? 1 : 0;
+
+	/* 설정 기본값 정규화 — 0(미설정/클리어)이면 default 적용 */
+	if (db.ct[id].I_start == 0) db.ct[id].I_start = 1;		/* 기동전류 계수 default 1 */
+	if (db.ct[id].inorm == 0)   db.ct[id].inorm = 50;		/* 정격전류 default 50% (CT1 대비) */
+	if (db.ct[id].CT1 == 0)     db.ct[id].CT1 = 100;		/* CT 1차 default 100 */
+	if (db.pt[id].vnorm == 0)   db.pt[id].vnorm = 220;		/* 정격전압 default 220 */
+	if (db.pt[id].PT1 == 0)     db.pt[id].PT1 = 220;
+	if (db.pt[id].PT2 == 0)     db.pt[id].PT2 = 220;
 
 	meter[id].meter.vType = (uint16_t)db.pt[id].wiring;
 
@@ -465,7 +478,7 @@ int buildSettings(int id)
 	/* CT type(CT2)은 설정(CT_DEF)에서 사용 — hwModel 미사용으로 덮어쓰기 제거 */
 	printf("[CT type = %d, HW Version = %d]\n", db.ct[id].CT2, getHwVersion());
 
-	_pcntl->I_start = (float)(db.ct[id].inorm) * db.ct[id].I_start/1000.;
+	_pcntl->I_start = CT_INORM_A(id) * db.ct[id].I_start/1000.;
 	printf("[start Current = %f, %d, %d]\n", _pcntl->I_start, db.ct[id].inorm, db.ct[id].I_start);
 
 	// 정격전압이 150V 보다 적으면 phase volt. gain을 2로 한다 
@@ -537,8 +550,8 @@ int buildSettings(int id)
 		break;
 		
 	// wave 표시와 관련된 수정 필요하다 ...
-	case CT_RCT:		
-		if (db.freq == 60) {
+	case CT_RCT:
+		if (FREQ_HZ(db.freq) == 60) {
 			meter[id].cntl.iscale    = I_FULL_RCT_60Hz / RMS_MAX;			
 			meter[id].cntl.wscale   *= I_FULL_RCT_60Hz;		
 			meter[id].cntl.wv_iscale = I_FULL_RCT_60Hz / WAVE_MAX;
@@ -636,12 +649,12 @@ int buildSettings(int id)
 	}
 	
 	meter[id].cntl.sumMax = 5;	// 10/12 rms를 읽고 1초 평균 계산한다 
-	meter[id].cntl.nFastRMS = db.freq*2;
+	meter[id].cntl.nFastRMS = FREQ_HZ(db.freq)*2;
 	
-	meter[id].cntl.freqLo[0] = db.freq - db.freq*0.01;
-	meter[id].cntl.freqHi[0] = db.freq + db.freq*0.01;
-	meter[id].cntl.freqLo[1] = db.freq - db.freq*0.06;
-	meter[id].cntl.freqHi[1] = db.freq + db.freq*0.04;
+	meter[id].cntl.freqLo[0] = FREQ_HZ(db.freq) - FREQ_HZ(db.freq)*0.01;
+	meter[id].cntl.freqHi[0] = FREQ_HZ(db.freq) + FREQ_HZ(db.freq)*0.01;
+	meter[id].cntl.freqLo[1] = FREQ_HZ(db.freq) - FREQ_HZ(db.freq)*0.06;
+	meter[id].cntl.freqHi[1] = FREQ_HZ(db.freq) + FREQ_HZ(db.freq)*0.04;
 	
 	meter[id].cntl.uLo[0] = db.pt[id].vnorm - db.pt[id].vnorm*0.1;
 	meter[id].cntl.uHi[0] = db.pt[id].vnorm + db.pt[id].vnorm*0.1;
@@ -967,7 +980,7 @@ void storeHwSettings(METER_CAL *pcal) {
 	ChipEepWrite(0, pcal, sizeof(METER_CAL));
 	
 	printf("storeHwSettings, crc=%04x\n", pcal->crc);
-	dump((void *)pcal, sizeof(METER_CAL));
+//	dump((void *)pcal, sizeof(METER_CAL));
 }
 
 /* settings.dat 없음·크기 불일치 — initSettings 후 build_set_db로 PT/CT 통일 */
@@ -988,6 +1001,17 @@ static void recreate_settings_dat(const char *banner)
 		if (banner != NULL)
 			printf("%s\n", banner);
 	}
+}
+
+/* feeder_cnt = wiring이 NOT_USED가 아닌 PT 개수 (웹/서버 Feeder 화면 구성 기준) */
+uint16_t countFeeders(PT_DEF *pt)
+{
+	int i;
+	uint16_t n = 0;
+	for (i = 0; i < MAX_CH; i++)
+		if (pt[i].wiring != NOT_USED)
+			n++;
+	return n;
 }
 
 /* pdb->pt[0..feeder_cnt-1].wiring 을 순차 스캔해 논리 피더를 물리 미터/CT슬롯에 배정.
@@ -1350,15 +1374,15 @@ void initTransientTrigger(int id) {
 	switch (db.ct[id].CT2) {
 	case CT_5A:
 #if 1
-		normraw = WAVE_MAX/I_FULL_5AN * (1<<meter[id].cntl.pga_igain)*db.ct[id].inorm * (5/db.ct[id].CT1);
+		normraw = WAVE_MAX/I_FULL_5AN * (1<<meter[id].cntl.pga_igain)*CT_INORM_A(id) * (5/db.ct[id].CT1);
 		ptcc->rscale    = I_FULL_5AN  / WAVE_MAX*SQRT_2*db.ct[id].CT1/5;		// peak(DC)로 환산			
 #else
 		if (getHwVersion() == 0) {
-			normraw = WAVE_MAX/I_FULL_5A * (1<<meter[id].cntl.pga_igain)*db.ct[id].inorm * (5/db.ct[id].CT1);
+			normraw = WAVE_MAX/I_FULL_5A * (1<<meter[id].cntl.pga_igain)*CT_INORM_A(id) * (5/db.ct[id].CT1);
 			ptcc->rscale    = I_FULL_5A  / WAVE_MAX*SQRT_2*db.ct[id].CT1/5;		// peak(DC)로 환산
 		}
 		else {
-			normraw = WAVE_MAX/I_FULL_5AN * (1<<meter[id].cntl.pga_igain)*db.ct[id].inorm * (5/db.ct[id].CT1);
+			normraw = WAVE_MAX/I_FULL_5AN * (1<<meter[id].cntl.pga_igain)*CT_INORM_A(id) * (5/db.ct[id].CT1);
 			ptcc->rscale    = I_FULL_5AN  / WAVE_MAX*SQRT_2*db.ct[id].CT1/5;		// peak(DC)로 환산			
 		}
 #endif
@@ -1366,7 +1390,7 @@ void initTransientTrigger(int id) {
 	
 	case CT_100mA:
 	case CT_333mV:
-		normraw = WAVE_MAX/I_FULL_100mA * (1<<meter[id].cntl.pga_igain)*db.ct[id].inorm * (100/db.ct[id].CT1);
+		normraw = WAVE_MAX/I_FULL_100mA * (1<<meter[id].cntl.pga_igain)*CT_INORM_A(id) * (100/db.ct[id].CT1);
 		ptcc->rscale    = I_FULL_100mA / WAVE_MAX*SQRT_2*db.ct[id].CT1/100;	// peak(DC)로 환산
 		break;
 	}
@@ -2808,7 +2832,7 @@ void RMSCapture(int id, int ix) {
 	Ts = pqE->rQ.Q[pqE->rQ.re].Ts;
 	
 	if (pCur->ts <= Ts && Ts < pNext->ts) {				
-		i = 1000./db.freq;	// 시간간격		
+		i = 1000./FREQ_HZ(db.freq);	// 시간간격		
 		pCap->pos  = pos = (Ts-pCur->ts)/i;	// sag 시작위치 검색
 		pCap->ts   = Ts;
 		pCap->mask = pqE->rQ.Q[pqE->rQ.re].mask;

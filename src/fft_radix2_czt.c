@@ -285,15 +285,15 @@ float FFT_postproc(int n, int sel, uint16_t *pHD) {
 	for (i=2; i<=63; i++) {
 	  // harmoics를 각 차수별(2~63)로 %로 환산하여 저장
 		//ix = (i*50)/5;
-		ix = i*db.freq/5;
+		ix = i*FREQ_HZ(db.freq)/5;
 		if(sel == 2) {
-			if(db.freq==50)
+			if(FREQ_HZ(db.freq)==50)
 				gain = i_harm_gain[0][i];
 			else
 				gain = i_harm_gain[1][i];
 		}
 		else {
-			if(db.freq==50)
+			if(FREQ_HZ(db.freq)==50)
 				gain = v_harm_gain[0][i];
 			else
 				gain = v_harm_gain[1][i];
@@ -317,7 +317,7 @@ float calcKF() {
 	float IhSqSum=0, IhNSqSum=0;
 	int i, ix, res;
 
-	res = db.freq/5;
+	res = FREQ_HZ(db.freq)/5;
 //	res = lineFreq/5;
 
 	// irms = h1^2+h2^2+ ....h63^2)

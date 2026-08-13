@@ -103,18 +103,19 @@ static void alarmFifoSanitizeRam(ALARM_FIFO *pFifo)
 
 void initAlarmTable(int id) {
 	int ix=0;
-	float temp;
+	float temp, In;
 	METERING *pm = &meter[id].meter;
 	DEMAND *pdmd = &meter[id].dm;
 
 	if (id < 0 || id >= METER_CH_COUNT)
 		return;
 
+	In = CT_INORM_A(id);	/* 정격전류 In(A) = CT1*inorm/100 */
 	memset(almTbl[id], 0, sizeof(almTbl[id]));
 	// [0..2]
 	setAlarmChannel(id, ix++, "-", 0, NULL);
 	setAlarmChannel(id, ix++, "Temp.", 100, &pm->Temp);
-	setAlarmChannel(id, ix++, "Freq.", pdb->freq, &pm->Freq);
+	setAlarmChannel(id, ix++, "Freq.", FREQ_HZ(pdb->freq), &pm->Freq);
 	// [3..6]
 	temp = db.pt[id].vnorm;
 	setAlarmChannel(id, ix++, "U1",  temp, &pm->U[0]);
@@ -132,7 +133,7 @@ void initAlarmTable(int id) {
 	setAlarmChannel(id, ix++, "Uu", temp, &pm->Ubal[0]);
 	setAlarmChannel(id, ix++, "Uo", temp, &pm->Ubal[1]);
 	// [13..18]
-	temp = db.ct[id].inorm;
+	temp = In;
 	setAlarmChannel(id, ix++, "I1", temp, &pm->I[0]);
 	setAlarmChannel(id, ix++, "I2", temp, &pm->I[1]);
 	setAlarmChannel(id, ix++, "I3", temp, &pm->I[2]);
@@ -140,25 +141,25 @@ void initAlarmTable(int id) {
 	setAlarmChannel(id, ix++, "Itotal", temp*3, &pm->I[4]);
 	setAlarmChannel(id, ix++, "In", temp, &pm->In);
 	// [19..22]
-	temp = db.pt[id].vnorm*db.ct[id].inorm;
+	temp = db.pt[id].vnorm*In;
 	setAlarmChannel(id, ix++, "P1", temp, &pm->P[0]);
 	setAlarmChannel(id, ix++, "P2", temp, &pm->P[1]);
 	setAlarmChannel(id, ix++, "P3", temp, &pm->P[2]);
 	setAlarmChannel(id, ix++, "Ptotal", temp*3, &pm->P[3]);
 	// [23..26]
-	temp = db.pt[id].vnorm*db.ct[id].inorm;
+	temp = db.pt[id].vnorm*In;
 	setAlarmChannel(id, ix++, "Q1", temp, &pm->Q[0]);
 	setAlarmChannel(id, ix++, "Q2", temp, &pm->Q[1]);
 	setAlarmChannel(id, ix++, "Q3", temp, &pm->Q[2]);
 	setAlarmChannel(id, ix++, "Q4", temp*3, &pm->Q[3]);
 	// [27..30]
-	temp = db.pt[id].vnorm*db.ct[id].inorm;
+	temp = db.pt[id].vnorm*In;
 	setAlarmChannel(id, ix++, "D1", temp*3, &pm->D[0]);
 	setAlarmChannel(id, ix++, "D2", temp*3, &pm->D[1]);
 	setAlarmChannel(id, ix++, "D3", temp*3, &pm->D[2]);
 	setAlarmChannel(id, ix++, "Dtotal", temp, &pm->D[3]);
 	// [31..34]
-	temp = db.pt[id].vnorm*db.ct[id].inorm;
+	temp = db.pt[id].vnorm*In;
 	setAlarmChannel(id, ix++, "S1", temp, &pm->S[0]);
 	setAlarmChannel(id, ix++, "S2", temp, &pm->S[1]);
 	setAlarmChannel(id, ix++, "S3", temp, &pm->S[2]);
@@ -185,26 +186,26 @@ void initAlarmTable(int id) {
 	setAlarmChannel(id, ix++, "THD I2", temp, &pm->THD_I[1]);
 	setAlarmChannel(id, ix++, "THD I3", temp, &pm->THD_I[2]);
 	// [49..52]
-	temp = db.pt[id].vnorm*db.ct[id].inorm;
+	temp = db.pt[id].vnorm*In;
 	setAlarmChannel(id, ix++, "DD P+", temp, &pdmd->DD_P[0]);
 	setAlarmChannel(id, ix++, "DD P-", temp, &pdmd->DD_P[1]);
 	setAlarmChannel(id, ix++, "DD Q-L", temp, &pdmd->DD_Q[0]);
 	setAlarmChannel(id, ix++, "DD Q-C", temp, &pdmd->DD_Q[1]);
 	setAlarmChannel(id, ix++, "DD S", temp, &pdmd->DD_S);
 	// [53..55]
-	temp = db.ct[id].inorm;
+	temp = In;
 	setAlarmChannel(id, ix++, "DD I1", temp, &pdmd->DD_I[0]);
 	setAlarmChannel(id, ix++, "DD I2", temp, &pdmd->DD_I[1]);
 	setAlarmChannel(id, ix++, "DD I3", temp, &pdmd->DD_I[2]);
 	// [56..60]
-	temp = db.pt[id].vnorm*db.ct[id].inorm;
+	temp = db.pt[id].vnorm*In;
 	setAlarmChannel(id, ix++, "MD P+", temp, &pdmd->MD_P[0].value);
 	setAlarmChannel(id, ix++, "MD P-", temp, &pdmd->MD_P[1].value);
 	setAlarmChannel(id, ix++, "MD Q-L", temp, &pdmd->MD_Q[0].value);
 	setAlarmChannel(id, ix++, "MD Q-C", temp, &pdmd->MD_Q[1].value);	
 	setAlarmChannel(id, ix++, "MD S", temp, &pdmd->MD_S.value);
 	// [61..63]
-	temp = db.ct[id].inorm;
+	temp = In;
 	setAlarmChannel(id, ix++, "MD I1", temp, &pdmd->MD_I[0].value);
 	setAlarmChannel(id, ix++, "MD I2", temp, &pdmd->MD_I[1].value);
 	setAlarmChannel(id, ix++, "MD I3", temp, &pdmd->MD_I[2].value);

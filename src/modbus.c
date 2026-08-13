@@ -274,6 +274,11 @@ void copySimpleMap(void)
 	/* 읽는 쪽이 현재 보고 있지 않은 뒷버퍼를 고른다 */
 	dst = (psmpMap == &smpMapBuf[0]) ? &smpMapBuf[1] : &smpMapBuf[0];
 
+	/* feeder_cnt = wiring이 NOT_USED가 아닌 PT 개수. buildFeederMap 루프 바운드(내부)로 쓰고,
+	 *  METER_INFO의 feeder count(7102, 읽기전용)로 노출 → confWebApp이 이 값으로 피더 수 결정 */
+	pdb->feeder_cnt = countFeeders(pdb->pt);
+	pInfo->feeder_cnt = pdb->feeder_cnt;
+
 	buildFeederMap(map);
 	smpFillCommon(dst);
 
@@ -1076,8 +1081,7 @@ int   readMemCb(uint16_t address, uint16_t *value)
 	uint16_t offset;
 	uint16_t *psmb;
 
-//	pInfo->MbusHeartBit++;
-	//printf("MbusHeartBit = %d\n", pInfo->MbusHeartBit);
+	pInfo->mBusRxCnt++;		/* Modbus RX 카운트 — TCP 읽기 경로(RTU는 modbusSlvProcFrame에서 별도 증가) */
 
 	if (decodeMeterAddress(address, &id, &offset) == 0) {
 		// Wave 데이터를 load 한다 (CH별 offset == MBAD_WV_REG)
@@ -1164,7 +1168,8 @@ int writeMemCb(uint16_t address, uint16_t value) {
 		return 0;
 	}
 	else if (id == 0 && offset >= MBAD_P1_SETTING && offset < MBAD_P1_SETTING_END) {
-		/* P1 설정(device id/comm/PT/CT/ETC/IOM, 7110~7445) — save settings 명령으로 db 반영·적용 */
+		/* P1 설정(device id/comm/PT/CT/ETC/IOM, 7110~7445) — save settings 명령으로 db 반영·적용.
+		 *  feeder_cnt는 METER_INFO(7102, 읽기전용)로 이동, 7171은 reserved */
 		pmset[offset-MBAD_SETTING] = value;
 		return 0;
 	}

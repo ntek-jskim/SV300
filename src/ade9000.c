@@ -428,7 +428,7 @@ void setGainPh(int id)
 	int i;
 	int32_t *pph = (db.ct[id].CT2 == CT_RCT) ? pcal->R_phcal[id] : pcal->phcal[id];	/* 로고스키 */
 
-	omega = (db.freq == 60) ? CONST_OMEGA_60 : CONST_OMEGA_50;
+	omega = (FREQ_HZ(db.freq) == 60) ? CONST_OMEGA_60 : CONST_OMEGA_50;
 
 	for (i=0; i<3; i++) {
 		a = meter[id].cntl.wh[i]*CONST_SIN_60 - meter[id].cntl.varh[i]*CONST_COS_60;
@@ -1138,7 +1138,7 @@ void calcTHD(int id) {
 			nh = meter[id].meter.THD_I[i]/100;					// 단위 고조파 전류
 			nt = sqrt(1+ nh*nh);					// 단위토탈전류
 			ih = nh*meter[id].meter.I[i]/nt;	// 실효고조파전류 = 단위고조파전류*실효토탈전류/단위토탈전류 = 단위고조파전류*전류비
-			meter[id].meter.TDD_I[i] = ih/db.ct[id].inorm*100;	// 실효고조파전류/TDD정격전류
+			meter[id].meter.TDD_I[i] = ih/CT_INORM_A(id)*100;	// 실효고조파전류/TDD정격전류(In=CT1*inorm/100)
 		}
 		else {
 			meter[id].meter.THD_I[i] = 0;
@@ -1509,7 +1509,7 @@ void readPeriod(uint8_t id) {
 		meter[id].cntl.freq1sum  += scaleFreq(ade9000[id].freqFast[0]);
 	
 		// 1초 평균주파수 계산 
-		if (++meter[id].cntl.freqCount1s >= db.freq) {
+		if (++meter[id].cntl.freqCount1s >= FREQ_HZ(db.freq)) {
 			//pmeter->Freq = (pmeter->U[3] == 0) ? 0 : meter[id].cntl.freq1sum/meter[id].cntl.freqCount1s;
 			meter[id].meter.Freq = (meter[id].cntl.online == 0) ? 0 : meter[id].cntl.freq1sum/meter[id].cntl.freqCount1s;
 			meter[id].cntl.freq1sum = 0;
@@ -2083,12 +2083,12 @@ void setPqEventLevel(int id) {
 	// 전류
 	if (db.ct[id].CT2 == 0) {
 		ratio = db.ct[id].CT1/5;
-		scale = RMS_MAX/I_FULL_5AN*db.ct[id].inorm/ratio;
+		scale = RMS_MAX/I_FULL_5AN*CT_INORM_A(id)/ratio;
 	}
 	else {
 		ratio = db.ct[id].CT1/100;
-		scale = RMS_MAX/I_FULL_100mA*db.ct[id].inorm/ratio;
-	}	
+		scale = RMS_MAX/I_FULL_100mA*CT_INORM_A(id)/ratio;
+	}
 	meter[id].cntl.ocLevel       = scale * meter[id].pqevt[PQE_OC].level/100.;	
 	meter[id].cntl.ocRetLevel    = scale * (meter[id].pqevt[PQE_OC].level-5)/100.;	// 5%를 복귀시점으로 한다 
 	printf("---> OC level=%d, OC ret level=%d\n", meter[id].cntl.ocLevel, meter[id].cntl.ocRetLevel);
@@ -2134,7 +2134,7 @@ uint16_t getZxToutThreshold(float prop) {
 
 	//float vfull = V_FULL_LV;
 //	float atten = (lineFreq == 60) ? 0.81 : 0.86;
-	float atten = (db.freq == 60) ? 0.81 : 0.86;
+	float atten = (FREQ_HZ(db.freq) == 60) ? 0.81 : 0.86;
 	float thrsh = (vpcf_full*atten) / (32 * 256) * prop;
 	
 	printf("[getZxToutThreshold, prop=%f, thrsh=%f]\n", prop, thrsh);

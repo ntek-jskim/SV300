@@ -33,9 +33,14 @@
   2) 260812 맵: 피더 Simple에 Angle U1~3(V Phase)·Angle I1~3(Cur Phase) 신설 → SMP_CHANNEL 90→100w(harmonics 50830→50920), smpFill3ph/1ph·api_feeders 정합. 벡터도 전류 LN 색상 청색(#1E64FF, I2 검정과 구분)
   3) HWMODEL 복원(common 7086, 0=3CH/1=2CH): METER_CAL(FRAM) 저장 + 콘솔 'MODEL/HWMODEL <n>' 설정 + getHwModel/getHwCh + setMeterInfo 노출, confWebApp이 읽어 3CH면 Temp 숨김·칩범위 적응. METER_CAL 4바이트 정렬(_rsv, 숨은패딩 방지). ※METER_CAL 구조 변경(hwModel/tempOfs)으로 업데이트 후 교정값 재초기화 필요(hwModel은 빌드 기본값 2CH=1/3CH=0)
 
+26/08/13 FW V00.02
+  1) inorm(정격전류) CT1 대비 %화(In=CT1×inorm/100·기본50%) + 설정 0→default 정규화(buildSettings: I_start1/inorm50/CT1 100/vnorm·PT 220) + freq enum통일(0:60/1:50, FREQ_HZ 매크로·구버전 Hz저장 자동 마이그레이션) + smb_rtu Temp-ref(7463) 명령 신설·260812 명령 +1 시프트. inorm 사용처(alarm 전류·전력기준/ade9000 TDD분모·PQ OC/meter I_start·파형)를 In(A) 환산. ※CT1≠100 유닛은 업데이트 후 inorm 재설정 필요
+  2) Web(web.c): read error 시 계측값 "----" 표시(Dashboard/Channel/Feeder 값만 null화·구조 유지), CT 'I Nominal(%)'·Start I 소수점3자리(표시 raw/1000·저장 ×1000·step0.001), mDNS 호스트명 MAC→SN 4바이트. confWebApp: 설정 백업/복원(Main+Channel 전체 JSON 레지스터블록 Save/Load·블록R/W 고속·Save Settings 7449 영속·admin), Calibration 페이지 전체폭·그룹 정리. 실기 백업/복원 라운드트립 검증 PASS
+
 NOSDMEM : SD MEMORY Y/N
 HWV1 : CH3(METER CHIP SELECT)
 HWV2 : SPI FLASH 16MB
+DTEST : DEBUG TEST용
 
 // debug
 SV300\keil\SV300.uvproj\SV300              : LPC4330 USE_LPCXPRESSO_4337 CMSIS_BITPOSITIONS GPL_LICENSE_TERMS_ACCEPTED CORE_M4 USE_KSZ8863 GEMS9000 EXT_RTC _FTP_SERVER VFRMS METER_TEST_DATA

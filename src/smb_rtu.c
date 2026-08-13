@@ -385,9 +385,10 @@ void calibration(int id, int code) {
 				clrDcOffset(id);
 			}
 			break;
-		case 17:	// Temp Cali — 측정온도를 기준(TEMP_CAL_REF)에 맞추는 오프셋 산출(idempotent)
+		case 17:	// Temp Cali — 측정온도를 기준온도(Temp-ref@7463, 미설정 시 TEMP_CAL_REF)에 맞추는 오프셋(idempotent)
 			if (pc->calEn) {
-				pcal->tempOfs[id] = TEMP_CAL_REF - (meter[id].meter.Temp - pcal->tempOfs[id]);
+				float tref = (pcntl->tref > 0) ? pcntl->tref : TEMP_CAL_REF;
+				pcal->tempOfs[id] = tref - (meter[id].meter.Temp - pcal->tempOfs[id]);
 			}
 			break;
 		case 18:	// Temp Init — 오프셋 클리어
@@ -553,66 +554,70 @@ void cmdProc()
 			printf("[Set In-ref]\n");
 			pcntl->inref = c/10.;
 			break;
-		case 15:
+		case 15:	// 260812 신설: Temp-ref (7463), 1=1℃
+			printf("[Set Temp-ref]\n");
+			pcntl->tref = c;
+			break;
+		case 16:
 			printf("[INIT SETTINGS]\n");
 			reqFactoryReset(c);
 			break;
-		case 16:
+		case 17:
 			printf("[CLEAR PI]\n");
 			{ int k; for (k = 0; k < 4; k++) meter[0].iom.piData[k] = 0; }	/* PI 펄스 적산 초기화 */
 			break;
-		/* 260807 맵: ALL+#1~3(4개), spacing 4. load event/alarm(37~44)은 handleFetchCmd 동기처리 */
-		// clear demand: base+0=all, base+1~3=CH0~2  (7473~7476)
-		case 17:
+		/* 260812 맵: Temp-ref(7463) 삽입으로 이후 +1 시프트. load event/alarm(38~45)은 handleFetchCmd 동기처리 */
+		// clear demand: base+0=all, base+1~3=CH0~2  (7466~7469)
 		case 18:
 		case 19:
 		case 20:
-			dispatchMeterChCmd(17, addr, c, clearDemand);
-			break;
-		// clear minmax (7477~7480)
 		case 21:
+			dispatchMeterChCmd(18, addr, c, clearDemand);
+			break;
+		// clear minmax (7470~7473)
 		case 22:
 		case 23:
 		case 24:
-			dispatchMeterChCmd(21, addr, c, clearMinMax);
-			break;
-		// clear energy (7481~7484)
 		case 25:
+			dispatchMeterChCmd(22, addr, c, clearMinMax);
+			break;
+		// clear energy (7474~7477)
 		case 26:
 		case 27:
 		case 28:
-			dispatchMeterChCmd(25, addr, c, clearEnergy);
-			break;
-		// clear alarm (7485~7488)
 		case 29:
+			dispatchMeterChCmd(26, addr, c, clearEnergy);
+			break;
+		// clear alarm (7478~7481)
 		case 30:
 		case 31:
 		case 32:
-			dispatchMeterChCmd(29, addr, c, clearAlarm);
-			break;
-		// clear event (7489~7492)
 		case 33:
+			dispatchMeterChCmd(30, addr, c, clearAlarm);
+			break;
+		// clear event (7482~7485)
 		case 34:
 		case 35:
 		case 36:
-			dispatchMeterChCmd(33, addr, c, clearEventListCmd);
+		case 37:
+			dispatchMeterChCmd(34, addr, c, clearEventListCmd);
 			break;
-		// alarm ack (7501~7504, +0~+3 → 공통 METER_INFO)
-		case 45:
+		// alarm ack (7494~7497, +0~+3 → 공통 METER_INFO)
 		case 46:
 		case 47:
 		case 48:
+		case 49:
 			ackAlarmCmd(c);
 			break;
-		// event ack (7505~7508, +0~+3 → 공통 METER_INFO)
-		case 49:
+		// event ack (7498~7501, +0~+3 → 공통 METER_INFO)
 		case 50:
 		case 51:
 		case 52:
+		case 53:
 			ackEventCmd(c);
 			break;
-		// clear ITIC,ITIC2 (7511, 단일 레지스터 → CH1, itic·itic2 동시)
-		case 55:
+		// clear ITIC,ITIC2 (7504, 단일 레지스터 → CH1, itic·itic2 동시)  [260812: 55→56]
+		case 56:
 			clearIticList(0, c);
 			break;
 	}

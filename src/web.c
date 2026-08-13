@@ -280,9 +280,11 @@ static error_t apiMe(HttpConnection *c)
 	if (beginJson(c)) return ERROR_WRITE_FAILED;
 	if (r == ROLE_NONE) w(c, "{\"ok\":true,\"auth\":false}");
 	else {
+		int nch = getHwCh();	/* HWMODEL 채널 수(2/3) — 배열 크기(METER_CH_COUNT) 초과 방지 캡 */
+		if (nch > METER_CH_COUNT) nch = METER_CH_COUNT;
 		snprintf(b, sizeof(b),
-			"{\"ok\":true,\"auth\":true,\"user\":\"%s\",\"role\":\"%s\"}",
-			r == ROLE_ADMIN ? "ntek" : "sv300", roleName(r));
+			"{\"ok\":true,\"auth\":true,\"user\":\"%s\",\"role\":\"%s\",\"nch\":%d}",
+			r == ROLE_ADMIN ? "ntek" : "sv300", roleName(r), nch);
 		w(c, b);
 	}
 	return httpCloseStream(c);
@@ -332,25 +334,30 @@ static error_t apiDashboard(HttpConnection *c)
 	return httpCloseStream(c);
 }
 
+/* HWMODEL 채널 수(측정 루프 바운드) — getHwCh(2/3)를 배열 크기(METER_CH_COUNT)로 캡 */
+static int webNch(void) { int n = getHwCh(); return (n > METER_CH_COUNT) ? METER_CH_COUNT : n; }
+
 /* GET /api/feeders — 채널(피더)별 3상 계측 + 전력·에너지 */
 static error_t apiFeeders(HttpConnection *c)
 {
 	char b[256];
-	int i;
+	int i, first = 1;
 
 	if (beginJson(c)) return ERROR_WRITE_FAILED;
 	w(c, "{\"ok\":true,\"feeders\":[");
-	for (i = 0; i < METER_CH_COUNT; i++) {
+	for (i = 0; i < webNch(); i++) {
 		METERING *m = &meter[i].meter;
 		double kwh  = (double)meter[i].egy.Ereg64.cell[0][0][0] / 1000.0;   /* TOTAL,KWH,IMPORT (Wh→kWh) */
 		double kwhM = (double)meter[i].egy.Ereg32[1].cell[0][0][0] * 0.1;   /* THIS_MONTH (0.1kWh) */
 		unsigned wiring = (unsigned)meter[0].setting.pt[i].wiring;
 
+		if (wiring == NOT_USED) continue;	/* feeder_cnt 반영: 미사용(NOT_USED) 채널 제외 */
+
 		snprintf(b, sizeof(b),
 			"%s{\"n\":%d,\"wiring\":%u,\"freq\":%.2f,"
 			"\"u\":[%.1f,%.1f,%.1f],\"upp\":[%.1f,%.1f,%.1f],"
 			"\"i\":[%.2f,%.2f,%.2f],\"in\":%.2f,",
-			i ? "," : "", i + 1, wiring, m->Freq,
+			first ? "" : ",", i + 1, wiring, m->Freq,
 			m->U[0], m->U[1], m->U[2], m->Upp[0], m->Upp[1], m->Upp[2],
 			m->I[0], m->I[1], m->I[2], m->In);
 		w(c, b);
@@ -363,6 +370,7 @@ static error_t apiFeeders(HttpConnection *c)
 			m->PF[3], m->P[3] / 1000.0f, m->Q[3] / 1000.0f, m->S[3] / 1000.0f,
 			m->Ubal[0], m->Ibal[0], kwh, kwhM, (unsigned)(m->meterStatus ? 1 : 0));
 		w(c, b);
+		first = 0;
 	}
 	w(c, "]}");
 	return httpCloseStream(c);
@@ -376,7 +384,7 @@ static error_t apiChannels(HttpConnection *c)
 
 	if (beginJson(c)) return ERROR_WRITE_FAILED;
 	w(c, "{\"ok\":true,\"ch\":[");
-	for (i = 0; i < METER_CH_COUNT; i++) {
+	for (i = 0; i < webNch(); i++) {
 		METERING *m = &meter[i].meter;
 		CNTL_DATA *cn = &meter[i].cntl;
 		snprintf(b, sizeof(b),
@@ -462,7 +470,7 @@ static error_t apiMinmax(HttpConnection *c)
 
 	if (beginJson(c)) return ERROR_WRITE_FAILED;
 	w(c, "{\"ok\":true,\"ch\":[");
-	for (i = 0; i < METER_CH_COUNT; i++) {
+	for (i = 0; i < webNch(); i++) {
 		MAXMIN *mm = &meter[i].maxmin;
 		snprintf(b, sizeof(b), "%s{\"n\":%d,\"reset_ts\":%u,\"m\":[",
 			i ? "," : "", i + 1, (unsigned)mm->rstTime);
@@ -504,7 +512,7 @@ static error_t apiEnergyNow(HttpConnection *c)
 
 	if (beginJson(c)) return ERROR_WRITE_FAILED;
 	w(c, "{\"ok\":true,\"ch\":[");
-	for (i = 0; i < METER_CH_COUNT; i++) {
+	for (i = 0; i < webNch(); i++) {
 		ENERGY *e = &meter[i].egy;
 		snprintf(b, sizeof(b), "%s{\"n\":%d,\"periods\":[", i ? "," : "", i + 1);
 		w(c, b);
@@ -538,7 +546,7 @@ static error_t apiEnergyLog(HttpConnection *c)
 
 	if (beginJson(c)) return ERROR_WRITE_FAILED;
 	w(c, "{\"ok\":true,\"ch\":[");
-	for (i = 0; i < METER_CH_COUNT; i++) {
+	for (i = 0; i < webNch(); i++) {
 		uint16_t *E = (uint16_t *)&meter[i].elog[0];   /* elog[0]=전일, elog[1]=당일 */
 		uint32_t lts = (uint32_t)E[0]   | ((uint32_t)E[1]   << 16);
 		uint32_t tts = (uint32_t)E[200] | ((uint32_t)E[201] << 16);
@@ -565,7 +573,7 @@ static error_t apiDemandLog(HttpConnection *c)
 
 	if (beginJson(c)) return ERROR_WRITE_FAILED;
 	w(c, "{\"ok\":true,\"ch\":[");
-	for (i = 0; i < METER_CH_COUNT; i++) {
+	for (i = 0; i < webNch(); i++) {
 		DEMAND *d = &meter[i].dm;
 		double sum = 0, pk = 0;
 		int pki = 0;
@@ -600,7 +608,7 @@ static error_t apiHarmonics(HttpConnection *c)
 	w(c, b);
 	for (o = 2; o <= 63; o++) { snprintf(b, sizeof(b), "%s%d", o > 2 ? "," : "", o); w(c, b); }
 	w(c, "],\"ch\":[");
-	for (i = 0; i < METER_CH_COUNT; i++) {
+	for (i = 0; i < webNch(); i++) {
 		HARMONICS *hd = &meter[i].hd;
 		uint16_t (*arr)[64] = (sel == 1) ? hd->Upp : (sel == 2) ? hd->I : hd->U;
 		snprintf(b, sizeof(b), "%s{\"n\":%d,\"ph\":[", i ? "," : "", i + 1);
@@ -624,7 +632,7 @@ static error_t apiWaveform(HttpConnection *c)
 
 	if (beginJson(c)) return ERROR_WRITE_FAILED;
 	w(c, "{\"ok\":true,\"channels\":[");
-	for (i = 0; i < METER_CH_COUNT; i++) {
+	for (i = 0; i < webNch(); i++) {
 		WAVEFORM_L16 *wv;
 		float vs, is;
 		copyModbusWaveData(i);   /* 최신 파형 캡처(Modbus 읽기 경로와 동일) */
@@ -687,7 +695,7 @@ static error_t apiEn50160(HttpConnection *c)
 
 	if (beginJson(c)) return ERROR_WRITE_FAILED;
 	w(c, "{\"ok\":true,\"ch\":[");
-	for (i = 0; i < METER_CH_COUNT; i++) {
+	for (i = 0; i < webNch(); i++) {
 		EN50160 *r = &meter[i].rpt[0];
 		uint32_t cm = r->compliance;
 #define ENP(ri) (((cm >> (ri)) & 1u) ? 0 : 1)   /* 비트 set = FAIL */
@@ -735,7 +743,7 @@ static error_t apiMonthly(HttpConnection *c)
 
 	if (beginJson(c)) return ERROR_WRITE_FAILED;
 	w(c, "{\"ok\":true,\"ch\":[");
-	for (i = 0; i < METER_CH_COUNT; i++) {
+	for (i = 0; i < webNch(); i++) {
 		LOG_DATA *L = &meter[i].log;
 		snprintf(b, sizeof(b), "%s{\"n\":%d,\"ts\":%u,\"s\":{", i ? "," : "", i + 1, (unsigned)L->ts);
 		w(c, b);
@@ -773,7 +781,7 @@ static error_t apiEvents(HttpConnection *c)
 	/* alarm status: st[32] 중 status!=0 (활성 알람). 상한은 채널별(EV_CAP) — 전역 합산 아님 */
 	w(c, "{\"ok\":true,\"status\":[");
 	first = 1;
-	for (i = 0; i < METER_CH_COUNT; i++) {
+	for (i = 0; i < webNch(); i++) {
 		ALARM_STATUS *a = &meter[i].alarm;
 		m = 0;
 		for (k = 0; k < 32 && m < EV_CAP; k++) {
@@ -788,7 +796,7 @@ static error_t apiEvents(HttpConnection *c)
 	/* alarm log: alist.alog[count] */
 	w(c, "],\"alarmlog\":[");
 	first = 1;
-	for (i = 0; i < METER_CH_COUNT; i++) {
+	for (i = 0; i < webNch(); i++) {
 		ALARM_LIST *L = &meter[i].alist;
 		int cnt = L->count; if (cnt > N_ALARM_LIST) cnt = N_ALARM_LIST;
 		m = 0;
@@ -805,7 +813,7 @@ static error_t apiEvents(HttpConnection *c)
 	/* event log: elist.elog[count] */
 	w(c, "],\"eventlog\":[");
 	first = 1;
-	for (i = 0; i < METER_CH_COUNT; i++) {
+	for (i = 0; i < webNch(); i++) {
 		EVENT_LIST *E = &meter[i].elist;
 		int cnt = E->count; if (cnt > N_EVENT_LIST) cnt = N_EVENT_LIST;
 		m = 0;
@@ -825,7 +833,7 @@ static error_t apiEvents(HttpConnection *c)
 	/* summary: PQ_EVENT_COUNT 합산(3CH) */
 	{
 		unsigned tv = 0, ti = 0, oc = 0, sag = 0, sw = 0, intr = 0;
-		for (i = 0; i < METER_CH_COUNT; i++) {
+		for (i = 0; i < webNch(); i++) {
 			PQ_EVENT_COUNT *p = &meter[i].pqEvtCnt;
 			tv += p->tvc; ti += p->tcc; oc += p->oc;
 			sag += p->sag; sw += p->swell; intr += p->intr;
@@ -949,8 +957,6 @@ static const GField GEN[] = {
 	{ "pf_sign",         "PF Sign",              7389, WT_U16,  2, 0, 0 },
 	{ "demand_interval", "Demand Interval (min)",7390, WT_U16,  2, 0, 0 },
 	{ "target_demand",   "Target Demand (W)",    7392, WT_U32,  2, 0, 0 },
-	{ "backlight_off",   "Backlight Off (sec)",  7398, WT_U16,  2, 0, 0 },
-	{ "brightness",      "Brightness",           7399, WT_U16,  2, 0, 0 },
 	{ "auto_rotation",   "Auto Rotation",        7400, WT_BOOL, 2, 0, 0 },
 	{ "test_mode",       "Test Mode",            7403, WT_BOOL, 2, 0, 0 },
 	{ "update_interval", "Update Interval (sec)",7404, WT_U16,  2, 0, 0 },
@@ -1402,7 +1408,7 @@ static const char INDEX_HTML[] =
 /* ---------- script ---------- */
 "<script>\n"
 "var $=function(i){return document.getElementById(i)};\n"
-"var IS_ADMIN=false, cur='dash';\n"
+"var IS_ADMIN=false, cur='dash', NCH=3;\n"
 "var AC=['Disabled','Temp','Freq','U1','U2','U3','U~','U12','U23','U31','Upp~','V.Unbal Uo','V.Unbal Uu','I1','I2','I3','I~','Itotal','In','P1','P2','P3','Ptotal','Q1','Q2','Q3','Qtot','D1','D2','D3','D','S1','S2','S3','Stot','PF1','PF2','PF3','PFtot','THD U1','THD U2','THD U3','THD U12','THD U23','THD U31','THD I1','THD I2','THD I3','DDmd P+','DDmd P-','DDmd Q+','DDmd Q-','DDmd S','DDmd I1','DDmd I2','DDmd I3','MDmd P+','MDmd P-','MDmd Q+','MDmd Q-','MDmd S','MDmd I1','MDmd I2','MDmd I3','UnderDev U1','UnderDev U2','UnderDev U3','OverDev U1','OverDev U2','OverDev U3','CF U1','CF U2','CF U3','CF U12','CF U23','CF U31','CF I1','CF I2','CF I3','KF I1','KF I2','KF I3','PSt1','PSt2','PSt3','Plt1','Plt2','Plt3','Sig.V1','Sig.V2','Sig.V3'];\n"
 "var ET={1:['Sag','sag'],2:['Swell','swell'],3:['S.Intr','intr'],4:['L.Intr','intr'],5:['OC','oc'],6:['RVC','tr'],7:['Trans V','tr'],8:['Trans I','tr'],9:['SOE','oc']};\n"
 "function acn(i){return AC[i]||('#'+i)}\n"
@@ -1410,7 +1416,7 @@ static const char INDEX_HTML[] =
 " return fetch(u,o).then(function(r){return r.text().then(function(t){if(tm)clearTimeout(tm);return{s:r.status,d:JSON.parse((t||'{}').replace(/-?\\b(inf|nan)\\b/gi,'0'))}})}).catch(function(e){if(tm)clearTimeout(tm);throw e;})}\n"
 "function jp(u,o){return j(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(o)});}\n"
 "function sn(a){$('setNote').textContent=IS_ADMIN?a:'Viewer: read-only.';}\n"
-"function n(v,d){return(v==null||isNaN(v))?'-':Number(v).toFixed(d)}\n"
+"function n(v,d){return(v==null||isNaN(v))?'----':Number(v).toFixed(d)}\n"
 "function esc(s){return String(s).replace(/[&<>]/g,function(x){return{'&':'&amp;','<':'&lt;','>':'&gt;'}[x]})}\n"
 /* theme + clock */
 "function toggleTheme(){var h=document.documentElement,t=h.getAttribute('data-theme')==='light'?'dark':'light';h.setAttribute('data-theme',t);try{localStorage.setItem('theme',t)}catch(e){}tbtn()}\n"
@@ -1422,7 +1428,7 @@ static const char INDEX_HTML[] =
 "function showLogin(){$('v-login').style.display='';$('v-app').style.display='none'}\n"
 "function showApp(){$('v-login').style.display='none';$('v-app').style.display=''}\n"
 "function me(){return j('/api/me').then(function(r){\n"
-" if(r.d.auth){IS_ADMIN=(r.d.role==='admin');\n"
+" if(r.d.auth){IS_ADMIN=(r.d.role==='admin');if(r.d.nch)NCH=r.d.nch;\n"
 "  $('role').textContent=r.d.user+' ('+(IS_ADMIN?'Admin':'Viewer')+')';$('role').className='role '+(IS_ADMIN?'admin':'viewer');\n"
 "  ['b-ackal','b-clral','b-clrev','b-ackev'].forEach(function(id){$(id).disabled=!IS_ADMIN});\n"
 "  showApp();go('dash');pollLoop();return true;}\n"
@@ -1447,23 +1453,25 @@ static const char INDEX_HTML[] =
 " var a=(-90+f*360)*Math.PI/180,dt=$('pfDot');dt.setAttribute('cx',70+60*Math.cos(a));dt.setAttribute('cy',70+60*Math.sin(a));dt.setAttribute('fill',col);\n"
 " $('d-pf').style.color=col;$('d-pfst').style.color=col;$('d-pfst').textContent=st;}\n"
 "function setBar(id,bid,v){var e=$(id);e.textContent=n(v,1)+'%';e.className='uv '+(v>=100?'r':'g');var b=$(bid);b.style.width=Math.max(1,Math.min(100,v||0))+'%';b.className='ufill'+(v>=100?' hot':'');}\n"
-"function loadDash(){return j('/api/dashboard').then(function(r){if(!r.d.ok){dstat(false);return}var d=r.d.data;\n"
+"var DBLANK={u:[null,null,null],i:[null,null,null]};\n"
+"function renderDash(d){\n"
 "  $('d-vavg').textContent=n(d.v_avg,1);$('d-iavg').textContent=n(d.i_avg,2);$('d-freq').textContent=n(d.freq,2);\n"
 "  $('d-u1').textContent=n(d.u[0],1)+' V';$('d-u2').textContent=n(d.u[1],1)+' V';$('d-u3').textContent=n(d.u[2],1)+' V';\n"
 "  $('d-i1').textContent=n(d.i[0],2)+' A';$('d-i2').textContent=n(d.i[1],2)+' A';$('d-i3').textContent=n(d.i[2],2)+' A';\n"
 "  $('d-p').textContent=n(d.p,2);$('d-q').textContent=n(d.q,2);$('d-s').textContent=n(d.s,2);\n"
-"  $('d-pf').textContent=n(d.pf,2);setGauge(d.pf);\n"
+"  $('d-pf').textContent=n(d.pf,2);setGauge(d.pf==null?0:d.pf);\n"
 "  setBar('d-vunb','d-vunb-bar',d.u_unbal);setBar('d-iunb','d-iunb-bar',d.i_unbal);\n"
-"  $('d-thdu').textContent=n(d.thd_u,1)+'%';$('d-thdi').textContent=n(d.thd_i,1)+'%';$('d-tddi').textContent=n(d.tdd_i,1)+'%';\n"
-"  $('dmeas').textContent='Measured: '+fdt(new Date());dstat(true);\n"
-" }).catch(function(){dstat(false)});}\n"
+"  $('d-thdu').textContent=n(d.thd_u,1)+'%';$('d-thdi').textContent=n(d.thd_i,1)+'%';$('d-tddi').textContent=n(d.tdd_i,1)+'%';}\n"
+"function loadDash(){return j('/api/dashboard').then(function(r){if(!r.d.ok){renderDash(DBLANK);dstat(false);return}\n"
+"  renderDash(r.d.data);$('dmeas').textContent='Measured: '+fdt(new Date());dstat(true);\n"
+" }).catch(function(){renderDash(DBLANK);dstat(false)});}\n"
 "function loadIom(){return j('/api/dashboard').then(function(r){if(!r.d.ok)return;var d=r.d.data;if(d&&d.iom){iomDat=d.iom;if(!ioEd)renderIom();}}).catch(function(){});}\n"
 "var ioEd=0,iomDat=null;\n"
 "function renderIom(){var io=iomDat;if(!io)return;var k,ed=ioEd&&IS_ADMIN,di=\"<div class='hsub'>DI</div><table class='ctbl hsm'><tr><th>P</th><th>Type</th><th>Deb</th><th>Scale</th><th>St</th><th>Pulse</th></tr>\";\n"
 " for(k=0;k<4;k++){var ty,de,sc;if(ed){ty=\"<select data-addr='\"+(7412+k)+\"' data-type='u16' data-orig='\"+io.dt[k]+\"'><option value='0'\"+(io.dt[k]==0?' selected':'')+\">DI</option><option value='1'\"+(io.dt[k]==1?' selected':'')+\">PI</option></select>\";de=\"<input type='number' min='4' max='64' data-addr='\"+(7416+k)+\"' data-type='u16' data-orig='\"+io.db[k]+\"' value='\"+io.db[k]+\"' style='width:50px'>\";sc=\"<input type='number' data-addr='\"+(7420+k)+\"' data-type='u16' data-orig='\"+io.sc[k]+\"' value='\"+io.sc[k]+\"' style='width:50px'>\";}else{ty=(io.dt[k]==1?'PI':'DI');de=io.db[k];sc=io.sc[k];}di+=\"<tr><td class='rk'>#\"+k+\"</td><td>\"+ty+\"</td><td>\"+de+\"</td><td>\"+sc+\"</td><td>\"+io.di[k]+\"</td><td>\"+io.pi[k]+\"</td></tr>\";}di+='</table>';\n"
 " if(IS_ADMIN)di+=ed?\"<div class='pgctl'><button class='btn primary' onclick='ioSave()'>Save</button><button class='btn' onclick='ioEd=0;renderIom()'>Cancel</button></div>\":\"<div class='pgctl'><button class='btn' onclick='ioEd=1;renderIom()'>Edit</button><button class='btn warn' onclick='clearPI()'>Clear PI</button></div>\";\n"
-" var tp=\"<div class='hsub'>Temperature</div><table class='ctbl hsm'><tr><th>P</th><th>Temp(&#8451;)</th></tr>\";for(k=0;k<4;k++)tp+=\"<tr><td class='rk'>#\"+k+\"</td><td>\"+n(io.temp[k],1)+\"</td></tr>\";tp+='</table>';\n"
-" $('d-iom').innerHTML=\"<div style='display:flex;gap:14px;flex-wrap:wrap'><div style='flex:1;min-width:300px'>\"+di+\"</div><div style='min-width:150px'>\"+tp+\"</div></div>\";}\n"
+" var tp='';if(NCH!==3){tp=\"<div class='hsub'>Temperature</div><table class='ctbl hsm'><tr><th>P</th><th>Temp(&#8451;)</th></tr>\";for(k=0;k<4;k++)tp+=\"<tr><td class='rk'>#\"+k+\"</td><td>\"+n(io.temp[k],1)+\"</td></tr>\";tp+='</table>';}\n"
+" $('d-iom').innerHTML=\"<div style='display:flex;gap:14px;flex-wrap:wrap'><div style='flex:1;min-width:300px'>\"+di+\"</div>\"+(tp?\"<div style='min-width:150px'>\"+tp+\"</div>\":'')+\"</div>\";}\n"
 "function ioSave(){var els=document.querySelectorAll('#d-iom [data-addr]'),c=[],i=0;els.forEach(function(e){if(e.value!==e.getAttribute('data-orig'))c.push(e);});if(!c.length){ioEd=0;renderIom();return;}(function w(){if(i>=c.length){ioEd=0;j('/api/savecfg',{method:'POST'}).then(function(){setTimeout(pollLoop,300);});return;}var e=c[i++],v=+e.value,mn=e.getAttribute('min'),mx=e.getAttribute('max');if(mn)v=Math.max(+mn,v);if(mx)v=Math.min(+mx,v);jp('/api/setreg',{addr:+e.getAttribute('data-addr'),type:'u16',val:v}).then(w).catch(w);})();}\n"
 "function chip(c){return \"<span class='chchip'>CH\"+c+'</span>'}\n"
 "function ts2(s){return s?fdt(new Date(s*1000)):'-'}\n"
@@ -1492,7 +1500,7 @@ static const char INDEX_HTML[] =
 "var WM={0:'not used',1:'3P4W',2:'3P3W(2CT)',3:'3P3W(3CT)',4:'1P2W(L1)',5:'1P2W(L2)',6:'1P2W(L3)',7:'1P3W',8:'SIM'};\n"
 "var CT2M={0:'5A',1:'100mA/333mV',2:'Rogowski'},ZCTM={1:'200mV:100mV',2:'200mV:1.5mA',3:'200mV:0.1mA'},DIM={0:'DI',1:'PI'},DIRM={0:'+',1:'-'};\n"
 "var PT_F=[{o:0,l:'Wiring Mode',t:'u16',opt:WM},{o:2,l:'V Nominal',t:'u32'},{o:4,l:'PT1',t:'u32'},{o:6,l:'PT2',t:'u16'}];\n"
-"var CT_F=[{o:0,l:'I Nominal',t:'u16'},{o:1,l:'CT1',t:'u16'},{o:2,l:'CT2',t:'u16',opt:CT2M},{o:3,l:'Turns',t:'u16'},{o:4,l:'Start I',t:'u16'},{o:5,l:'CT1 Dir',t:'u16',opt:DIRM},{o:6,l:'CT2 Dir',t:'u16',opt:DIRM},{o:7,l:'CT3 Dir',t:'u16',opt:DIRM},{o:8,l:'Rogowski',t:'u16'},{o:9,l:'Phase Ofs 1',t:'i16'},{o:10,l:'Phase Ofs 2',t:'i16'},{o:11,l:'Phase Ofs 3',t:'i16'},{o:12,l:'ZCT Type',t:'u16',opt:ZCTM},{o:13,l:'ZCT Scale',t:'u16'}];\n"
+"var CT_F=[{o:0,l:'I Nominal (%)',t:'u16'},{o:1,l:'CT1',t:'u16'},{o:2,l:'CT2',t:'u16',opt:CT2M},{o:3,l:'Turns',t:'u16'},{o:4,l:'Start I',t:'u16',sc:1000},{o:5,l:'CT1 Dir',t:'u16',opt:DIRM},{o:6,l:'CT2 Dir',t:'u16',opt:DIRM},{o:7,l:'CT3 Dir',t:'u16',opt:DIRM},{o:8,l:'Rogowski',t:'u16'},{o:9,l:'Phase Ofs 1',t:'i16'},{o:10,l:'Phase Ofs 2',t:'i16'},{o:11,l:'Phase Ofs 3',t:'i16'},{o:12,l:'ZCT Type',t:'u16',opt:ZCTM},{o:13,l:'ZCT Scale',t:'u16'}];\n"
 "var CMDS=[{g:'System',l:'Reboot',addr:7448,danger:1,note:'reboot'},{g:'System',l:'Save Set',addr:7449},{g:'System',l:'Init Settings',addr:7463,danger:2},{g:'System',l:'Set Time',addr:7438,utc:1}];\n"
 "var MAIN_TABS=[['general','General'],['pt','PT'],['ct','CT'],['command','Command']];\n"
 "var CHAN_TABS=[['pqevent','PQ Event'],['transient','Transient'],['waveform','Waveform'],['disturb','Disturbance'],['trend','Trend'],['pqreport','PQ Report'],['almdef','Alarm Def'],['alarm','Alarm Settings']];\n"
@@ -1504,8 +1512,9 @@ static const char INDEX_HTML[] =
 "var CSECT={pqevent:[[6700,'Level','Over Current'],[6701,'Cycle','Over Current'],[6702,'Trigger Action','Over Current'],[6703,'holdOff Cycle','Over Current'],[6706,'Level(%)','Sag',1],[6707,'Cycle','Sag',1],[6708,'Trigger Action','Sag',1],[6709,'holdOff Cycle','Sag',1],[6712,'Level(%)','Swell',1],[6713,'Cycle','Swell',1],[6714,'Trigger Action','Swell',1],[6715,'holdOff Cycle','Swell',1],[6718,'Level(%)','Interruption',1],[6719,'Time(s)','Interruption',1],[6720,'Trigger Action','Interruption',1],[6721,'holdOff Cycle','Interruption',1]],transient:[[6724,'HoldOff(ms)','Voltage',1],[6725,'Abs Peak(%)','Voltage',1],[6726,'Fast Change','Voltage',1],[6727,'Trigger Action','Voltage',1],[6728,'HoldOff','Current'],[6729,'Abs Peak','Current'],[6730,'Fast Change','Current'],[6731,'Trigger Action','Current']],waveform:[[6744,'Resolution(32k/8k)'],[6745,'Param(U/I)'],[6746,'Pre trig(0.1s)'],[6747,'Post trig(1s)']],disturb:[[6748,'Resolution(HalfCyc)'],[6749,'Param(U/I)'],[6750,'Pre trig(smp)'],[6751,'Post trig(smp)']],pqreport:[[6844,'Active'],[6845,'Start Day']],almdef:[[6854,'compare Time Delay(s)']]};\n"
 "(function(){var t=[];[[1,6764,6766,6767],[2,6783,6785,6786],[3,6802,0,6805],[4,6821,0,6824]].forEach(function(g){var gn='Group '+g[0];t.push([g[1],'Active',gn]);t.push([g[1]+1,'Interval',gn]);if(g[2])t.push([g[2],'Version',gn]);for(var k=0;k<16;k++)t.push([g[3]+k,'Ch'+(k+1),gn]);});CSECT.trend=t;})();\n"
 "function loadCSect(key){var f=CSECT[key];if(!f){$('setBody').innerHTML=\"<p class='stub'>-</p>\";return;}var lo=f[0][0],hi=f[0][0];f.forEach(function(p){if(p[0]<lo)lo=p[0];if(p[0]>hi)hi=p[0];});var nn=hi-lo+1;\n"
-" Promise.all([1,2,3].map(function(ch){return j('/api/regs?addr='+(lo+(ch-1)*10000)+'&n='+nn).then(function(r){return (r.d&&r.d.ok)?r.d.words:null;}).catch(function(){return null;});})).then(function(bl){if(setCur!==key)return;\n"
-"  var h=\"<div class='setgrid'>\";for(var ch=1;ch<=3;ch++){var wds=bl[ch-1];h+=\"<div class='setcard'><h3>CH\"+ch+'</h3>';\n"
+" var _chs=[];for(var _k=1;_k<=NCH;_k++)_chs.push(_k);\n"
+" Promise.all(_chs.map(function(ch){return j('/api/regs?addr='+(lo+(ch-1)*10000)+'&n='+nn).then(function(r){return (r.d&&r.d.ok)?r.d.words:null;}).catch(function(){return null;});})).then(function(bl){if(setCur!==key)return;\n"
+"  var h=\"<div class='setgrid'>\";for(var ch=1;ch<=NCH;ch++){var wds=bl[ch-1];h+=\"<div class='setcard'><h3>CH\"+ch+'</h3>';\n"
 "   if(!wds){h+=\"<p class='stub'>no data</p>\";}else{var pg=null;f.forEach(function(p){if(ch>1&&p[3])return;var g=p[2]||'';if(g&&g!==pg){h+=\"<div class='sgrp'>\"+esc(g)+\"</div>\";}pg=g;var addr=p[0]+(ch-1)*10000,v=wds[p[0]-lo]||0;h+=\"<div class='srow'><span class='sk'>\"+esc(p[1])+\"</span><input type='number' data-addr='\"+addr+\"' data-type='u16' data-orig='\"+v+\"' value='\"+v+\"' \"+(IS_ADMIN?'':'disabled')+\" oninput='setMark(this)'></div>\";});}\n"
 "   h+='</div>';}h+='</div>';$('setBody').innerHTML=h;sn('Save & Apply.');});}\n"
 "function fmtV(f){return (f.type==='bool')?(f.val?'On':'Off'):esc(f.val)}\n"
@@ -1529,19 +1538,20 @@ static const char INDEX_HTML[] =
 "  var it=chg[i++],addr=+it.el.getAttribute('data-addr'),type=it.el.getAttribute('data-type');\n"
 "  if(type==='ip'){var p=(it.v||'0.0.0.0').split('.'),k=0;(function nip(){if(k>=4){next();return;}wr(addr+k,'u16',+(p[k]||0)).then(function(){k++;nip();});})();}\n"
 "  else if(type==='float'){var wf=fToU16(+it.v||0),k2=0;(function nf(){if(k2>=2){next();return;}wr(addr+k2,'u16',wf[k2]).then(function(){k2++;nf();});})();}\n"
-"  else{wr(addr,type,Math.round(+it.v||0)).then(function(rr){if(rr.s===403){setRes('Admin only');return;}next();});}}\n"
+"  else{var scl=+(it.el.getAttribute('data-scale')||1);wr(addr,type,Math.round((+it.v||0)*scl)).then(function(rr){if(rr.s===403){setRes('Admin only');return;}next();});}}\n"
 " next();}\n"
 /* setup: PT/CT/IO/Command */
 "function decodeF(wds,idx,t){if(t==='u32')return((wds[idx]||0)|((wds[idx+1]||0)<<16))>>>0;if(t==='i16'){var v=wds[idx]||0;return v>32767?v-65536:v;}return wds[idx]||0;}\n"
-"function grpCtl(f,addr,val){var d=\"data-addr='\"+addr+\"' data-type='\"+f.t+\"' data-orig='\"+val+\"'\",dis=IS_ADMIN?'':'disabled';\n"
+"function grpCtl(f,addr,val){var sc=f.sc||1,dv=(sc!==1)?(val/sc):val,d=\"data-addr='\"+addr+\"' data-type='\"+f.t+\"' data-scale='\"+sc+\"' data-orig='\"+dv+\"'\",dis=IS_ADMIN?'':'disabled';\n"
 " if(f.opt){var s=\"<select \"+d+' '+dis+\" onchange='setMark(this)'>\";for(var k in f.opt)s+=\"<option value='\"+k+\"'\"+((''+k)===(''+val)?' selected':'')+'>'+esc(f.opt[k])+'</option>';return s+'</select>';}\n"
-" return \"<input type='number' \"+d+\" value='\"+val+\"' \"+dis+\" oninput='setMark(this)'>\";}\n"
+" return \"<input type='number' \"+(sc!==1?(\"step='\"+(1/sc)+\"' \"):'')+d+\" value='\"+dv+\"' \"+dis+\" oninput='setMark(this)'>\";}\n"
 "function loadGroup(kind){var cfg=(kind==='pt')?{base:7172,step:8,fields:PT_F,ti:'PT'}:{base:7244,step:16,fields:CT_F,ti:'CT'};\n"
-" return j('/api/regs?addr='+cfg.base+'&n='+(cfg.step*9)).then(function(r){if(!r.d.ok){$('setBody').innerHTML=\"<p class='stub'>load error</p>\";return;}var wds=r.d.words,h=\"<div class='setgrid'>\";\n"
-"  for(var s=0;s<9;s++){var sb=cfg.base+s*cfg.step,so=s*cfg.step;h+=\"<div class='setcard'><h3>\"+cfg.ti+' #'+(s+1)+'</h3>';\n"
+" var _npt=NCH*3;\n"
+" return j('/api/regs?addr='+cfg.base+'&n='+(cfg.step*_npt)).then(function(r){if(!r.d.ok){$('setBody').innerHTML=\"<p class='stub'>load error</p>\";return;}var wds=r.d.words,h=\"<div class='setgrid'>\";\n"
+"  for(var s=0;s<_npt;s++){var sb=cfg.base+s*cfg.step,so=s*cfg.step;h+=\"<div class='setcard'><h3>\"+cfg.ti+' #'+(s+1)+'</h3>';\n"
 "   cfg.fields.forEach(function(f){var val=decodeF(wds,so+f.o,f.t);h+=\"<div class='srow'><span class='sk'>\"+f.l+'</span>'+grpCtl(f,sb+f.o,val)+'</div>';});h+='</div>';}\n"
 "  h+='</div>';$('setBody').innerHTML=h;sn('Save & Apply.');});}\n"
-"function tgtOpts(id){var s=\"<select id='t_\"+id+\"' style='width:80px'><option value='0'>ALL</option>\";for(var t=1;t<=3;t++)s+=\"<option value='\"+t+\"'>#\"+t+'</option>';return s+'</select>';}\n"
+"function tgtOpts(id){var s=\"<select id='t_\"+id+\"' style='width:80px'><option value='0'>ALL</option>\";for(var t=1;t<=NCH;t++)s+=\"<option value='\"+t+\"'>#\"+t+'</option>';return s+'</select>';}\n"
 "function loadCommand(){var gr={},od=[];CMDS.forEach(function(c){if(!gr[c.g]){gr[c.g]=[];od.push(c.g);}gr[c.g].push(c);});var h='';\n"
 " od.forEach(function(g){h+=\"<div class='setcard'><h3>\"+g+'</h3>';gr[g].forEach(function(c){var gi=CMDS.indexOf(c),id='c'+gi,ctl='';\n"
 "  if(c.utc)ctl=\"<input type='datetime-local' step='1' id='u_\"+id+\"' style='width:200px'>\";else if(c.tgt)ctl=tgtOpts(id);\n"
@@ -1552,15 +1562,18 @@ static const char INDEX_HTML[] =
 /* Feeder */
 "function fbadge(w){return `<span class='wb'>${WM[w]||('mode '+w)}</span>`;}\n"
 "function kv(k,v,u){return `<div class='kvi'><span class='kk'>${k}</span><span class='kvv'>${v}<small> ${u}</small></span></div>`;}\n"
-"function loadFeeder(){return j('/api/feeders').then(function(r){\n"
-" if(!r.d.ok){$('fstat').className='bad';$('fstat').innerHTML='&#9679; read error';return;}\n"
-" $('fstat').className='on';$('fstat').innerHTML='&#9679; live &#8635; 1s';var h='';\n"
-" r.d.feeders.forEach(function(f){\n"
+"var lastFeed=null;\n"
+"function fCards(list){var h='';list.forEach(function(f){\n"
 "  h+=`<div class='fcard${f.st?'':' off'}'><div class='fch'><span class='ft'>Feeder #${f.n}</span>${fbadge(f.wiring)}<span class='ff'>${n(f.freq,2)} Hz</span></div>`;\n"
 "  h+=`<table class='ftbl'><tr><th></th><th>Phase V</th><th>Line V</th><th>Current</th><th>THD-U</th><th>THD-I</th></tr>`;\n"
 "  ['L1','L2','L3'].forEach(function(ph,k){h+=`<tr><td class='pk'>${ph}</td><td>${n(f.u[k],1)}</td><td>${n(f.upp[k],1)}</td><td>${n(f.i[k],2)}</td><td>${n(f.thdu[k],1)}%</td><td>${n(f.thdi[k],1)}%</td></tr>`;});\n"
 "  h+=`</table><div class='fkv'>`+kv('In',n(f.in,2),'A')+kv('PF',n(f.pf,3),'')+kv('P',n(f.p,2),'kW')+kv('Q',n(f.q,2),'kVar')+kv('S',n(f.s,2),'kVA')+kv('U-unb',n(f.uunb,1),'%')+kv('I-unb',n(f.iunb,1),'%')+kv('Import',n(f.kwh,2),'kWh')+kv('Month',n(f.kwh_m,2),'kWh')+`</div></div>`;\n"
-" });$('fgrid').innerHTML=h;});}\n"
+"  });return h;}\n"
+"function fErr(){$('fstat').className='bad';$('fstat').innerHTML='&#9679; read error';if(lastFeed)$('fgrid').innerHTML=fCards(chBlank(lastFeed));}\n"
+"function loadFeeder(){return j('/api/feeders').then(function(r){\n"
+" if(!r.d.ok){fErr();return;}\n"
+" $('fstat').className='on';$('fstat').innerHTML='&#9679; live &#8635; 1s';lastFeed=r.d.feeders;$('fgrid').innerHTML=fCards(r.d.feeders);\n"
+" }).catch(fErr);}\n"
 /* Channel */
 "var chTabCur='meter',CHN=[{n:1},{n:2},{n:3}];\n"
 "var harmOpt='pv',harmView='table',PCOL=['#8b5cf6','#38bdf8','#84cc16'];\n"
@@ -1569,6 +1582,10 @@ static const char INDEX_HTML[] =
 "function chStat(ok){var e=$('chstat');if(e){e.className='ph2 '+(ok?'on':'bad');e.innerHTML=ok?'&#9679; live &#8635; 1s':'&#9679; read error';}}\n"
 "function chFail(){chStat(false);var b=$('chbody');if(b&&b.innerHTML.indexOf('loading')>=0)b.innerHTML=\"<p class='stub'>read error - retrying...</p>\";}\n"
 "function chCards(list,fn){var h=\"<div class='chgrid'>\";list.forEach(function(x){h+=`<div class='chcard'><div class='chh'>CH${x.n}${x.wiring!==undefined?' '+fbadge(x.wiring):''}</div>${fn(x)}</div>`;});return h+'</div>';}\n"
+"var lastCh=null;\n"
+"function nv(o){if(Array.isArray(o))return o.map(nv);if(o&&typeof o==='object'){var r={};for(var k in o)r[k]=nv(o[k]);return r;}return(typeof o==='number')?null:o;}\n"
+"function chBlank(list){return(list||[]).map(function(x){var o={};for(var k in x)o[k]=(k==='n'||k==='wiring')?x[k]:nv(x[k]);return o;});}\n"
+"function chErr(fn){chStat(false);if(lastCh)$('chbody').innerHTML=chCards(chBlank(lastCh),fn);else{var b=$('chbody');if(b&&b.innerHTML.indexOf('loading')>=0)b.innerHTML=\"<p class='stub'>read error - retrying...</p>\";}}\n"
 "function r4(nm,a,d){return `<tr><td class='rk'>${nm}</td><td>${n(a[0],d)}</td><td>${n(a[1],d)}</td><td>${n(a[2],d)}</td><td>${n(a[3],d)}</td></tr>`;}\n"
 "function r3(nm,a,d){return `<tr><td class='rk'>${nm}</td><td>${n(a[0],d)}</td><td>${n(a[1],d)}</td><td>${n(a[2],d)}</td><td></td></tr>`;}\n"
 "function rs(nm,v,d){return `<tr><td class='rk'>${nm}</td><td></td><td></td><td></td><td>${n(v,d)}</td></tr>`;}\n"
@@ -1679,8 +1696,8 @@ static const char INDEX_HTML[] =
 "function bItic(list,title,fn){var h=\"<div class='hsub'>\"+title+\"</div>\"+pbar(fn,1)+\"<table class='ctbl'><tr><th>Type</th><th>Start Time</th><th>Dur(ms)</th><th>Phase</th><th>Level</th></tr>\";\n"
 " if(!list||!list.length)h+=\"<tr><td colspan='5' class='empty'>No data</td></tr>\";(list||[]).forEach(function(e){var t=ET[e.type]||['#'+e.type,'oc'],ph=[];if(e.mask&1)ph.push('L1');if(e.mask&2)ph.push('L2');if(e.mask&4)ph.push('L3');h+=\"<tr><td><span class='evt \"+t[1]+\"'>\"+t[0]+\"</span></td><td class='ts'>\"+ts2(e.ts)+\"</td><td>\"+e.dur+\"</td><td>\"+(ph.join(',')||'-')+\"</td><td>\"+n(e.level,2)+\"</td></tr>\";});return h+'</table>';}\n"
 "function loadChannelTab(){var t=chTabCur;\n"
-" if(t==='meter'||t==='phase')return j('/api/channels').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=chCards(r.d.ch,t==='meter'?bMeter:bPhase);}).catch(chFail);\n"
-" if(t==='minmax')return j('/api/minmax').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=chCards(r.d.ch,bMm);}).catch(chFail);\n"
+" if(t==='meter'||t==='phase'){var fn=(t==='meter'?bMeter:bPhase);return j('/api/channels').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chErr(fn);return;}chStat(true);lastCh=r.d.ch;$('chbody').innerHTML=chCards(r.d.ch,fn);}).catch(function(){if(chTabCur===t)chErr(fn);});}\n"
+" if(t==='minmax')return j('/api/minmax').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chErr(bMm);return;}chStat(true);lastCh=r.d.ch;$('chbody').innerHTML=chCards(r.d.ch,bMm);}).catch(function(){if(chTabCur==='minmax')chErr(bMm);});\n"
 " if(t==='energy'){if(egyEd)return Promise.resolve();return j('/api/energynow').then(function(r){if(chTabCur!==t||egyEd)return null;if(!r.d.ok){chStat(false);return null;}return j('/api/energylog').then(function(r2){return{now:r.d.ch,log:(r2.d&&r2.d.ok)?r2.d.ch:[]};});}).then(function(d){if(!d||chTabCur!=='energy'||egyEd)return;egyD=d;chStat(true);egyRender();}).catch(chFail);}\n"
 " if(t==='demand')return j('/api/demandlog').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);\n"
 "  $('chbody').innerHTML=chCards(r.d.ch,function(x){var pm=x.peaki*15,ph=Math.floor(pm/60),pmm=pm%60;return clrBtn('clrDemand',x.n)+`<div class='cmeta'>peak ${n(x.peak,2)} kW @ ${p2(ph)}:${p2(pmm)} · avg ${n(x.avg,2)} kW · ${ts2(x.ts)}</div><canvas id='dm${x.n}' class='dmcv'></canvas>`;});\n"
@@ -1716,7 +1733,7 @@ static const char INDEX_HTML[] =
 "function alFloat(addr,val){var s=fnum(val);return \"<input type='number' step='0.1' data-addr='\"+addr+\"' data-type='float' data-orig='\"+s+\"' value='\"+s+\"' \"+(IS_ADMIN?'':'disabled')+\" oninput='setMark(this)'>\";}\n"
 "function loadAlarm(){var base=(alCh-1)*10000+6858;\n"
 " return j('/api/regs?addr='+base+'&n=192').then(function(r){if(!r.d.ok){$('setBody').innerHTML=\"<p class='stub'>load error</p>\";return;}var w=r.d.words;\n"
-"  var h=\"<div style='margin-bottom:12px'>\";for(var c=1;c<=3;c++)h+=\"<button class='btn\"+(c===alCh?' primary':'')+\"' style='margin-right:6px' onclick='alSel(\"+c+\")'>CH\"+c+'</button>';h+='</div>';\n"
+"  var h=\"<div style='margin-bottom:12px'>\";for(var c=1;c<=NCH;c++)h+=\"<button class='btn\"+(c===alCh?' primary':'')+\"' style='margin-right:6px' onclick='alSel(\"+c+\")'>CH\"+c+'</button>';h+='</div>';\n"
 "  var acOpt='';for(var i=0;i<AC.length;i++)acOpt+=\"<option value='\"+i+\"'>\"+esc(AC[i])+'</option>';\n"
 "  h+=\"<div style='overflow-x:auto'><table class='atbl'><tr><th>#</th><th>Channel</th><th>Cond</th><th>Hyst(%)</th><th>Action</th><th>Level</th></tr>\";\n"
 "  for(var n=0;n<32;n++){var b=base+6*n,o=6*n,chan=w[o],en=chan>0;\n"
@@ -1799,12 +1816,11 @@ static error_t webRequestCallback(HttpConnection *c, const char_t *uri)
 }
 
 /*----------------------------------------------------------------------------
- * mDNS responder — http://sv300-<MAC하위3바이트>.local/
+ * mDNS responder — http://sv300-<SN 하위3바이트>.local/
  *----------------------------------------------------------------------------*/
 static void webMdnsStart(NetInterface *interface)
 {
 	MdnsResponderSettings s;
-	MacAddr mac;
 	char host[24];
 	error_t e;
 
@@ -1813,8 +1829,8 @@ static void webMdnsStart(NetInterface *interface)
 	e = mdnsResponderInit(&webMdns, &s);
 	if (e) { printf("[WEB] mDNS init failed (%d)\n", (int)e); return; }
 
-	mac = interface->macAddr;
-	snprintf(host, sizeof(host), "sv300-%02x%02x%02x", mac.b[3], mac.b[4], mac.b[5]);
+	/* SN(Serial Number, pcal->sn) 하위 4바이트 기반 호스트명 (3바이트는 타제품과 중복 우려) */
+	snprintf(host, sizeof(host), "sv300-%08x", (unsigned)pcal->sn[1]);
 	mdnsResponderSetHostname(&webMdns, host);
 
 	e = mdnsResponderStart(&webMdns);

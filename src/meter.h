@@ -853,18 +853,24 @@ typedef struct {
 } PT_DEF;	/* 16 bytes: wiring, _r0, vnorm, PT1, PT2, r1 */
 
 typedef struct {
-	uint16_t	inorm;
+	uint16_t	inorm;		/* 정격전류 In: CT1 대비 % (In(A)=CT1*inorm/100) */
 	uint16_t	CT1;
 	// CT Type
-	uint16_t	CT2;	
+	uint16_t	CT2;
 	uint16_t	nTurns;
-	uint16_t	I_start;	
-	uint16_t	ct_dir[3];	
+	uint16_t	I_start;
+	uint16_t	ct_dir[3];
 	uint16_t	rogowskiParam;	// unused
 	int16_t		phaseOfs[3];
 	uint16_t  	zctType, zctScale;
-	uint16_t	r2[2];	
+	uint16_t	r2[2];
 } CT_DEF;
+
+/* inorm(정격전류)은 CT1 대비 %로 저장 → 실제 정격전류 In(A) */
+#define CT_INORM_A(id)	((float)db.ct[id].CT1 * db.ct[id].inorm / 100.0f)
+
+/* freq는 enum으로 저장(0:60Hz, 1:50Hz) → 실제 주파수(Hz) */
+#define FREQ_HZ(f)	((f) == 0 ? 60 : 50)
 
 typedef struct {
 	uint16_t	VA_type;
@@ -1298,7 +1304,7 @@ typedef struct {
 	//MAXMIN	maxmin;	
 	// calibration
 	uint16_t mmChangeF, calEn, calDcOs;
-	float	vref, iref, inref;
+	float	vref, iref, inref, tref;	/* tref: Temp-ref(7463, ℃) — Temp Cali 기준온도 */
 	
 	// alarm
 	uint16_t tmrEn[48];
@@ -1547,8 +1553,9 @@ typedef struct {
 	uint16_t SNTP_sts;
 	uint16_t DEV_sts;
 	uint16_t NET_sts;
-	uint16_t TOT_sts;
-	uint16_t r1[8];		/* hwModel 추가(+1)로 [9]→[8] (블록 크기 유지) */
+	uint16_t TOT_sts;		// 7101
+	uint16_t feeder_cnt;	// 7102 feeder count(PT/WIRING MODE COUNT) — FW가 wiring으로 산출(읽기전용)	<- countFeeders()
+	uint16_t r1[7];			// 7103~7109
 } METER_INFO;
 
 
@@ -2036,10 +2043,10 @@ typedef struct {
 #define MBAD_SET_TS				MB_FIELD_OFF(cmds)			/* UTC Time  = 7438 */
 #define MBAD_SET_CMD			(MBAD_SET_TS + 10u)			/* 명령 시작 = 7448 */
 #define MBAD_SET_END			(MBAD_SET_TS + 127u)		/* 명령 끝   = 7565 */
-#define MBAD_CMD_FETCH_EVENT		(MBAD_SET_CMD + 37)		/* load event ALL,#1~3 = 7485 */
-#define MBAD_CMD_FETCH_ALARM		(MBAD_SET_CMD + 41)		/* load alarm ALL,#1~3 = 7489 */
-#define MBAD_CMD_FETCH_ITIC			(MBAD_SET_CMD + 53)		/* load itic  = 7501 (단일 레지스터) */
-#define MBAD_CMD_FETCH_ITIC2		(MBAD_SET_CMD + 54)		/* load itic2 = 7502 (단일 레지스터) */
+#define MBAD_CMD_FETCH_EVENT		(MBAD_SET_CMD + 38)		/* load event ALL,#1~3 = 7486 (260812: Temp-ref 삽입 +1) */
+#define MBAD_CMD_FETCH_ALARM		(MBAD_SET_CMD + 42)		/* load alarm ALL,#1~3 = 7490 */
+#define MBAD_CMD_FETCH_ITIC			(MBAD_SET_CMD + 54)		/* load itic  = 7502 (단일 레지스터) */
+#define MBAD_CMD_FETCH_ITIC2		(MBAD_SET_CMD + 55)		/* load itic2 = 7503 (단일 레지스터) */
 
 #define METER_MB_SETTING_REGS(m)	((uint16_t *)&(m).pqevt)
 
@@ -2190,6 +2197,7 @@ extern DAQ_BUF	daq;
 
 extern void copySummary(void);
 extern int  buildFeederMap(FEEDER_MAP map[MAX_CH]);	/* returns 배정된 유효 피더 수 */
+extern uint16_t countFeeders(PT_DEF *pt);			/* wiring != NOT_USED 개수 → feeder_cnt */
 extern void copySimpleMap(void);					/* SMP_MAP(psmpMap) 갱신 */
 
 extern int loadSettings(SETTINGS	*pdb);
