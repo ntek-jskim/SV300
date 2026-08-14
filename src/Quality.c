@@ -963,7 +963,11 @@ int updateQualData(int id)
 		writeLogData(id, sysTick1s);
 					
 		// report 주기 변동 여부 확인 
-		if (pqLog->qw.startTs <= sysTick1s && sysTick1s < pqLog->qw.endTs) {
+		if (id != 0) {	/* M0~M2 동일전압: EN50160(전압품질)은 M0만 산출 → M1/M2는 M0 결과 복사(ql1/qw1 write·QualWeek 중복 제거). 전류/전력(avgExp·writeLogData)은 위에서 채널별 유지 */
+			meter[id].rpt[0] = meter[0].rpt[0];
+			meter[id].rpt[1] = meter[0].rpt[1];
+		}
+		else if (pqLog->qw.startTs <= sysTick1s && sysTick1s < pqLog->qw.endTs) {
 			// 10m Log 쓰기					
 			writeQual10mData(id, pqLog->qlfn, pq10m);
 			
@@ -1063,38 +1067,50 @@ void initPQHeader(int id) {
 	}
 	
 	
-	// 전주 QualWeekReport를 읽는다 
-	if (readQualWeekData(pqLog->qwfnLast, &pqLog->qw) == 0) {		
-		updateQualReport(id, &pqLog->qw, 1);
-	}
-	
-	// 금주 QualWeekReport를 읽는다 
-	if (readQualWeekData(pqLog->qwfn, &pqLog->qw) == 0) {
-		printf("[[Load readQualWeekData File : %s]]\n", pqLog->qwfn);		
-		updateQualReport(id, &pqLog->qw, 0);
+	/* EN50160(QualWeek)은 전압 기반 → M0~M2 동일. M0만 파일 로드/생성하고
+	 * M1/M2는 방금 로드된 M0의 rpt를 복사한다(중복 파일 I/O 제거, 부팅 직후부터 리포트 일치).
+	 * initPQHeader는 Meter0_Task에서 m0→m1→m2 직렬 호출이라 meter[0].rpt 로드 완료가 보장됨.
+	 * 런타임 updateQualData도 10분마다 M0 rpt를 M1/M2로 복사(Quality.c:966)해 정합 유지. */
+	if (id == 0) {
+		// 전주 QualWeekReport를 읽는다
+		if (readQualWeekData(pqLog->qwfnLast, &pqLog->qw) == 0) {
+			updateQualReport(id, &pqLog->qw, 1);
+		}
 
-		uLocalTime(&pqLog->qw.startTs, &lt);
-		printf("|| Start: %d-%d-%d\n", lt.tm_year, lt.tm_mon, lt.tm_mday);
-		uLocalTime(&pqLog->qw.endTs, &lt);
-		printf("|| End: %d-%d-%d\n", lt.tm_year, lt.tm_mon, lt.tm_mday);
-		printf("|| count10s: %d\n", pqLog->qw.count10s);
-		printf("|| count10m: %d\n", pqLog->qw.count10m);
+		// 금주 QualWeekReport를 읽는다
+		if (readQualWeekData(pqLog->qwfn, &pqLog->qw) == 0) {
+			printf("[[Load readQualWeekData File : %s]]\n", pqLog->qwfn);
+			updateQualReport(id, &pqLog->qw, 0);
+
+			uLocalTime(&pqLog->qw.startTs, &lt);
+			printf("|| Start: %d-%d-%d\n", lt.tm_year, lt.tm_mon, lt.tm_mday);
+			uLocalTime(&pqLog->qw.endTs, &lt);
+			printf("|| End: %d-%d-%d\n", lt.tm_year, lt.tm_mon, lt.tm_mday);
+			printf("|| count10s: %d\n", pqLog->qw.count10s);
+			printf("|| count10m: %d\n", pqLog->qw.count10m);
+		}
+		// QualWeek File이 없으면 새로 만든다
+		else {
+			memset(&pqLog->qw, 0, sizeof(pqLog->qw));
+			pqLog->qw.startTs = sysTick1s;
+			pqLog->qw.endTs = getQualWeekEndTs(pcntl);
+//			pqLog->qw.year = pcntl->tod.tm_year;
+//			pqLog->qw.woY = getYear_n_WoY(pcntl->tod.tm_yday, pcntl->tod.tm_wday);
+			createQualWeekData(pqLog->qwfn, &pqLog->qw);
+			printf("[[Create readQualWeekData: %s]]\n", pqLog->qwfn);
+			uLocalTime(&pqLog->qw.startTs, &lt);
+			printf("|| Start: %d-%d-%d\n", lt.tm_year, lt.tm_mon, lt.tm_mday);
+			uLocalTime(&pqLog->qw.endTs, &lt);
+			printf("|| End: %d-%d-%d\n", lt.tm_year, lt.tm_mon, lt.tm_mday);
+		}
 	}
-	// QualWeek File이 없으면 새로 만든다
-	else {		
-		memset(&pqLog->qw, 0, sizeof(pqLog->qw)); 
-		pqLog->qw.startTs = sysTick1s;
-		pqLog->qw.endTs = getQualWeekEndTs(pcntl);
-//		pqLog->qw.year = pcntl->tod.tm_year;
-//		pqLog->qw.woY = getYear_n_WoY(pcntl->tod.tm_yday, pcntl->tod.tm_wday);		
-		createQualWeekData(pqLog->qwfn, &pqLog->qw);
-		printf("[[Create readQualWeekData: %s]]\n", pqLog->qwfn);
-		uLocalTime(&pqLog->qw.startTs, &lt);
-		printf("|| Start: %d-%d-%d\n", lt.tm_year, lt.tm_mon, lt.tm_mday);
-		uLocalTime(&pqLog->qw.endTs, &lt);
-		printf("|| End: %d-%d-%d\n", lt.tm_year, lt.tm_mon, lt.tm_mday);
+	else {
+		/* M1/M2: QualWeek 파일 로드/생성 없이 M0 EN50160 리포트 복사 */
+		meter[id].rpt[0] = meter[0].rpt[0];
+		meter[id].rpt[1] = meter[0].rpt[1];
+		printf("[[Copy EN50160 report M0->M%d (voltage shared)]]\n", id);
 	}
-		
+
 	// time stamp 초기화 
 	memset(&pqLog->q10m, 0, sizeof(pqLog->q10m));
 	pqLog->q10m.ts10s = sysTick10s;

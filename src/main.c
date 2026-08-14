@@ -1148,7 +1148,9 @@ error_t modbusServerWriteRegCallback(const char_t *role, uint16_t address,
 	//    address, value, commit);
 
    if (commit) {
-      writeMemCb(address, value);
+      /* 계측 미준비(g_meterReady=0)·잘못된 주소면 -1 → Modbus exception 반환(읽기와 동일) */
+      if (writeMemCb(address, value) < 0)
+         error = ERROR_INVALID_ADDRESS;
    }
 //   //Check register address
 //   if(address == 40000)

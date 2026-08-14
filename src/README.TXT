@@ -37,6 +37,11 @@
   1) inorm(정격전류) CT1 대비 %화(In=CT1×inorm/100·기본50%) + 설정 0→default 정규화(buildSettings: I_start1/inorm50/CT1 100/vnorm·PT 220) + freq enum통일(0:60/1:50, FREQ_HZ 매크로·구버전 Hz저장 자동 마이그레이션) + smb_rtu Temp-ref(7463) 명령 신설·260812 명령 +1 시프트. inorm 사용처(alarm 전류·전력기준/ade9000 TDD분모·PQ OC/meter I_start·파형)를 In(A) 환산. ※CT1≠100 유닛은 업데이트 후 inorm 재설정 필요
   2) Web(web.c): read error 시 계측값 "----" 표시(Dashboard/Channel/Feeder 값만 null화·구조 유지), CT 'I Nominal(%)'·Start I 소수점3자리(표시 raw/1000·저장 ×1000·step0.001), mDNS 호스트명 MAC→SN 4바이트. confWebApp: 설정 백업/복원(Main+Channel 전체 JSON 레지스터블록 Save/Load·블록R/W 고속·Save Settings 7449 영속·admin), Calibration 페이지 전체폭·그룹 정리. 실기 백업/복원 라운드트립 검증 PASS
 
+26/08/14 FW V00.02
+  1) 파형 seam 근본원인 규명·복구 — SPI로 ADE9000 WFB 읽는 행위가 칩 동시변환을 교란(전송방식·SPI클럭 무관, 버스트당 ~1샘플), readWFB에서 6채널 median 검출→선형보간 복구(FFT·고조파 반영)
+  2) Modbus METERING 스냅샷 더블버퍼(flash 로깅 중 torn read=garbage float 방지) + EN50160 리포트 CH2/3 전압공유 복사 + Modbus 쓰기 미준비/무효주소 예외
+
+
 NOSDMEM : SD MEMORY Y/N
 HWV1 : CH3(METER CHIP SELECT)
 HWV2 : SPI FLASH 16MB
@@ -48,6 +53,3 @@ SV300\keil\SV300.uvproj\SV300_3CH          : LPC4330 USE_LPCXPRESSO_4337 CMSIS_B
 // release
 SV300\keil\SV300_app.uvproj\SV300_app      : LPC4330 USE_LPCXPRESSO_4337 CMSIS_BITPOSITIONS GPL_LICENSE_TERMS_ACCEPTED CORE_M4 USE_KSZ8863 GEMS9000 EXT_RTC _FTP_SERVER VFRMS _WDT_EN
 SV300\keil\SV300_app.uvproj\SV300_3CH_app  : LPC4330 USE_LPCXPRESSO_4337 CMSIS_BITPOSITIONS GPL_LICENSE_TERMS_ACCEPTED CORE_M4 USE_KSZ8863 GEMS9000 EXT_RTC _FTP_SERVER VFRMS NOSDMEM HWV1 CH3 _WDT_EN HWV2
- 
-
- 

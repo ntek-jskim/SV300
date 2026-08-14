@@ -15,7 +15,7 @@
 #define	FW_VER	0002
 #define	FW_BUILD_YEAR 26
 #define	FW_BUILD_MON  8
-#define	FW_BUILD_DAY  13
+#define	FW_BUILD_DAY  14
 
 #define	SQRT_2	 1.414213562 
 
@@ -2004,11 +2004,18 @@ void rmDcOffset(WAVE_8K_BUF *pwb) {
 // 8k sample을 16 bit로 변환한다 
 // ADC Range: 67,107,786 -> 27bit
 void copyModbusWaveData(int id) {
-	WAVE_WINDOW *pww = &wvblk[id].ww[wvblk[id].ix];
+	/* wvblk.ix는 Wave_Task가 '지금 채우는 중'인 버퍼를 가리킴(채운 뒤 전진).
+	   그 버퍼(ww[ix])를 읽으면 덮어쓰기와 겹쳐 torn read(파형 seam→허위 고조파).
+	   → 최근 완료된 버퍼 ww[(ix+2)%3](=ix-1)를 읽는다(ww[3] 링). */
+	int rix = wvblk[id].ix + 2;
+	WAVE_WINDOW *pww;
 	WAVE_PHASE_LF *wv, *wi;
 	int i, j, k, prev, ix=0, dx;
 	float vscl[3], iscl[3];
-	
+
+	if (rix >= 3) rix -= 3;
+	pww = &wvblk[id].ww[rix];
+
 	// scale이 작으면 계단파로 보이는 문제 있다
 	for (j=0; j<3; j++) {
 		vscl[j] = (1 + (pcal->vgain[id][j][IS_WM_1LN1CT(db.pt[id].wiring)?(db.pt[id].wiring-WM_1LN1CT_L1):j][(db.pt[id].PT2<150)?1:0]/134217728.)) * meter[id].cntl.wv_vscale * sqrt(2);
@@ -2388,19 +2395,22 @@ void Wave_Task(void *arg)
 				pww = &wvblk[id].ww[bx];				
 
 				// 32k -> 6400sample(400 pg), 8k -> 1600 sample(100 pg)
-				wr = copyToWaveWindow(id, &wQ[id], pww);	
-				
+				wr = copyToWaveWindow(id, &wQ[id], pww);
+
+				// down sampleing
+				downSampling(pww, wQ[id].hs);
+
+				// copy fft data
+				copyFftData(id, pww, &tick10s[id]);
+
+				/* pww를 완전히 처리(캡처+다운샘플+FFT복사)한 뒤에 ix 전진.
+				   ix를 먼저 올리면 copyModbusWaveData가 아직 downSampling(lU/lI) 중인
+				   버퍼(ww[ix-1])를 읽어 torn read(파형 seam) 발생 → 처리 완료 후 전진. */
 				if (++bx >= 3) {
 					bx = 0;
 					bF = 1;
 				}
-				wvblk[id].ix = bx;									
-				
-				// down sampleing
-				downSampling(pww, wQ[id].hs);
-				
-				// copy fft data
-				copyFftData(id, pww, &tick10s[id]);				
+				wvblk[id].ix = bx;
 			}
 		}
 
@@ -4611,6 +4621,11 @@ void PostScan_Task(void *arg)
 				pmmId->re = pmmId->fr;
 				storeMaxMin();
 			}
+
+			/* 계측(METERING) 스냅샷 발행: 이 채널의 계산이 끝난 직후 원자적으로 교체.
+			   Modbus 읽기가 라이브 meter[].meter 대신 완결 스냅샷을 보게 하여
+			   품질 flash write 블로킹 중에도 torn read(garbage) 방지. */
+			publishMeterSnap(id);
 		}
 		Board_LED_Set(LED_STS, ledAlmCount);
 

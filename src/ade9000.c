@@ -558,13 +558,18 @@ void calcAbsAngle(int id)
 		meter[id].meter.Pangle[2] = (meter[id].meter.I[2] == 0) ? 0 : 360 - meter[id].cntl.UIangle[2];		
 	}
 	else if(IS_WM_1LN1CT(db.pt[id].wiring)){
-		meter[id].meter.Uangle[0] = meter[id].meter.Uangle[1] = meter[id].meter.Uangle[2] = 0;
-		
-		meter[id].meter.Iangle[0] = _toAngle(meter[id].meter.Uangle[0] + meter[id].cntl.UIangle[0]);	// V1-I1
-		meter[id].meter.Iangle[1] = meter[id].meter.Iangle[2] = 0;		//V2-I2,V3-I3	
-		
-		meter[id].meter.Pangle[0] = (meter[id].meter.I[0] == 0) ? 0 : 360 - meter[id].cntl.UIangle[0];	
-		meter[id].meter.Pangle[1] = meter[id].meter.Pangle[2] = 0;
+		/* 전압: L1 기준 위상각(3P4W 동일) / 전류: 각 상 전압 대비 위상각(U-I) */
+		meter[id].meter.Uangle[0] = 0;								// V1
+		meter[id].meter.Uangle[1] = meter[id].cntl.Uangle[0];		// V1-V2 (L2-L1)
+		meter[id].meter.Uangle[2] = meter[id].cntl.Uangle[2];		// V1-V3 (L3-L1)
+
+		meter[id].meter.Iangle[0] = _toAngle(meter[id].cntl.UIangle[0]);	// I1-V1
+		meter[id].meter.Iangle[1] = _toAngle(meter[id].cntl.UIangle[1]);	// I2-V2
+		meter[id].meter.Iangle[2] = _toAngle(meter[id].cntl.UIangle[2]);	// I3-V3
+
+		meter[id].meter.Pangle[0] = (meter[id].meter.I[0] == 0) ? 0 : 360 - meter[id].cntl.UIangle[0];
+		meter[id].meter.Pangle[1] = (meter[id].meter.I[1] == 0) ? 0 : 360 - meter[id].cntl.UIangle[1];
+		meter[id].meter.Pangle[2] = (meter[id].meter.I[2] == 0) ? 0 : 360 - meter[id].cntl.UIangle[2];
 	}
 	
 //	for (i=0; i<3; i++) {
@@ -1752,16 +1757,17 @@ void calcRmsAngle(int id) {
 		meter[id].meter.In = meter[id].cntl.In * (db.ct[id].zctScale / 1000.);	//Neutral Phase Current
 		meter[id].meter.Isum = meter[id].cntl.Is;	//Neutral Phase Current	= 
 		if(IS_WM_1LN1CT(db.pt[id].wiring)){
+			/* 1P2W: 각 CT슬롯=독립 단상피더 → 3슬롯 전류 모두 유지(3P처럼), 상 선택은 피더(smpFill1ph)가 slot별 */
 			meter[id].meter.I[0] = meter[id].cntl.I[0];
-			meter[id].meter.I[1] = 0;
-			meter[id].meter.I[2] = 0;
-			meter[id].meter.I[3] = meter[id].meter.I[0];	//average
+			meter[id].meter.I[1] = meter[id].cntl.I[1];
+			meter[id].meter.I[2] = meter[id].cntl.I[2];
+			meter[id].meter.I[3] = average(meter[id].meter.I, 3);
 			meter[id].meter.Ibal[0] = meter[id].meter.Ibal[1] = 0;
 			meter[id].meter.Isum=0;
 			meter[id].meter.fI[0] = meter[id].cntl.fI[0];
-			meter[id].meter.fI[1] = 0;
-			meter[id].meter.fI[2] = 0;
-			meter[id].meter.fI[3] = meter[id].meter.fI[0];	//average
+			meter[id].meter.fI[1] = meter[id].cntl.fI[1];
+			meter[id].meter.fI[2] = meter[id].cntl.fI[2];
+			meter[id].meter.fI[3] = average(meter[id].meter.fI, 3);
 		}
 		else if(db.pt[id].wiring == WM_1LL2CT){
 			meter[id].meter.I[0] = meter[id].cntl.I[0];
@@ -1821,10 +1827,15 @@ void calcRmsAngle(int id) {
 			meter[id].meter.fU[3] = average(meter[id].meter.fU, 3);			
 		}
 		else if(IS_WM_1LN1CT(db.pt[id].wiring)){
-			meter[id].meter.U[0] = meter[id].meter.U[3] = meter[id].cntl.U[0];
-			meter[id].meter.U[1] = meter[id].meter.U[2] = 0;
-			meter[id].meter.fU[0] =meter[id].meter.fU[3] = meter[id].cntl.fU[0];
-			meter[id].meter.fU[1] = meter[id].meter.fU[2] = 0;
+			/* 1P2W: redirect로 각 슬롯 전압채널이 지정 상을 읽음 → meter는 3P처럼 유지 */
+			meter[id].meter.U[0]=meter[id].cntl.U[0];
+			meter[id].meter.U[1]=meter[id].cntl.U[1];
+			meter[id].meter.U[2]=meter[id].cntl.U[2];
+			meter[id].meter.U[3] = average(meter[id].meter.U, 3);
+			meter[id].meter.fU[0]=meter[id].cntl.fU[0];
+			meter[id].meter.fU[1]=meter[id].cntl.fU[1];
+			meter[id].meter.fU[2]=meter[id].cntl.fU[2];
+			meter[id].meter.fU[3] = average(meter[id].meter.fU, 3);
 		}
 		else if(db.pt[id].wiring==WM_1LL2CT){
 			meter[id].meter.U[0] = meter[id].cntl.U[0];
@@ -2022,14 +2033,14 @@ void readWFB_Data(int id)
 	sp = ((((page + 1) & 15) < 8) ? 0x80*8 : 0);
 		
 	t1 = sysTick64;
-	
+
 	//Board_LED_On(1);	// 2.4ms
 	SSP_SSEL_Mode(id, 1);
 	for (i=0; i<8; i++, sp+=0x80) {
-		pwb = getWave32kBuf(&wQ[id]);		
-		dma_read32n(id, 0x801+sp, (uint32_t *)pwb->buf, 128);		
-		//read_reg32n(id, 0x801+(i*0x80), (uint32_t *)pwb, 128);		// polling 방식은 검증 완료		
-		// 32k Sample : 640(50Hz) or 533(60Hz) sample을 채우면 데이터 처리 태스크 깨운다 
+		pwb = getWave32kBuf(&wQ[id]);
+		dma_read32n(id, 0x801+sp, (uint32_t *)pwb->buf, 128);
+		//read_reg32n(id, 0x801+(i*0x80), (uint32_t *)pwb, 128);		// polling 방식은 검증 완료
+		// 32k Sample : 640(50Hz) or 533(60Hz) sample을 채우면 데이터 처리 태스크 깨운다
 
 		//if (bix == 256 && w1280.fr == w1280.re) {
 		// case 1:
@@ -2041,7 +2052,10 @@ void readWFB_Data(int id)
 		// 400 page : 400*16 = 6400 sample/phase @32ksps, 매 200msec 마다 interrupt 호출된다 
 		//if (bix == 400) {
 		if (meter[id].cntl.online) wQ[id].olc++;
-		if (wQ[id].count >= 400) {
+		/* 8k 마이그레이션 정합: 알림 임계값 = copyToWaveWindow가 읽는 페이지수(PG_BUF_CNT/2=100=1600샘플=200ms).
+		   과거 32k 값 400을 그대로 두면 200-링을 2바퀴 덮어쓴 뒤 알림→소비자(100p)와 re/fr 어긋나
+		   생산자가 덮는 중인 절반을 읽어 파형 torn(seam)·고조파 오염 발생. (ts=-200ms와도 일치) */
+		if (wQ[id].count >= PG_BUF_CNT/2) {
 			// Transient task를 깨운다
 			wQ[id].lastolc = wQ[id].olc;
 			wQ[id].count = wQ[id].olc = 0;
@@ -2055,10 +2069,44 @@ void readWFB_Data(int id)
 #endif
 			}
 		}
-	}	
-	SSP_SSEL_Mode(id, 0);	
+	}
+	SSP_SSEL_Mode(id, 0);
 
-//	// 8 page 모두 읽은 후 transient task에 알린다 		
+	/* [수정] 읽기-중-변환 자기교란 단일샘플 복구.
+	   SPI로 WFB를 읽는 동안(전송방식·클럭 무관) 칩이 능동 절반에 쓰는 샘플이 버스트당 ~1개 튄다.
+	   정상 전력파형은 8ksps에서 인접샘플이 매끄러워 median-of-3 편차가 ≪10K인데, 자기유발
+	   스파이크만 >80K로 도드라진다(임계<10K 대비 8배 여유 → 오검출 없음). → 방금 읽은 8페이지
+	   (128샘플)의 6채널(I0,U0,I1,U1,I2,U2) 각각에서 임계 초과 샘플을 '양쪽 정상샘플 선형보간'으로
+	   대체(1~2샘플 클러스터는 정상샘플 사이를 잇는다). 소스 wb 링에서 고쳐 파형·FFT·Modbus 반영. */
+	{
+		int base = wQ[id].fr - 8, c, k, kl, kr, ring;
+		int seq[128];
+		char mk[128];
+		if (base < 0) base += PG_BUF_CNT;
+		for (c = 0; c < 6; c++) {
+			for (k = 0; k < 128; k++) {
+				ring = base + (k >> 4); if (ring >= PG_BUF_CNT) ring -= PG_BUF_CNT;
+				seq[k] = wQ[id].wb[ring].buf[6 * (k & 15) + c];
+			}
+			mk[0] = mk[127] = 0;
+			for (k = 1; k < 127; k++) {
+				int a = seq[k-1], b = seq[k], d = seq[k+1];
+				int lo = a<d?a:d, hi = a<d?d:a, med = b<lo?lo:(b>hi?hi:b), dev = b-med;
+				if (dev < 0) dev = -dev;
+				mk[k] = (dev > 80000) ? 1 : 0;
+			}
+			for (k = 1; k < 127; k++) {
+				if (!mk[k]) continue;
+				for (kl = k-1; kl > 0   && mk[kl]; kl--) ;
+				for (kr = k+1; kr < 127 && mk[kr]; kr++) ;
+				ring = base + (k >> 4); if (ring >= PG_BUF_CNT) ring -= PG_BUF_CNT;
+				wQ[id].wb[ring].buf[6 * (k & 15) + c] =
+					seq[kl] + (int)((int64_t)(seq[kr] - seq[kl]) * (k - kl) / (kr - kl));
+			}
+		}
+	}
+
+//	// 8 page 모두 읽은 후 transient task에 알린다
 //	if (tid_app[id] != 0) {
 //		os_evt_set(0x1, tid_app[id]);
 //	}
@@ -2707,9 +2755,13 @@ void meter_scan_2(uint8_t id)
 //	ts_irq[id] = sysTick64;
  
 	tick64 = sysTick64;
-	read_reg32(id, AD9X_STATUS0, &stat0);	
+	read_reg32(id, AD9X_STATUS0, &stat0);
 	read_reg32(id, AD9X_STATUS1, &stat1);
 	stat0_snap = stat0;
+
+	/* STATUS0 즉시 ack — 처리 후 클리어 시 스캔 중 새로 뜬 WFB page-full(bit17)까지
+	   지워져 그 절반을 건너뛰어 파형 seam 발생. 핸들러는 로컬 stat0 스냅샷으로 처리하므로 안전. */
+	write_reg32(id, AD9X_STATUS0, &stat0_snap);
 
 	// Energy READY, period = 1s
 	if (stat0 & (1<<0)) {
@@ -2757,8 +2809,7 @@ void meter_scan_2(uint8_t id)
 	if (stat0 & (1<<25)) {
 		readTemp(id);
 	}
-	// clear status0 (읽은 시점 래치 전부 — PQM 핸들러 생략 시에도 ZX/IRQ 유지)
-	write_reg32(id, AD9X_STATUS0, &stat0_snap);		
+	// STATUS0는 위에서 읽은 직후 이미 ack(조기 클리어)함 — 스캔 중 뜬 새 이벤트 보존
 	
 	//
 	//--------------------------------------------------------------------------------
@@ -2854,12 +2905,17 @@ void meter_scan(uint8_t id)
 //	if (dtemp != stat0) {
 //		printf("@@@ Invalid Read Data(32), %x, %x\n", stat0, dtemp);
 //	}
-	read_reg32(id, AD9X_STATUS1, &stat1);					
+	read_reg32(id, AD9X_STATUS1, &stat1);
 //	read_reg32(id, 0x423, &dtemp);
 //	if (dtemp != stat1) {
 //		printf("@@@ Invalid Read Data(32), %x, %x\n", stat1, dtemp);
 //	}
-	
+
+	/* STATUS0 즉시 ack(래치 클리어). 처리 뒤에 클리어하면 긴 스캔(풀 PQM) 도중 새로 뜬
+	   WFB page-full(bit17)까지 함께 지워져 그 절반을 건너뛰어 파형 seam(불연속)이 생긴다.
+	   이후 핸들러는 로컬 stat0 스냅샷으로 처리하므로 조기 클리어가 안전. */
+	write_reg32(id, AD9X_STATUS0, &stat0);
+
 	// Energy READY, period = 1s
 	if (stat0 & (1<<0)) {
 		readEnergy(id);
@@ -2898,9 +2954,8 @@ void meter_scan(uint8_t id)
 	if (stat0 & (1<<25)) {
 		readTemp(id);
 	}
-	// clear status0
-	write_reg32(id, AD9X_STATUS0, &stat0);		
-	
+	// STATUS0는 위에서 읽은 직후 이미 ack(조기 클리어)함 — 스캔 중 뜬 새 이벤트 보존
+
 	//
 	//--------------------------------------------------------------------------------
 	// Wiring Mode별로 다르게 처리해야 한다, 현재 3P4W 만 처리 함.

@@ -307,6 +307,38 @@ void copySimpleMap(void)
 }
 
 
+/* ── 계측(METERING) 스냅샷 더블버퍼 ────────────────────────────────────────
+ *  Modbus 읽기(readMemCb/RTU 블록/web.c rdReg)가 라이브 meter[id].meter를 직독하면,
+ *  미터 태스크의 필드 갱신 및 품질 flash write(updateQualWeekData) 블로킹과 겹쳐
+ *  torn read(1e+27/1e+36 같은 garbage float)가 발생한다. PostScan_Task가 채널 계산 직후
+ *  뒷버퍼에 struct 복사 후 포인터를 원자 교체 → 읽기측은 항상 완결 스냅샷만 본다.
+ *  (피더 psmpMap과 동일 패턴. 발행 주체=PostScan_Task 단일 writer.) */
+static METERING meterSnapBuf[METER_CH_COUNT][2] __attribute__ ((section ("EXT_RAM"), zero_init));
+static METERING * volatile pMeterSnap[METER_CH_COUNT] = {
+	&meterSnapBuf[0][0],
+#if METER_CH_COUNT > 1
+	&meterSnapBuf[1][0],
+#endif
+#if METER_CH_COUNT > 2
+	&meterSnapBuf[2][0],
+#endif
+};
+
+/* PostScan_Task가 채널별 계산(calcRmsAngle/calcPower/calcTHD) 직후 호출 → 스냅샷 발행 */
+void publishMeterSnap(int id)
+{
+	METERING *dst;
+
+	if (id < 0 || id >= METER_CH_COUNT)
+		return;
+
+	dst = (pMeterSnap[id] == &meterSnapBuf[id][0]) ? &meterSnapBuf[id][1]
+	                                               : &meterSnapBuf[id][0];
+	*dst = meter[id].meter;		/* 뒷버퍼로 struct 복사 */
+	pMeterSnap[id] = dst;		/* 원자적 발행(volatile 포인터 단일 스토어) */
+}
+
+
 // 미사용
 // smb에서 호출
 // 2017-8-16, modbusSlvChkFrame호출시 addr를 0으로 설정
@@ -681,28 +713,32 @@ int	readMem2(uint8_t *ptx, uint16_t start, uint16_t count)
 {
 	uint16_t    i, inx = 0, c;
 	uint16_t    *psmb = getMeterRegBaseById(0);
-	
-//  capture	
+	uint16_t    *snap = (uint16_t *)pMeterSnap[0];	/* METERING 스냅샷(블록 일관성 위해 1회 캡처) */
+
+//  capture
 //	if (start == SMB_WAVE) {
 //		buildWV16();
 //	}
 
 	c = count << 1;
 	// length (2 bytes)
-	ptx[inx++] = c << 8; 
+	ptx[inx++] = c << 8;
 	ptx[inx++] = c;
 	for (i=0; i<count; i++)  {
-		ptx[inx++] = psmb[start+i] >> 8;
-		ptx[inx++] = psmb[start+i];
+		uint16_t off = start + i;
+		uint16_t w = (off < MBAD_ENERGY_START) ? snap[off] : psmb[off];
+		ptx[inx++] = w >> 8;
+		ptx[inx++] = w;
 	}
-	
+
 	return inx;
 }
 
 int	readMem(uint8_t *ptx, uint16_t start, uint16_t count)
 {
-	uint16_t    i, inx = 0;	
+	uint16_t    i, inx = 0;
 	uint16_t    *psmb = getMeterRegBaseById(0);
+	uint16_t    *snap = (uint16_t *)pMeterSnap[0];	/* METERING 스냅샷(블록 일관성 위해 1회 캡처) */
 
 //	if (start == SMB_WAVE) {
 //		buildWV16();
@@ -714,10 +750,12 @@ int	readMem(uint8_t *ptx, uint16_t start, uint16_t count)
 
 	ptx[inx++] = count << 1;  // bc = count * 2
 	for (i=0; i<count; i++)  {
-		ptx[inx++] = psmb[start+i] >> 8;
-		ptx[inx++] = psmb[start+i];
+		uint16_t off = start + i;
+		uint16_t w = (off < MBAD_ENERGY_START) ? snap[off] : psmb[off];
+		ptx[inx++] = w >> 8;
+		ptx[inx++] = w;
 	}
-    	
+
 	return inx;
 }
 
@@ -725,35 +763,41 @@ int	readMem4(uint8_t *ptx, uint16_t start, uint16_t count)
 {
 	uint16_t    i, inx = 0, c;
 	uint16_t    *psmb = getMeterRegBaseById(1);
-	
-//  capture	
+	uint16_t    *snap = (uint16_t *)pMeterSnap[1];	/* METERING 스냅샷(블록 일관성 위해 1회 캡처) */
+
+//  capture
 //	if (start == SMB_WAVE) {
 //		buildWV16();
 //	}
 
 	c = count << 1;
 	// length (2 bytes)
-	ptx[inx++] = c << 8; 
+	ptx[inx++] = c << 8;
 	ptx[inx++] = c;
 	for (i=0; i<count; i++)  {
-		ptx[inx++] = psmb[start+i] >> 8;
-		ptx[inx++] = psmb[start+i];
+		uint16_t off = start + i;
+		uint16_t w = (off < MBAD_ENERGY_START) ? snap[off] : psmb[off];
+		ptx[inx++] = w >> 8;
+		ptx[inx++] = w;
 	}
-	
+
 	return inx;
 }
 
 int	readMem3(uint8_t *ptx, uint16_t start, uint16_t count)
 {
-	uint16_t    i, inx = 0;	
+	uint16_t    i, inx = 0;
 	uint16_t    *psmb = getMeterRegBaseById(1);
+	uint16_t    *snap = (uint16_t *)pMeterSnap[1];	/* METERING 스냅샷(블록 일관성 위해 1회 캡처) */
 
 	ptx[inx++] = count << 1;  // bc = count * 2
 	for (i=0; i<count; i++)  {
-		ptx[inx++] = psmb[start+i] >> 8;
-		ptx[inx++] = psmb[start+i];
+		uint16_t off = start + i;
+		uint16_t w = (off < MBAD_ENERGY_START) ? snap[off] : psmb[off];
+		ptx[inx++] = w >> 8;
+		ptx[inx++] = w;
 	}
-    	
+
 	return inx;
 }
 
@@ -762,13 +806,16 @@ int	readMem4_m3(uint8_t *ptx, uint16_t start, uint16_t count)
 {
 	uint16_t    i, inx = 0, c;
 	uint16_t    *psmb = getMeterRegBaseById(2);
+	uint16_t    *snap = (uint16_t *)pMeterSnap[2];	/* METERING 스냅샷(블록 일관성 위해 1회 캡처) */
 
 	c = count << 1;
 	ptx[inx++] = c << 8;
 	ptx[inx++] = c;
 	for (i=0; i<count; i++)  {
-		ptx[inx++] = psmb[start+i] >> 8;
-		ptx[inx++] = psmb[start+i];
+		uint16_t off = start + i;
+		uint16_t w = (off < MBAD_ENERGY_START) ? snap[off] : psmb[off];
+		ptx[inx++] = w >> 8;
+		ptx[inx++] = w;
 	}
 
 	return inx;
@@ -778,11 +825,14 @@ int	readMem3_m3(uint8_t *ptx, uint16_t start, uint16_t count)
 {
 	uint16_t    i, inx = 0;
 	uint16_t    *psmb = getMeterRegBaseById(2);
+	uint16_t    *snap = (uint16_t *)pMeterSnap[2];	/* METERING 스냅샷(블록 일관성 위해 1회 캡처) */
 
 	ptx[inx++] = count << 1;
 	for (i=0; i<count; i++)  {
-		ptx[inx++] = psmb[start+i] >> 8;
-		ptx[inx++] = psmb[start+i];
+		uint16_t off = start + i;
+		uint16_t w = (off < MBAD_ENERGY_START) ? snap[off] : psmb[off];
+		ptx[inx++] = w >> 8;
+		ptx[inx++] = w;
 	}
 
 	return inx;
@@ -1083,6 +1133,10 @@ int   readMemCb(uint16_t address, uint16_t *value)
 
 	pInfo->mBusRxCnt++;		/* Modbus RX 카운트 — TCP 읽기 경로(RTU는 modbusSlvProcFrame에서 별도 증가) */
 
+	/* 계측 초기화(Buffer Ready M0~M(ACTIVE-1)) 전엔 무응답 — CycloneTCP Modbus경로도 RTU(modbusSlvProcFrame:323)와 동일 게이트 */
+	if (!g_meterReady)
+		return -1;
+
 	if (decodeMeterAddress(address, &id, &offset) == 0) {
 		// Wave 데이터를 load 한다 (CH별 offset == MBAD_WV_REG)
 		if (offset == MBAD_WV_REG)
@@ -1093,7 +1147,11 @@ int   readMemCb(uint16_t address, uint16_t *value)
 		if (psmb == NULL) {
 			return -1;
 		}
-		*value = psmb[offset];
+		/* METERING 구간(offset < MBAD_ENERGY_START)은 스냅샷에서 읽어 torn read 방지 */
+		if (offset < MBAD_ENERGY_START)
+			*value = ((uint16_t *)pMeterSnap[id])[offset];
+		else
+			*value = psmb[offset];
 		return 0;
 	}
 	// else if(address >= 10000 && address < 30000) {
@@ -1132,6 +1190,10 @@ int writeMemCb(uint16_t address, uint16_t value) {
    	uint16_t *uptr = (uint16_t *)&_utc;
    	int id;
    	uint16_t offset;
+
+	/* 계측 초기화(Buffer Ready) 전엔 쓰기 차단 — RTU(modbusSlvProcFrame)와 동일 게이트 */
+	if (!g_meterReady)
+		return -1;
 
 	if (decodeMeterAddress(address, &id, &offset) != 0)
 		return -1;

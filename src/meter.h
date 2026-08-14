@@ -2199,6 +2199,7 @@ extern void copySummary(void);
 extern int  buildFeederMap(FEEDER_MAP map[MAX_CH]);	/* returns 배정된 유효 피더 수 */
 extern uint16_t countFeeders(PT_DEF *pt);			/* wiring != NOT_USED 개수 → feeder_cnt */
 extern void copySimpleMap(void);					/* SMP_MAP(psmpMap) 갱신 */
+extern void publishMeterSnap(int id);				/* METERING 스냅샷 발행(Modbus torn read 방지) */
 
 extern int loadSettings(SETTINGS	*pdb);
 extern int saveSettings(SETTINGS	*pdb);

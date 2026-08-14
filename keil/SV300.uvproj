@@ -4427,7 +4427,7 @@
             <uSurpInc>0</uSurpInc>
             <VariousControls>
               <MiscControls></MiscControls>
-              <Define>LPC4330 USE_LPCXPRESSO_4337 CMSIS_BITPOSITIONS GPL_LICENSE_TERMS_ACCEPTED CORE_M4 USE_KSZ8863 GEMS9000 EXT_RTC _FTP_SERVER VFRMS NOSDMEM HWV1 CH3 HWV2</Define>
+              <Define>LPC4330 USE_LPCXPRESSO_4337 CMSIS_BITPOSITIONS GPL_LICENSE_TERMS_ACCEPTED CORE_M4 USE_KSZ8863 GEMS9000 EXT_RTC _FTP_SERVER VFRMS NOSDMEM HWV1 CH3 HWV2 DTEST</Define>
               <Undefine></Undefine>
               <IncludePath>..\src;..\third_party\cmsis\include;..\third_party\nxp\devices\lpc43xx;..\third_party\nxp\boards\lpcxpresso_4337;..\third_party\freertos\include;..\third_party\freertos\portable\rvds\arm_cm4f;..\common;..\cyclone_driver\cyclone_stp;..\cyclone_driver\cyclone_tcp;..\cyclone_driver\cyclone_crypto;..\lpc_chip\chip_18xx_43xx\config_43xx;..\lpc_chip\chip_18xx_43xx;..\lpc_chip\chip_common;..\lpc_board\boards_43xx\ea_oem_4357;..\lpc_board\board_common;..\wiznet</IncludePath>
             </VariousControls>
