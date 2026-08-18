@@ -15,7 +15,7 @@
 #define	FW_VER	0002
 #define	FW_BUILD_YEAR 26
 #define	FW_BUILD_MON  8
-#define	FW_BUILD_DAY  14
+#define	FW_BUILD_DAY  18
 
 #define	SQRT_2	 1.414213562 
 
@@ -2003,6 +2003,19 @@ void rmDcOffset(WAVE_8K_BUF *pwb) {
 
 // 8k sample을 16 bit로 변환한다 
 // ADC Range: 67,107,786 -> 27bit
+/* [파형 표시수정] GEMS7100 동일 방식: 160 표시점을 [ix..nWin-1] 전체 창(≈20사이클)에 균등 분산.
+   기존 dx+=2(320샘플=2.4사이클 촘촘)는 단일샘플 글리치를 확대 노출했음. 넓게 펼치면 희석돼 안 보임
+   (동시에 dx 상한 클램프로 OOB도 제거). */
+static int waveDispIndex(int ix, int i, int nPts, int nWin)
+{
+	if (nPts <= 1) return (ix < nWin) ? ix : (nWin - 1);
+	if (ix >= nWin - 1) return nWin - 1;
+	return ix + (i * (nWin - 1 - ix)) / (nPts - 1);
+}
+/* [표시 줌] 화면에 펼칠 소스 샘플수(1사이클≈80샘플). 전체 1600(20사이클)은 너무 촘촘해 확인 곤란,
+   ÷2(320=2.4사이클)는 단일글리치 확대. 640≈8사이클이 균형. 값 조정으로 줌 튜닝. */
+#define WVDISP_SPAN 320
+
 void copyModbusWaveData(int id) {
 	/* wvblk.ix는 Wave_Task가 '지금 채우는 중'인 버퍼를 가리킴(채운 뒤 전진).
 	   그 버퍼(ww[ix])를 읽으면 덮어쓰기와 겹쳐 torn read(파형 seam→허위 고조파).
@@ -2010,7 +2023,7 @@ void copyModbusWaveData(int id) {
 	int rix = wvblk[id].ix + 2;
 	WAVE_WINDOW *pww;
 	WAVE_PHASE_LF *wv, *wi;
-	int i, j, k, prev, ix=0, dx;
+	int i, j, k, prev, ix=0, dx, nwin;
 	float vscl[3], iscl[3];
 
 	if (rix >= 3) rix -= 3;
@@ -2037,26 +2050,31 @@ void copyModbusWaveData(int id) {
 			prev = wv->w[0][i];
 		}
 	}
+	/* 표시 스팬 = ix부터 WVDISP_SPAN(≈8사이클)만 균등분산(1600 전체는 너무 촘촘). */
+	nwin = ix + WVDISP_SPAN;
+	if (nwin > L_LFWVWIN) nwin = L_LFWVWIN;
 	// Modbus Wave영역으로 데이터 복사
-	// 16bit로 Down Scale 위해 scale factor 곱한다	
-	if (db.pt[id].wiring == WM_3LL3CT || db.pt[id].wiring == WM_3LL2CT) {		
-		for (i=0, dx=ix; i<160; i++, dx+=2) meter[id].wv.U[0][i] =  wv->w[0][dx]*vscl[0];
-		for (i=0, dx=ix; i<160; i++, dx+=2) meter[id].wv.U[1][i] = -wv->w[2][dx]*vscl[2];
-		for (i=0, dx=ix; i<160; i++, dx+=2) meter[id].wv.U[2][i] =  wv->w[1][dx]*vscl[1];
+	// 16bit로 Down Scale 위해 scale factor 곱한다
+	if (db.pt[id].wiring == WM_3LL3CT || db.pt[id].wiring == WM_3LL2CT) {
+		for (i=0; i<160; i++) { dx = waveDispIndex(ix, i, 160, nwin); meter[id].wv.U[0][i] =  wv->w[0][dx]*vscl[0]; }
+		for (i=0; i<160; i++) { dx = waveDispIndex(ix, i, 160, nwin); meter[id].wv.U[1][i] = -wv->w[2][dx]*vscl[2]; }
+		for (i=0; i<160; i++) { dx = waveDispIndex(ix, i, 160, nwin); meter[id].wv.U[2][i] =  wv->w[1][dx]*vscl[1]; }
 	}
 	else {
-		for (i=0, dx=ix; i<160; i++, dx+=2) {		
+		for (i=0; i<160; i++) {
+			dx = waveDispIndex(ix, i, 160, nwin);
 			meter[id].wv.U[0][i] = wv->w[0][dx]*vscl[0];
 			meter[id].wv.U[1][i] = wv->w[1][dx]*vscl[1];
 			meter[id].wv.U[2][i] = wv->w[2][dx]*vscl[2];
-		}	
+		}
 	}
-	
-	for (i=0, dx=ix; i<160; i++, dx+=2) {		
+
+	for (i=0; i<160; i++) {
+		dx = waveDispIndex(ix, i, 160, nwin);
 		meter[id].wv.I[0][i] = wi->w[0][dx]*iscl[0];
 		meter[id].wv.I[1][i] = wi->w[1][dx]*iscl[1];
 		meter[id].wv.I[2][i] = wi->w[2][dx]*iscl[2];
-	}		
+	}
 	
 	// 3P4W 이면 선간 전압파형 계산한다 
 	if (db.pt[id].wiring == WM_3LN3CT) {
@@ -2219,7 +2237,9 @@ int copyToWaveWindow(int id, WAVE_PGBUF *pwQ, WAVE_WINDOW *pww)
 	
 	wr=pwQ->re;
 	for (dx=0, i=0; i<(PG_BUF_CNT/2); i++) {
-		int32_t *pwv = pwQ->wb[wr++].buf;
+		int32_t *pwv;
+		if (wr >= PG_BUF_CNT) wr = 0;	/* [안전] 링 랩 — wb[200..] OOB 방지 */
+		pwv = pwQ->wb[wr++].buf;
 		for (sx=0, j=0; j<16; j++) {					
 			pww->hI.w[0][dx] = pwv[sx++];
 			pww->hU.w[0][dx] = pwv[sx++];
@@ -2231,7 +2251,8 @@ int copyToWaveWindow(int id, WAVE_PGBUF *pwQ, WAVE_WINDOW *pww)
 		}
 	}			
 	pww->ts = pwQ->ts;
-	pwQ->re = (wr >= PG_BUF_CNT) ? 0 : wr;
+	/* [파형 근본수정] re는 생산자(readWFB 알림)가 완성된 절반 시작(fr-100)으로 지정하므로
+	   소비자는 갱신하지 않는다(과거 free-running re += 100은 알림 누락 시 re/fr 어긋나 torn 유발). */
 	pwQ->halfFull = 0;
 	
 	for (i=0; i<3; i++) {
@@ -2360,6 +2381,42 @@ int copyFftData(int id, WAVE_WINDOW *pww,	uint32_t *ptick_10s)
 }
 
 // Meter_Scan Task로 부터 매 200ms 마다 호출된다
+#ifdef WV_WINDESPIKE
+/* [파형 A수정·폐기보류] 조립된 연속 윈도우(hU/hI 1600샘플)에 median 복구 1패스.
+   ※실측 결과 80K 임계에서도 윈도우당 20~69샘플 과다검출 → 실신호 왜곡으로 파형이 오히려 악화.
+   ÷2 확대의 거칠음은 고립 글리치가 아니라 광범위(고조파/노이즈 or 커플링)였음. A안(윈도우 despike)
+   폐기, WV_WINDESPIKE 미정의로 OFF. 코드는 참고용 보존. 복구식: 단일=2차포물선, 클러스터=선형. */
+static int despikeWindow(WAVE_WINDOW *pww)
+{
+	static char mk[L_LFWVWIN];
+	int32_t *arr[6];
+	int c, k, kl, kr, cnt = 0;
+	arr[0]=pww->hU.w[0]; arr[1]=pww->hU.w[1]; arr[2]=pww->hU.w[2];
+	arr[3]=pww->hI.w[0]; arr[4]=pww->hI.w[1]; arr[5]=pww->hI.w[2];
+	for (c = 0; c < 6; c++) {
+		int32_t *seq = arr[c];
+		mk[0] = mk[L_LFWVWIN-1] = 0;
+		for (k = 1; k < L_LFWVWIN-1; k++) {
+			int a = seq[k-1], b = seq[k], d = seq[k+1];
+			int lo = a<d?a:d, hi = a<d?d:a, med = b<lo?lo:(b>hi?hi:b), dev = b-med;
+			if (dev < 0) dev = -dev;
+			mk[k] = (dev > 80000) ? 1 : 0;
+		}
+		for (k = 1; k < L_LFWVWIN-1; k++) {
+			if (!mk[k]) continue;
+			for (kl = k-1; kl > 0          && mk[kl]; kl--) ;
+			for (kr = k+1; kr < L_LFWVWIN-1 && mk[kr]; kr++) ;
+			if (kr - kl == 2 && kl >= 1 && kr <= L_LFWVWIN-2 && !mk[kl-1] && !mk[kr+1])
+				seq[k] = (int)(((int64_t)4 * (seq[kl] + seq[kr]) - (seq[kl-1] + seq[kr+1])) / 6);
+			else
+				seq[k] = seq[kl] + (int)((int64_t)(seq[kr] - seq[kl]) * (k - kl) / (kr - kl));
+			cnt++;
+		}
+	}
+	return cnt;
+}
+#endif /* WV_WINDESPIKE */
+
 void Wave_Task(void *arg)
 {
 	int id, i, j, dx, sx, initF=0, bx, bF=0, wr, re, mask,cnt;
@@ -2396,6 +2453,15 @@ void Wave_Task(void *arg)
 
 				// 32k -> 6400sample(400 pg), 8k -> 1600 sample(100 pg)
 				wr = copyToWaveWindow(id, &wQ[id], pww);
+
+#ifdef WV_WINDESPIKE
+				// [파형 A수정·폐기보류] 윈도우 despike — 과다검출로 악화, OFF. WV_WINDESPIKE로만 켜짐.
+				{	int nfix = despikeWindow(pww);
+					static uint32_t wvdCnt = 0;
+					if (nfix > 0 || (wvdCnt++ % 30) == 0)
+						printf("[WVDSP] id=%d fix=%d\n", id, nfix);
+				}
+#endif
 
 				// down sampleing
 				downSampling(pww, wQ[id].hs);

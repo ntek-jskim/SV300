@@ -2,7 +2,20 @@
 
 #define	_METER_H
 
-//#include <LPC43xx.h>  
+/* [파형 단계검증] 사용자 5단계 계획 — 어느 태스크가 M0 파형을 깨는지 바닥부터 확정.
+   WV_STAGED 정의 시: core(M0/Wave/FFT/web/network)만 기동 + despike off + g_meterReady 강제.
+   아래 WV_EN_*를 하나씩 주석해제하며(재빌드) 검증. M1/M2도 단계적(4·5단계).
+   정식 빌드는 WV_STAGED만 지우면 전체 복원(태스크 게이트는 !WV_STAGED시 전부 ON). */
+#define	WV_STAGED
+#define	WV_EN_RMSLOG	/* RMSLog+PostScan (EN50160 로깅) */
+//#define	WV_EN_ENERGY
+//#define	WV_EN_TREND
+//#define	WV_EN_IOM
+//#define	WV_EN_M1
+//#define	WV_EN_M2
+//#define	WV_WINDESPIKE	/* A안: 조립윈도우 median despike - 80K서도 과다검출(fix20~69)로 악화, 폐기/보류 */
+
+//#include <LPC43xx.h>
 #include "os_port.h"
 #include "board.h"
 #include "time.h"
@@ -104,6 +117,14 @@
  *  둘 다 없음 → 2채널(M0,M1) */
 #ifdef CH1
 #define ACTIVE_METER_CH_COUNT 1
+#elif defined(WV_STAGED)
+  #if defined(WV_EN_M2)
+    #define ACTIVE_METER_CH_COUNT 3
+  #elif defined(WV_EN_M1)
+    #define ACTIVE_METER_CH_COUNT 2
+  #else
+    #define ACTIVE_METER_CH_COUNT 1	/* 2·3단계: M0 단독 */
+  #endif
 #else
 #define ACTIVE_METER_CH_COUNT METER_CH_COUNT
 #endif

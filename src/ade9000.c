@@ -2035,10 +2035,16 @@ void readWFB_Data(int id)
 	t1 = sysTick64;
 
 	//Board_LED_On(1);	// 2.4ms
+	/* [파형 A수정] 8페이지 readWFB를 통째로 잠가 M1↔M2 인터리브 방지(순차 버스트).
+	   M0=bus0(락 무시), M1/M2=bus1(순차화). 상대 미터는 여기서 대기 → 각자 깨끗한 단일 버스트. */
+	ssp1WfbLock(id == 0 ? 0 : 1);
 	SSP_SSEL_Mode(id, 1);
 	for (i=0; i<8; i++, sp+=0x80) {
 		pwb = getWave32kBuf(&wQ[id]);
-		dma_read32n(id, 0x801+sp, (uint32_t *)pwb->buf, 128);
+		/* 페이지당 실사용 96워드(16샘플×6ch)만 읽는다. 슬롯은 128워드지만 0x801부터 128워드를 읽으면
+		   마지막 페이지가 0xC00(=쓰는 중 능동 절반의 첫 워드)까지 침범해, SPI 읽기가 칩의 동시 쓰기와
+		   충돌→그 샘플이 깨져 다음 사이클에 파형 글리치(버스트당 1개)로 나타난다. 96워드로 제한해 침범 제거. */
+		dma_read32n(id, 0x801+sp, (uint32_t *)pwb->buf, 96);
 		//read_reg32n(id, 0x801+(i*0x80), (uint32_t *)pwb, 128);		// polling 방식은 검증 완료
 		// 32k Sample : 640(50Hz) or 533(60Hz) sample을 채우면 데이터 처리 태스크 깨운다
 
@@ -2061,6 +2067,11 @@ void readWFB_Data(int id)
 			wQ[id].count = wQ[id].olc = 0;
 			wQ[id].ts = sysTick64-200;	// 시작시간 계산 : 완료시간-200ms
 			wQ[id].halfFull = 1;		// wave 태스크 처리 플래그(누락되어 파형 미갱신되던 버그)
+			/* [파형 근본수정] 소비자 free-running re 대신 생산자가 '완성된 절반'의 시작(fr-100)을 지정.
+			   getWave32kBuf가 fr 선진행·dma 완료 후이므로 이 시점 [fr-100..fr-1] 100페이지는 완성됨.
+			   RTX 알림 플래그 coalescing(web 지터로 알림 하나 누락)에도 re/fr 어긋남 없이 항상 완성
+			   절반만 읽어 torn 방지 — 격리(지터無)=clean·web(지터)=torn 원인 제거. copyToWaveWindow는 re 미갱신. */
+			wQ[id].re = (wQ[id].fr + PG_BUF_CNT/2) % PG_BUF_CNT;	/* = (fr-100) mod 200 */
 			if (tid_wave[0] != 0) {
 #ifdef __FREERTOS
             	if (tid_wave[0] != 0) xTaskNotify(tid_wave[0], 0x1, eSetBits);
@@ -2071,15 +2082,16 @@ void readWFB_Data(int id)
 		}
 	}
 	SSP_SSEL_Mode(id, 0);
+	ssp1WfbUnlock(id == 0 ? 0 : 1);	/* [파형 A수정] 순차 버스트 락 해제 */
 
-	/* [수정] 읽기-중-변환 자기교란 단일샘플 복구.
-	   SPI로 WFB를 읽는 동안(전송방식·클럭 무관) 칩이 능동 절반에 쓰는 샘플이 버스트당 ~1개 튄다.
-	   정상 전력파형은 8ksps에서 인접샘플이 매끄러워 median-of-3 편차가 ≪10K인데, 자기유발
-	   스파이크만 >80K로 도드라진다(임계<10K 대비 8배 여유 → 오검출 없음). → 방금 읽은 8페이지
-	   (128샘플)의 6채널(I0,U0,I1,U1,I2,U2) 각각에서 임계 초과 샘플을 '양쪽 정상샘플 선형보간'으로
-	   대체(1~2샘플 클러스터는 정상샘플 사이를 잇는다). 소스 wb 링에서 고쳐 파형·FFT·Modbus 반영. */
+#ifndef WV_STAGED	/* [단계검증] despike 우회 — 생 파형으로 각 단계 영향 관찰 */
+	/* [2층 마감] ①위 96워드 읽기 = 근본수정(0xC00 spill 원천 제거). ②아래 despike = 잔여 정리:
+	   readWFB 외 SPI·M1/M2 SSP1 커플링으로 남는 스파이크를 소스 wb 링에서 median 검출→복구(파형·FFT·
+	   고조파 함께 반영). 복구식이 핵심 — 단일샘플은 2차 포물선 (4(x-1+x+1)-(x-2+x+2))/6 로 라인·봉우리
+	   모두 정확 복원(선형보간은 봉우리 곡선을 직선으로 깎아 notch 유발). 이 식은 오검출된 봉우리 샘플도
+	   원래값 복원하므로 전압 임계 50K 안전(전류는 실계통 고조파 곡률 보존 위해 80K). 클러스터/경계는 선형. */
 	{
-		int base = wQ[id].fr - 8, c, k, kl, kr, ring;
+		int base = wQ[id].fr - 8, c, k, kl, kr, ring, thr;
 		int seq[128];
 		char mk[128];
 		if (base < 0) base += PG_BUF_CNT;
@@ -2088,23 +2100,29 @@ void readWFB_Data(int id)
 				ring = base + (k >> 4); if (ring >= PG_BUF_CNT) ring -= PG_BUF_CNT;
 				seq[k] = wQ[id].wb[ring].buf[6 * (k & 15) + c];
 			}
+			thr = (c & 1) ? 50000 : 80000;	/* 1/3/5=전압 50K, 0/2/4=전류 80K */
 			mk[0] = mk[127] = 0;
 			for (k = 1; k < 127; k++) {
 				int a = seq[k-1], b = seq[k], d = seq[k+1];
 				int lo = a<d?a:d, hi = a<d?d:a, med = b<lo?lo:(b>hi?hi:b), dev = b-med;
 				if (dev < 0) dev = -dev;
-				mk[k] = (dev > 80000) ? 1 : 0;
+				mk[k] = (dev > thr) ? 1 : 0;
 			}
 			for (k = 1; k < 127; k++) {
 				if (!mk[k]) continue;
 				for (kl = k-1; kl > 0   && mk[kl]; kl--) ;
 				for (kr = k+1; kr < 127 && mk[kr]; kr++) ;
 				ring = base + (k >> 4); if (ring >= PG_BUF_CNT) ring -= PG_BUF_CNT;
-				wQ[id].wb[ring].buf[6 * (k & 15) + c] =
-					seq[kl] + (int)((int64_t)(seq[kr] - seq[kl]) * (k - kl) / (kr - kl));
+				if (kr - kl == 2 && kl >= 1 && kr <= 126 && !mk[kl-1] && !mk[kr+1])
+					wQ[id].wb[ring].buf[6 * (k & 15) + c] =		/* 단일: 2차 포물선(봉우리 보존) */
+						(int)(((int64_t)4 * (seq[kl] + seq[kr]) - (seq[kl-1] + seq[kr+1])) / 6);
+				else
+					wQ[id].wb[ring].buf[6 * (k & 15) + c] =		/* 클러스터/경계: 선형 */
+						seq[kl] + (int)((int64_t)(seq[kr] - seq[kl]) * (k - kl) / (kr - kl));
 			}
 		}
 	}
+#endif	/* WV_STAGED: despike 우회 */
 
 //	// 8 page 모두 읽은 후 transient task에 알린다
 //	if (tid_app[id] != 0) {
@@ -2773,7 +2791,7 @@ void meter_scan_2(uint8_t id)
 		readWFB_Data(id);
 	}
 	/* 나머지 PQM(period/RMS/THD): CH3 M1↔M2 RR + 19/21 슬라이스로 SSP1 부하 분산 */
-#ifdef CH3
+#if defined(CH3) && (!defined(WV_STAGED) || defined(WV_EN_M2))	/* 단계검증: M2 있을 때만 RR */
 	if (id != m12_pq_rr_owner) {
 		/* 상대 미터 슬롯: PQM SPI 생략 */
 	} else
@@ -2792,7 +2810,7 @@ void meter_scan_2(uint8_t id)
 
 		m12_pq_slice[id] = (uint8_t)(((unsigned)m12_pq_slice[id] + 1u) % 2u);
 
-#ifdef CH3
+#if defined(CH3) && (!defined(WV_STAGED) || defined(WV_EN_M2))
 		m12_pq_rr_owner = (uint8_t)((id == 1) ? 2 : 1);
 #endif
 	}
@@ -2924,18 +2942,18 @@ void meter_scan(uint8_t id)
 	// capture Wave Form
 	if (stat0 & (1<<17)) {
 		//(id ==0) ? readWFB_Data(id) : readWFB8k_Data(id);
-		readWFB_Data(id);		
+		readWFB_Data(id);
 	}
 	
 //	Board_LED_On(3);	// 실행시간: 15us
 	
-	// RMS 1/2 cycle 
+	// RMS 1/2 cycle
 	if (stat0 & (1<<19)) {
 		readPeriod(id);
 		readPhaseFastRMS(id);
 		checkPqEvent(id);
 	}
-	
+
 	// RMS 10/12 cycle
 	// 전압은 12 cycle(200ms) 간격으로 수집, (zero cross와 관계 없다)
 	if (stat0 & (1<<20)) {
@@ -2944,13 +2962,13 @@ void meter_scan(uint8_t id)
 	// PWR_READY (1s 단위로 읽는다 (PWR_TIME : 1s)
 	if (stat0 & (1<<18)) {
 		readPhasePower(id);
-	}	
+	}
 	// THD READY
 	if (stat0 & (1<<21)) {
 		readPhaseTHD(id);
 		//printf("IRQ: THD & PF ...\n");
-	}				
-	
+	}
+
 	if (stat0 & (1<<25)) {
 		readTemp(id);
 	}

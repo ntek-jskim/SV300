@@ -514,7 +514,7 @@ void app_init(void *params) {
    taskParams.stackSize = 256;      // 256 * 4byte = 1024
 
    // SNTP Task
-   if (pdb->comm.useSntp) 
+   if (pdb->comm.useSntp)
    {
       	tid_sntp = osCreateTask("SNTP", sntpTask, pdb->comm.sntp, &taskParams);
       	if(tid_sntp == OS_INVALID_TASK_ID)
@@ -584,6 +584,7 @@ void app_init(void *params) {
 		{
 			TRACE_ERROR("Failed to create task(Wave)\r\n");
 		}
+#if !defined(WV_STAGED) || defined(WV_EN_RMSLOG)	/* [단계검증] RMSLog+PostScan */
 		// RMSlog
 		taskParams.priority = OS_TASK_PRIORITY_HIGH;
 		tid_rmslog    = osCreateTask("rmslog", RMSLog_Task, NULL, &taskParams);
@@ -591,7 +592,7 @@ void app_init(void *params) {
 		{
 			TRACE_ERROR("Failed to create task(Wave)\r\n");
 		}
-			
+
 		// PostScan
 		taskParams.priority = OS_TASK_PRIORITY_HIGH;
 		tid_post    = osCreateTask("post", PostScan_Task, NULL, &taskParams);
@@ -599,6 +600,7 @@ void app_init(void *params) {
 		{
 			TRACE_ERROR("Failed to create task(PostScan)\r\n");
 		}
+#endif
 		taskParams.priority = OS_TASK_PRIORITY_NORMAL;
 		taskParams.stackSize = 256;
 		tid_cmd = osCreateTask("cmd", CmdProc_Task, NULL, &taskParams);
@@ -607,6 +609,7 @@ void app_init(void *params) {
 			TRACE_ERROR("Failed to create task(CmdProc)\r\n");
 		}
 		
+#if !defined(WV_STAGED) || defined(WV_EN_ENERGY)	/* [단계검증] Energy */
 		// Energy
 		taskParams.priority = OS_TASK_PRIORITY_HIGH;
 		tid_energy    = osCreateTask("energy", Energy_Task, NULL, &taskParams);
@@ -614,6 +617,7 @@ void app_init(void *params) {
 		{
 			TRACE_ERROR("Failed to create task(energy)\r\n");
 		}
+#endif
 
 #if 1
 		// Meter
@@ -625,6 +629,7 @@ void app_init(void *params) {
 			TRACE_ERROR("Failed to create task(Meter)!\r\n");
 		}
 #ifndef CH1
+#if !defined(WV_STAGED) || defined(WV_EN_M1)	/* [단계검증] M1 (4단계) */
 		/* M1/M2: 채널 수는 CH3 빌드 매크로로 결정(getHwCh 무관) */
 		taskParams.priority = OS_TASK_PRIORITY_HIGH;
 		taskParams.stackSize = 512;
@@ -633,7 +638,9 @@ void app_init(void *params) {
 		{
 			TRACE_ERROR("Failed to create task(Meter)!\r\n");
 		}
+#endif	/* WV_EN_M1 */
 #ifdef CH3
+#if !defined(WV_STAGED) || defined(WV_EN_M2)	/* [단계검증] M2 (5단계) */
 		taskParams.priority = OS_TASK_PRIORITY_HIGH;
 		taskParams.stackSize = 512;
 		tid_meter[2] = osCreateTask("meter2", Meter2_Task, NULL, &taskParams);
@@ -641,6 +648,7 @@ void app_init(void *params) {
 		{
 			TRACE_ERROR("Failed to create task(Meter2)!\r\n");
 		}
+#endif	/* WV_EN_M2 */
 #endif
 #endif /* CH1 */
 #endif /* 0 */
@@ -654,6 +662,7 @@ void app_init(void *params) {
 			TRACE_ERROR("Failed to create task(FS)!\r\n");
 		}
 		
+#if !defined(WV_STAGED) || defined(WV_EN_TREND)	/* [단계검증] Trend */
 		// Trend
 		taskParams.priority = OS_TASK_PRIORITY_LOW;
 		tid_trend = osCreateTask("trend", Trend_Task, NULL, &taskParams);
@@ -661,8 +670,14 @@ void app_init(void *params) {
 		{
 			TRACE_ERROR("Failed to create task(Trend)!\r\n");
 		}
+#endif
    	}
 
+#ifdef WV_STAGED	/* [단계검증] RMSLog 없이 web 기동 위해 통신게이트 강제 해제 */
+	{ extern volatile uint8_t g_meterReady; g_meterReady = 1; }
+#endif
+
+#if !defined(WV_STAGED) || defined(WV_EN_IOM)	/* [단계검증] IOM */
    // IOM
     taskParams.priority = OS_TASK_PRIORITY_LOW;
     tid_iom = osCreateTask("iom", IOM_Task, NULL, &taskParams);
@@ -671,6 +686,7 @@ void app_init(void *params) {
        //Debug message
        TRACE_ERROR("Failed to create task(iom)!\r\n");
     }
+#endif
 //    pdb->comm.comMode = 1;
 
 //	pdb->comm.gwEable = 0x03;	// gems3600 #1,2 enable	
@@ -767,7 +783,7 @@ void app_init(void *params) {
       //Debug message
       TRACE_ERROR("Failed to create task(IpScanListener)!\r\n");
    }
-	
+
 	//Create a task(Proxy)
    taskParams.priority = OS_TASK_PRIORITY_NORMAL;
    tid_proxy = osCreateTask("Proxy", ProxyTask, NULL, &taskParams);

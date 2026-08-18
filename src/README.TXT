@@ -41,6 +41,10 @@
   1) 파형 seam 근본원인 규명·복구 — SPI로 ADE9000 WFB 읽는 행위가 칩 동시변환을 교란(전송방식·SPI클럭 무관, 버스트당 ~1샘플), readWFB에서 6채널 median 검출→선형보간 복구(FFT·고조파 반영)
   2) Modbus METERING 스냅샷 더블버퍼(flash 로깅 중 torn read=garbage float 방지) + EN50160 리포트 CH2/3 전압공유 복사 + Modbus 쓰기 미준비/무효주소 예외
 
+26/08/18 FW V00.02
+  1) 파형 표시 분산 — copyModbusWaveData에 waveDispIndex(GEMS식: ZX 기준 ix부터 WVDISP_SPAN 구간을 표시 160점에 균등분산)+re=fr-100 윈도우 위상고정 도입: ÷4~10 희석 시 M0 파형 클린. 진단용 WV_STAGED(core만 기동·태스크 단계 ENABLE) 유지 (미완 체크포인트)
+  2) 윈도우 despike(A안) 폐기 — ÷2 확대 검증서 소스 잔여가 고립 글리치가 아닌 광범위(윈도우당 20~69샘플)로 규명, 연속윈도우 median 복구는 실신호 왜곡으로 오히려 악화 → WV_WINDESPIKE OFF(코드 보존). 소스 거칠음 원인(고조파/노이즈 vs readWFB 커플링) 추가 규명 예정
+
 
 NOSDMEM : SD MEMORY Y/N
 HWV1 : CH3(METER CHIP SELECT)

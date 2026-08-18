@@ -14,6 +14,10 @@ int dma_read32n(uint8_t mid, uint16_t cmd, uint32_t *buf, int n);
 int dma_write16(uint8_t mid, uint16_t cmd, uint16_t *pdata);
 int dma_write32(uint8_t mid, uint16_t cmd, uint32_t *pdata);
 
+/* [파형 A수정] readWFB 8페이지 버스트를 M1↔M2 순차화(bus==1만). */
+void ssp1WfbLock(uint8_t bus);
+void ssp1WfbUnlock(uint8_t bus);
+
 void Board_DMA_Init();
 
 // wiznet

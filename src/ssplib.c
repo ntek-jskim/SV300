@@ -26,6 +26,9 @@ OsTaskId	t_meter[2];
 /* CH3: Meter1_Task·Meter2_Task가 SSP1을 공유하므로 직렬화 mutex */
 #ifdef HWV1
 static OsMutex ssp1_mutex;
+/* [파형 A수정] readWFB 8페이지 버스트를 통째로 잠가 M1↔M2 페이지단위 인터리브를 순차 버스트로.
+   인터리브(연속 SSP1 활동+CS급전환)가 M0 ADC를 교란 → M1/M2 각자 깨끗한 단일버스트로 분리. */
+static OsMutex ssp1_wfb_mutex;
 #endif
 
 /* FreeRTOS: DMA 완료를 task notification(0x10) 대신 전용 이진 세마포어로 전달.
@@ -185,10 +188,27 @@ void Board_DMA_Init() {
 
 #ifdef HWV1
 	osCreateMutex(&ssp1_mutex);
+	osCreateMutex(&ssp1_wfb_mutex);
 #endif
 #ifdef __FREERTOS
 	ssp_dma_sem[0] = xSemaphoreCreateBinary();
 	ssp_dma_sem[1] = xSemaphoreCreateBinary();
+#endif
+}
+
+/* [파형 A수정] readWFB_Data가 8페이지 루프 전체를 감싸 M1↔M2 readWFB를 순차 버스트로 직렬화.
+   bus==1(SSP1: M1/M2)만. 페이지단위 ssp1_mutex(dma_read32n)와 별개 락이라 교착 없음
+   (순서: wfb락 취득 → 내부에서 ssp1_mutex 취득; 상대 미터는 wfb락에서 대기하므로 순환대기 없음). */
+void ssp1WfbLock(uint8_t bus)
+{
+#ifdef HWV1
+	if (bus == 1) osAcquireMutex(&ssp1_wfb_mutex);
+#endif
+}
+void ssp1WfbUnlock(uint8_t bus)
+{
+#ifdef HWV1
+	if (bus == 1) osReleaseMutex(&ssp1_wfb_mutex);
 #endif
 }
 
