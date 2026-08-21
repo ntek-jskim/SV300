@@ -1673,7 +1673,7 @@ void calcRmsAngle(int id) {
 		meter[id].cntl.Isum = 0;
 		for (i=0;i<3;i++){
 			// average U-RMS
-			for (sum[i]=0, j=0; j<5; j++) {
+			for (sum[i]=0, fsum[i]=0, j=0; j<5; j++) {	/* [버그수정] fsum 리셋 누락 → 미초기화/누적오염 */
 				sum[i] += preg->urms[i][j];
 				fsum[i] += preg->furms[i][j];
 			}
@@ -1696,7 +1696,7 @@ void calcRmsAngle(int id) {
 			meter[id].cntl.U_1012[i] = (mean < PICKUP_VOLT_RAW) ? 0 : scaleVrms(id, mean);
 		
 			// average I-RMS
-			for (sum[i]=0, j=0; j<5; j++) {
+			for (sum[i]=0, fsum[i]=0, j=0; j<5; j++) {	/* [버그수정] fsum 리셋 누락 → I루프서 furms 위에 firms 누적 오염 */
 				sum[i] += preg->irms[i][j];
 				fsum[i] += preg->firms[i][j];
 			}		

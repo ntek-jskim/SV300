@@ -37,7 +37,7 @@
    #include "same54_curiosity_ultra.h"
 #endif   // NXP
 
-#include "core/net.h"
+#include "core/net.h"0
 
 #if 1    // NXP
    #include "drivers/mac/lpc43xx_eth_driver.h"

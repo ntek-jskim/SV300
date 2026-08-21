@@ -185,7 +185,9 @@ float calcCF(float sample[], int length) {
 void FFT_prepare(int32_t sample[], int n) {
 	int i;
 	//float freq = 8000./lineFreq, dcOffset=0;
-	
+#ifdef WV_QCAP
+	while (g_wfbQuiet) osDelayTask(5);	/* [Quiet Capture] M0 캡처 중엔 무거운 FFT 계산 양보(교란 방지) */
+#endif
 	for (i=0; i<n; i++) {
 		// Test Wave Signal
 		//pFFT->xreal[i] = 10000 * sin(2 * PI * i / freq) + 
@@ -200,7 +202,9 @@ void FFT_prepare(int32_t sample[], int n) {
 void FFT_prepare_pp(int32_t s1[], int32_t s2[], int n) {
 	int i;
 	//float freq = 8000./lineFreq;
-	
+#ifdef WV_QCAP
+	while (g_wfbQuiet) osDelayTask(5);	/* [Quiet Capture] M0 캡처 중엔 무거운 FFT 계산 양보(교란 방지) */
+#endif
 	for (i=0; i<n; i++) {
 		// Test Wave Signal
 		//pFFT->xreal[i] = 10000 * sin(2 * PI * i / freq) + 

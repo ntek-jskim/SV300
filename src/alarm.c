@@ -375,6 +375,8 @@ int storeAlarmStatus(int id) {
 	const char *path = getAlarmStatusFileName(id);
 	ALARM_STATUS *palm = &meter[id].alarm;
 
+	printf("[WR] storeAlarmStatus id=%d\n", id);	/* 진단: 0x100000(FAT) 처닝원 추적 */
+
 	fsFileLock();
 	fp = fopen(path, "wb");
 	if (fp == NULL) {
@@ -1334,14 +1336,15 @@ void getTrendBackupFile(char *str, int mid, int g) {
 // 2020-4-8, Trend Header와 현재 Trend 설정을 비교하여 다르면 기존파일 이름에 수정날짜 이름 추가하여 변경한다 
 int appendTrendRcrd(int mid, int g) {
 	FILE *fp;
-#ifdef USE_CMSIS_RTOS2	
-   fsFileInfo fi;	
+#ifdef USE_CMSIS_RTOS2
+   fsFileInfo fi;
 #else
 	FINFO fi;
 #endif
 	int j;
 	char fn[64];
 
+	printf("[WR] appendTrendRcrd m=%d g=%d\n", mid, g);	/* 진단: 0x100000(FAT) 처닝원 추적 */
 	if (mid < 0 || mid >= METER_CH_COUNT)
 		return 0;
 
@@ -1432,6 +1435,9 @@ void Trend_Task(void *arg)
 	_enableTaskMonitor(Tid_Trend, 50);
 	while (pcntl->runFlag) {
 		pcntl->wdtTbl[Tid_Trend].count++;
+#ifdef WV_QCAP
+		while (g_wfbQuiet) osDelayTask(5);	/* 조용창: 파형 캡처 중엔 양보 */
+#endif
 		// 1분 경과 대기
 		if (lastmin == pcntl->tod.tm_min) {
          osDelayTask(1000);

@@ -584,7 +584,7 @@ void app_init(void *params) {
 		{
 			TRACE_ERROR("Failed to create task(Wave)\r\n");
 		}
-#if !defined(WV_STAGED) || defined(WV_EN_RMSLOG)	/* [단계검증] RMSLog+PostScan */
+#if !defined(WV_STAGED) || defined(WV_EN_RMSLOG)	/* [단계검증] RMSLog 단독 */
 		// RMSlog
 		taskParams.priority = OS_TASK_PRIORITY_HIGH;
 		tid_rmslog    = osCreateTask("rmslog", RMSLog_Task, NULL, &taskParams);
@@ -592,13 +592,20 @@ void app_init(void *params) {
 		{
 			TRACE_ERROR("Failed to create task(Wave)\r\n");
 		}
-
+#endif
+#if !defined(WV_STAGED) || defined(WV_EN_POST)	/* [단계검증] PostScan 단독 */
 		// PostScan
 		taskParams.priority = OS_TASK_PRIORITY_HIGH;
 		tid_post    = osCreateTask("post", PostScan_Task, NULL, &taskParams);
 		if(tid_post == OS_INVALID_TASK_ID)
 		{
 			TRACE_ERROR("Failed to create task(PostScan)\r\n");
+		}
+#endif
+#ifdef WV_EN_DUMMY	/* [단계검증] 순수 CPU 부하 더미(HIGH) — I/O 없이 부하만 */
+		{	extern void Dummy_Task(void *);
+			taskParams.priority = OS_TASK_PRIORITY_HIGH;
+			osCreateTask("dummy", Dummy_Task, NULL, &taskParams);
 		}
 #endif
 		taskParams.priority = OS_TASK_PRIORITY_NORMAL;

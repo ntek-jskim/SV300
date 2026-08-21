@@ -7,13 +7,16 @@
    아래 WV_EN_*를 하나씩 주석해제하며(재빌드) 검증. M1/M2도 단계적(4·5단계).
    정식 빌드는 WV_STAGED만 지우면 전체 복원(태스크 게이트는 !WV_STAGED시 전부 ON). */
 #define	WV_STAGED
-#define	WV_EN_RMSLOG	/* RMSLog+PostScan (EN50160 로깅) */
-//#define	WV_EN_ENERGY
-//#define	WV_EN_TREND
-//#define	WV_EN_IOM
-//#define	WV_EN_M1
+#define	WV_EN_RMSLOG	/* RMSLog (EN50160 RMS/품질 로깅, SD쓰기) */
+#define	WV_EN_POST	/* PostScan (후처리 스캔) — RMSLog와 분리 바이섹션용 */
+//#define	WV_EN_DUMMY	/* 순수 CPU 부하 더미(HIGH, I/O없음) — '일반부하 vs 특정I/O' 판별 */
+#define	WV_EN_ENERGY
+#define	WV_EN_TREND
+#define	WV_EN_IOM
+#define	WV_EN_M1
 //#define	WV_EN_M2
 //#define	WV_WINDESPIKE	/* A안: 조립윈도우 median despike - 80K서도 과다검출(fix20~69)로 악화, 폐기/보류 */
+#define	WV_QCAP		/* ★Quiet Capture: CPU워커 동시활동이 M0 readWFB 오염 → 2.4s마다 조용창(워커 양보 400ms)에서만 파형/THD 캡처. 실시간 불필요(2~3s 갱신 OK) */
 
 //#include <LPC43xx.h>
 #include "os_port.h"
@@ -896,7 +899,7 @@ typedef struct {
 typedef struct {
 	uint16_t	VA_type;
 	uint16_t	PF_sign;
-	uint16_t	interval;
+	uint16_t	interval;     //0:1,1:5,2:15,3:30,4:60
 	uint16_t  	Iload;	
 	uint32_t	P_target[3];	/* Target Demand #1~3 (260810 맵: 9→3ch 축소) */
 	uint16_t  	backlightTime;		// 0: always, 1 ~ 15분
@@ -2271,5 +2274,6 @@ extern void getQualWeekFN(char *path, int id);
 extern void getQualLastWeekFN(char *path, int id);
 
 extern volatile uint8_t g_meterReady;   /* 계측 준비완료(웹/Modbus 통신 허용) 플래그 */
+extern volatile uint8_t g_wfbQuiet;      /* [Quiet Capture] 1=파형 캡처중 → CPU 워커 양보. WV_QCAP */
 
 #endif

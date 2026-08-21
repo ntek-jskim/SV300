@@ -74,6 +74,11 @@ extern void assertEventOutput(int, int);
 
 int		saveLockEnergy=0;
 volatile uint8_t g_meterReady = 0;   /* 계측 M0~M(ACTIVE-1) Buffer Ready 완료 → 웹/Modbus 통신 게이트 */
+volatile uint8_t g_wfbQuiet = 0;     /* [Quiet Capture] 1=조용창(파형 캡처중) → CPU 워커(RMSLog/PostScan/FFT/Dummy)는 양보. WV_QCAP */
+volatile uint8_t g_sdBusy = 0;       /* [Quiet Capture] sticky: flash ProgramPage/EraseSector가 1로 세움(XIP정지·인터럽트지연으로 M0 교란). Wave_Task가 감시창마다 리셋→체크(활동 있으면 그 캡처 폐기·재시도). WV_QCAP */
+static uint32_t mmLastSave = 0;      /* [FAT처닝수정] max/min flash 마지막 저장 시각(초) */
+static int mmDirty = 0;              /* max/min RAM 갱신됨(새 극값) → 주기 저장 대기 */
+#define MM_SAVE_SEC 900              /* max/min flash 저장 최소 간격(15분) — 노이즈 극값마다 파일 통째 재기록(FAT 처닝) 방지 */
 
 static const void *fsMsgPayload(const FS_MSG *p)
 {
@@ -2425,21 +2430,51 @@ void Wave_Task(void *arg)
 	uint64_t Ts;
 	uint32_t tick10s[METER_CH_COUNT];
 //	int64_t sum[6]; 
-	int64_t sum[7]; 
+	int64_t sum[7];
   uint32_t notificationValue;
-	
+#ifdef WV_QCAP
+	int qcState = 0, qcSettle = 0, qcRetry = 0;	/* 0=idle 1=settle 2=verify/capture */
+	uint32_t qcTick = 0;				/* notify(≈200ms) 카운트 */
+#endif
+
 	for (id=0; id<METER_CH_COUNT; id++) {
 		tick10s[id] = sysTick10s;
 	}
 	_enableTaskMonitor(Tid_Wave, 50);
-	
+
 	while (1) {
-#ifdef __FREERTOS		
+#ifdef __FREERTOS
 		xTaskNotifyWait(0, 0xFFFFFFFF, &notificationValue, portMAX_DELAY);
 #else
       os_evt_wait_and(0x1, 0xffff);
-#endif		
+#endif
 		meter[0].cntl.wdtTbl[Tid_Wave].count++;
+#ifdef WV_QCAP
+		/* [Quiet Capture] CPU 워커 동시활동 + flash program/erase가 M0 readWFB를 오염 → 조용창에서만 조립.
+		   idle 10틱(≈2s, 워커 정상·조립 스킵) → settle(워커 양보완료 + 진행중 flash 종료 대기)
+		   → arm(flash감시 시작) 후 감시창 1개(≈200ms) 채움 → verify(그 창에 flash 활동 있었으면
+		   폐기·재충전, 없으면 캡처). 파형/THD는 클린 캡처 때만 갱신(2~3s 주기면 충분). */
+		qcTick++;
+		if (qcState == 0) {						/* idle: 조립 스킵(dirty 창 무시) */
+			if (qcTick >= 10) { g_wfbQuiet = 1; qcSettle = 3; qcState = 1; }
+			continue;
+		}
+		if (qcState == 1) {						/* settle: 워커 양보완료 + 진행중 flash 종료 대기 */
+			if (g_sdBusy) { g_sdBusy = 0; qcSettle = 3; continue; }	/* flash 활동중 → 계속 대기 */
+			if (--qcSettle > 0) continue;
+			g_sdBusy = 0;						/* arm: 이제부터 flash 쓰기 감시 시작 */
+			qcState = 2;
+			continue;							/* 감시창 1개(≈200ms) 채움 */
+		}
+		if (qcState == 2) {						/* verify: 감시창에 flash program/erase 있었나 */
+			if (g_sdBusy) {						/* 있었음 → 폐기·재충전 */
+				g_sdBusy = 0;
+				if (++qcRetry < 15) continue;	/* 최대 15회(≈3s)까지 클린 창 대기 */
+				printf("[QCAP] DIRTY capture (flash busy >3s)\n");	/* 진단: 14s마다 뜨면 '긴 flash op'이 원인 */
+			}
+			qcRetry = 0;						/* 클린(또는 포기) → 아래 캡처 */
+		}
+#endif
 		cnt = ACTIVE_METER_CH_COUNT;
 		for (id=0; id<cnt; id++) {
 			if (wQ[id].halfFull) {
@@ -2485,6 +2520,11 @@ void Wave_Task(void *arg)
             xTaskNotify(tid_fft, 0x1, eSetBits);
 #else
 //			os_evt_set(0x1, tid_fft);
+#endif
+#ifdef WV_QCAP
+		g_wfbQuiet = 0;				/* 캡처 완료 → 워커 재개 */
+		qcState = 0; qcTick = 0;	/* 다음 주기 대기 */
+		{ static uint32_t qc = 0; if ((qc++ % 3) == 0) printf("[QCAP] clean capture #%u\n", qc); }
 #endif
 	}
 }
@@ -3118,6 +3158,7 @@ void putDemandBin(int id, float dd, uint32_t utc) {
 
 	if (id < 0 || id >= METER_CH_COUNT)
 		return;
+	printf("[WR] putDemandBin id=%d\n", id);	/* 진단: 0x100000(FAT) 처닝원 추적 */
 	pdm = &meter[id].dm;
 
 	// 날이 변경되면 금일데이터를 전일데이터에 복사
@@ -3196,11 +3237,12 @@ void resetDemand(int id, int mode) {
 }
 
 
-void storeDemand() {	
+void storeDemand() {
 	FILE *fp;
 	char path[64];
 	int id;
 
+	printf("[WR] storeDemand\n");	/* 진단: 0x100000(FAT) 처닝원 추적 */
 	fsFileLock();
 	for (id = 0; id < METER_CH_COUNT; id++) {
 		if (id == 0) sprintf(path, "%s", DEMAND_FILE);
@@ -3757,6 +3799,7 @@ int storeMaxMin() {
 	FILE *fp;
 	int id;
 
+	printf("[WR] storeMaxMin\n");	/* 진단: 0x100000(FAT) 처닝원 추적 */
 	fsFileLock();
 	fp = fopen(MAXMIN_FILE, "wb");
 		
@@ -3868,6 +3911,7 @@ int putEnergyLog(int id, int hix)
 
 	if (id < 0 || id >= METER_CH_COUNT)
 		return 0;
+	printf("[WR] putEnergyLog id=%d\n", id);	/* 진단: 0x100000(FAT) 처닝원 추적 */
 
 	if (peLog->ts == 0) {
 		peLog->ts = meter[id].cntl.egyStartTs1D;
@@ -4438,7 +4482,10 @@ void Energy_Task(void *arg)
 		xTaskNotifyWait(0, 0xFFFFFFFF, &notificationValue, portMAX_DELAY);
 #else
 		os_evt_wait_and(0x1, 0xffff);
-#endif		
+#endif
+#ifdef WV_QCAP
+		while (g_wfbQuiet) osDelayTask(5);	/* 조용창: 파형 캡처 중엔 양보 */
+#endif
 		for (id=0; id<ACTIVE_METER_CH_COUNT; id++) {
 			meter[0].cntl.wdtTbl[Tid_Energy].count++;
 		
@@ -4459,6 +4506,27 @@ void Energy_Task(void *arg)
 }
 
 
+#ifdef WV_EN_DUMMY
+/* [단계검증] 순수 CPU 부하 더미(HIGH) — I/O·flash·크리티컬섹션·SPI 전혀 없음.
+   RMSLog/PostScan와 동일 우선순위로 CPU만 소모. 이걸로 M0가 깨지면 원인은
+   '특정 I/O'가 아니라 '일반 CPU/스케줄 부하'(readWFB 타이밍 교란)로 확정된다. */
+void Dummy_Task(void *arg)
+{
+	volatile double x = 1.0;
+	int i;
+	while (1) {
+#ifdef WV_QCAP
+		while (g_wfbQuiet) osDelayTask(5);	/* 조용창: 양보 */
+#endif
+		for (i = 0; i < 30000; i++) {		/* ~1-2ms busy math */
+			x = x * 1.0000001 + 0.5;
+			if (x > 1.0e6) x = 1.0;
+		}
+		osDelayTask(10);					/* PostScan처럼 주기적 wake */
+	}
+}
+#endif
+
 void RMSLog_Task(void *arg)
 {
 	int id, bF[METER_CH_COUNT];
@@ -4474,7 +4542,10 @@ void RMSLog_Task(void *arg)
 		os_evt_wait_and(0x1, 0xffff);
 #endif		
 		meter[0].cntl.wdtTbl[Tid_Rmslog].count++;
-		
+#ifdef WV_QCAP
+		while (g_wfbQuiet) osDelayTask(5);	/* 조용창: 파형 캡처 중엔 양보 */
+#endif
+
 		for (id = 0; id < ACTIVE_METER_CH_COUNT; id++) {
 			if (rmsWin[id].fr != rmsWin[id].re) {
 				if (bF[id]) {
@@ -4618,6 +4689,9 @@ void PostScan_Task(void *arg)
 #else
 		os_evt_wait_or(0xf, 100);
 #endif		
+#ifdef WV_QCAP
+		while (g_wfbQuiet) osDelayTask(5);	/* 조용창: 파형 캡처 중엔 양보 */
+#endif
 		for (id=0; id<ACTIVE_METER_CH_COUNT; id++) {
 			MAXMIN *pmmId = &meter[id].maxmin;
 
@@ -4683,8 +4757,15 @@ void PostScan_Task(void *arg)
 			
 			if (pmmId->fr != pmmId->re) {
 				pmmId->ts = sysTick1s;
-				// save MaxMin Data
 				pmmId->re = pmmId->fr;
+				mmDirty = 1;			/* RAM 극값 갱신됨 → flash 저장 대기(즉시 재기록 금지) */
+			}
+			/* [FAT처닝수정] max/min flash 저장은 MM_SAVE_SEC(15분)마다만. 노이즈로 미세 새 극값이
+			   생길 때마다 storeMaxMin(fopen"wb"=파일 통째 재기록)하면 0x100000(FAT)/0x110000 상시
+			   소거 → M0 파형/THD 교란. RAM 추적은 계속, 리셋(rstMaxMin)은 위에서 즉시 저장 유지. */
+			if (mmDirty && (uint32_t)(sysTick1s - mmLastSave) >= MM_SAVE_SEC) {
+				mmDirty = 0;
+				mmLastSave = sysTick1s;
 				storeMaxMin();
 			}
 

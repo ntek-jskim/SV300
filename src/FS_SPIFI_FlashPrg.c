@@ -12,6 +12,8 @@
 #include <LPC43xx.h>
 #include "spifi_rom_api_lpc43.h"
 
+extern volatile uint8_t g_sdBusy;	/* [Quiet Capture] flash program/erase 활동 표시(XIP정지→M0 교란). Wave_Task가 감시. meter.c 정의 */
+
 #ifndef SF_VIRTUAL_SEC_BYTES
 #define SF_VIRTUAL_SEC_BYTES 0x10000UL
 #endif
@@ -149,6 +151,7 @@ static BOOL ProgramPage(U32 adr, U32 sz, U8 *buf)
 	opers.protect = -1;
 	opers.options = S_NO_VERIFY;
 
+	g_sdBusy = 1;		/* [Quiet Capture] flash 쓰기 활동 표시 */
 	s_rom->cancel_mem_mode(&s_spifi_obj);
 	rc = s_rom->spifi_program(&s_spifi_obj, (char *)buf, &opers);
 	s_rom->set_mem_mode(&s_spifi_obj);
@@ -174,11 +177,15 @@ static BOOL EraseSector(U32 adr)
 	opers.protect = -1;
 	opers.options = S_ERASE_AS_REQD | S_NO_VERIFY;
 
+	g_sdBusy = 1;		/* [Quiet Capture] flash 소거 활동 표시 */
+
 	s_rom->cancel_mem_mode(&s_spifi_obj);
 	rc = s_rom->spifi_erase(&s_spifi_obj, &opers);
 	s_rom->set_mem_mode(&s_spifi_obj);
 	if (rc != 0)
 		printf("[SPIFI] erase FAIL adr=0x%08x rc=%d\n", (unsigned)base, (int)rc);
+	else
+		printf("[FLASH] E %08x\n", (unsigned)base);	/* 진단: 30초 대량소거 정체 추적 (완료 후 제거) */
 	return (rc == 0) ? (__TRUE) : (__FALSE);
 }
 

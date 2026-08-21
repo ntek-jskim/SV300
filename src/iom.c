@@ -890,6 +890,9 @@ void IOM_Task(void *arg)
 
 	while (1) {
 		pcntl->wdtTbl[Tid_Iom].count++;
+#ifdef WV_QCAP
+		while (g_wfbQuiet) osDelayTask(5);	/* 조용창: 파형 캡처 중엔 양보 */
+#endif
 		scanDI();
 		scanKey();
 		scanTemp(ch++);
