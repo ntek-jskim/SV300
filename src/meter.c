@@ -15,7 +15,7 @@
 #define	FW_VER	0002
 #define	FW_BUILD_YEAR 26
 #define	FW_BUILD_MON  8
-#define	FW_BUILD_DAY  18
+#define	FW_BUILD_DAY  21
 
 #define	SQRT_2	 1.414213562 
 
@@ -2354,8 +2354,9 @@ void downSampling(WAVE_WINDOW *pww, int hs)
 int copyFftData(int id, WAVE_WINDOW *pww,	uint32_t *ptick_10s)
 {
 	// FFT task로 1600 sample을 공급한다
-	// FFT buffer가 비워있거나 10s가 경과시 fft sample  data를 공급한다  
-	if (wbFFT8k[id].fr == wbFFT8k[id].re && sysTick10s != *ptick_10s) {			
+	// [THD ~2.6s화] 기존 10s 스로틀 제거 → FFT가 이전 소비 완료(fr==re)면 매 캡처(~2.6s)마다 공급.
+	//   copyFftData는 Wave_Task 캡처 블록(~2.6s)에서만 호출되므로 자연히 캡처 주기로 갱신.
+	if (wbFFT8k[id].fr == wbFFT8k[id].re) {
 		*ptick_10s = sysTick10s;
 		//printf("ts: %lld\n", pww->ts);
 		// Copy wbCap8k to wbFFT8k
@@ -2456,11 +2457,13 @@ void Wave_Task(void *arg)
 		   폐기·재충전, 없으면 캡처). 파형/THD는 클린 캡처 때만 갱신(2~3s 주기면 충분). */
 		qcTick++;
 		if (qcState == 0) {						/* idle: 조립 스킵(dirty 창 무시) */
-			if (qcTick >= 10) { g_wfbQuiet = 1; qcSettle = 3; qcState = 1; }
+			/* [채널스케일] notify 주기=200ms/채널수 → idle·settle을 채널수 비례로 곱해
+			   채널 무관하게 실시간 일정(idle~2s, settle~600ms) 유지. M2추가시 settle 창 축소로 찌그러지던 문제 해결. */
+			if (qcTick >= 10 * ACTIVE_METER_CH_COUNT) { g_wfbQuiet = 1; qcSettle = 3 * ACTIVE_METER_CH_COUNT; qcState = 1; }
 			continue;
 		}
 		if (qcState == 1) {						/* settle: 워커 양보완료 + 진행중 flash 종료 대기 */
-			if (g_sdBusy) { g_sdBusy = 0; qcSettle = 3; continue; }	/* flash 활동중 → 계속 대기 */
+			if (g_sdBusy) { g_sdBusy = 0; qcSettle = 3 * ACTIVE_METER_CH_COUNT; continue; }	/* flash 활동중 → 계속 대기 */
 			if (--qcSettle > 0) continue;
 			g_sdBusy = 0;						/* arm: 이제부터 flash 쓰기 감시 시작 */
 			qcState = 2;
@@ -2470,7 +2473,7 @@ void Wave_Task(void *arg)
 			if (g_sdBusy) {						/* 있었음 → 폐기·재충전 */
 				g_sdBusy = 0;
 				if (++qcRetry < 15) continue;	/* 최대 15회(≈3s)까지 클린 창 대기 */
-				printf("[QCAP] DIRTY capture (flash busy >3s)\n");	/* 진단: 14s마다 뜨면 '긴 flash op'이 원인 */
+				/* [진단로그 OFF] printf("[QCAP] DIRTY capture (flash busy >3s)\n"); */	/* 진단: 14s마다 뜨면 '긴 flash op'이 원인 */
 			}
 			qcRetry = 0;						/* 클린(또는 포기) → 아래 캡처 */
 		}
@@ -2524,7 +2527,7 @@ void Wave_Task(void *arg)
 #ifdef WV_QCAP
 		g_wfbQuiet = 0;				/* 캡처 완료 → 워커 재개 */
 		qcState = 0; qcTick = 0;	/* 다음 주기 대기 */
-		{ static uint32_t qc = 0; if ((qc++ % 3) == 0) printf("[QCAP] clean capture #%u\n", qc); }
+		/* [진단로그 OFF] { static uint32_t qc = 0; if ((qc++ % 3) == 0) printf("[QCAP] clean capture #%u\n", qc); } */
 #endif
 	}
 }
@@ -3158,7 +3161,7 @@ void putDemandBin(int id, float dd, uint32_t utc) {
 
 	if (id < 0 || id >= METER_CH_COUNT)
 		return;
-	printf("[WR] putDemandBin id=%d\n", id);	/* 진단: 0x100000(FAT) 처닝원 추적 */
+	/* [진단로그 OFF] printf("[WR] putDemandBin id=%d\n", id); */	/* 진단: 0x100000(FAT) 처닝원 추적 */
 	pdm = &meter[id].dm;
 
 	// 날이 변경되면 금일데이터를 전일데이터에 복사
@@ -3242,7 +3245,7 @@ void storeDemand() {
 	char path[64];
 	int id;
 
-	printf("[WR] storeDemand\n");	/* 진단: 0x100000(FAT) 처닝원 추적 */
+	/* [진단로그 OFF] printf("[WR] storeDemand\n"); */	/* 진단: 0x100000(FAT) 처닝원 추적 */
 	fsFileLock();
 	for (id = 0; id < METER_CH_COUNT; id++) {
 		if (id == 0) sprintf(path, "%s", DEMAND_FILE);
@@ -3799,7 +3802,7 @@ int storeMaxMin() {
 	FILE *fp;
 	int id;
 
-	printf("[WR] storeMaxMin\n");	/* 진단: 0x100000(FAT) 처닝원 추적 */
+	/* [진단로그 OFF] printf("[WR] storeMaxMin\n"); */	/* 진단: 0x100000(FAT) 처닝원 추적 */
 	fsFileLock();
 	fp = fopen(MAXMIN_FILE, "wb");
 		
@@ -3911,7 +3914,7 @@ int putEnergyLog(int id, int hix)
 
 	if (id < 0 || id >= METER_CH_COUNT)
 		return 0;
-	printf("[WR] putEnergyLog id=%d\n", id);	/* 진단: 0x100000(FAT) 처닝원 추적 */
+	/* [진단로그 OFF] printf("[WR] putEnergyLog id=%d\n", id); */	/* 진단: 0x100000(FAT) 처닝원 추적 */
 
 	if (peLog->ts == 0) {
 		peLog->ts = meter[id].cntl.egyStartTs1D;
@@ -4563,14 +4566,22 @@ void RMSLog_Task(void *arg)
 			}
 		}
 		/* 통신 게이트: 활성 CH 전부 Buffer Ready([Buffer Ready M#], fr>10=bF) 시 허용.
-		   빠른 게이트(fr>=1)는 실기 홀딩 → 안정 우선으로 원복. 제품불량 미초기화 시 g_meterReady=0 유지→통신 차단. */
+		   [A안] 부분고장(1칩 실패)도 web/Modbus로 진단 가능하도록 10초 타임아웃 폴백:
+		   전 칩 준비 or 10초 경과 시 통신 허용(실패 칩은 0/무효 보고). 정상=즉시, 부분고장=10초 후. */
 		if (!g_meterReady) {
+			static uint32_t rdyWait = 0;	/* 100ms 단위 대기 카운트 */
 			int _rdy = 1;
 			for (id = 0; id < ACTIVE_METER_CH_COUNT; id++)
 				if (!bF[id]) { _rdy = 0; break; }
-			if (_rdy) {
+			if (_rdy || ++rdyWait >= 100) {	/* 전 칩 준비 or 100×100ms=10초 타임아웃 */
 				g_meterReady = 1;
-				printf("[Meter Ready - web/modbus enabled]\n");
+				if (_rdy) {
+					printf("[Meter Ready - web/modbus enabled]\n");
+				} else {
+					int msk = 0, k;
+					for (k = 0; k < ACTIVE_METER_CH_COUNT; k++) if (bF[k]) msk |= (1 << k);
+					printf("[Meter Ready - TIMEOUT 10s, partial bF mask=0x%x]\n", msk);
+				}
 			}
 		}
       osDelayTask(100);

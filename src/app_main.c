@@ -247,7 +247,7 @@ uint64_t getSysTick64() {
 
 void spiInit() {
 	// SSP initialization(for Meter)
-	Board_SSP_Init(LPC_SSP0, 8, 0, 16000000);	// 0:8bit, 0:Manual/1:Auto
+	Board_SSP_Init(LPC_SSP0, 8, 0, 20000000);	// 0:8bit,Manual [16→20MHz 적용·검증OK, 문제시 16000000 원복]
 	// SSP0, SSP1 DMA 초기화
 	Board_DMA_Init();
 }
@@ -368,8 +368,8 @@ void db_init(void)
    	Timer1_Init(1000);	
    
    	// SSP initialization(for Meter)
-	Board_SSP_Init(LPC_SSP0, 8, 0, 16000000);	// 0:8bit, 0:Manual/1:Auto
-	Board_SSP_Init(LPC_SSP1, 8, 0, 16000000);	// 0:8bit, 0:Manual/1:Auto
+	Board_SSP_Init(LPC_SSP0, 8, 0, 20000000);	// 0:8bit,Manual [16→20MHz 적용·검증OK, 문제시 16000000 원복]
+	Board_SSP_Init(LPC_SSP1, 8, 0, 20000000);	// 0:8bit,Manual [16→20MHz 적용·검증OK, 문제시 16000000 원복]
 
 	// SSP0, SSP1 DMA 초기화
 	Board_DMA_Init();
@@ -680,7 +680,7 @@ void app_init(void *params) {
 #endif
    	}
 
-#ifdef WV_STAGED	/* [단계검증] RMSLog 없이 web 기동 위해 통신게이트 강제 해제 */
+#if defined(WV_STAGED) && 0	/* [A안으로 대체] 강제해제 비활성 — g_meterReady 게이트가 10초 타임아웃으로 자율해제(부분고장 포함). 강제하면 A안 폴백이 안 돌아감. */
 	{ extern volatile uint8_t g_meterReady; g_meterReady = 1; }
 #endif
 

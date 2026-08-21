@@ -182,38 +182,51 @@ float calcCF(float sample[], int length) {
 
 
 
+/* [고조파 동기 리샘플링] 고정 8ksps 캡처를 측정 기본파의 정수 K사이클로 리샘플 → DFT bin이
+   고조파에 정확히 정렬(비동기 누설 제거). FFT_Task가 채널 주파수(meter.Freq)로 매번 갱신. */
+static int   g_fftK    = N_FFT * 60 / 8000;	/* 리샘플 후 창의 사이클수(=fundamental bin). 기본 60Hz→12 */
+static float g_fftRsmp = 1.0f;				/* 입력→출력 위치 비율(p=j*rsmp), ≤1이라 외삽 없음 */
+
 void FFT_prepare(int32_t sample[], int n) {
 	int i;
-	//float freq = 8000./lineFreq, dcOffset=0;
 #ifdef WV_QCAP
 	while (g_wfbQuiet) osDelayTask(5);	/* [Quiet Capture] M0 캡처 중엔 무거운 FFT 계산 양보(교란 방지) */
 #endif
+	/* 선형보간 리샘플: 출력 j → 입력 위치 p=j*rsmp. rsmp=1이면 그대로(정확히 공칭주파수). */
 	for (i=0; i<n; i++) {
-		// Test Wave Signal
-		//pFFT->xreal[i] = 10000 * sin(2 * PI * i / freq) + 
-		//1000 * sin(6 * PI * i / freq) + 
-		//1000 * sin(10 * PI * i / freq) + 
-		//1000 * sin(14 * PI * i / freq);			
-		pFFT->xreal[i] = sample[i];
+		float p; int i0; float fr;
+		p = i * g_fftRsmp;
+		i0 = (int)p;
+		if (i0 >= n-1) {
+			pFFT->xreal[i] = (float)sample[n-1];
+		} else {
+			fr = p - i0;
+			pFFT->xreal[i] = (float)sample[i0] + fr * (float)(sample[i0+1] - sample[i0]);
+		}
 		pFFT->ximag[i] = 0;
-	}		
+	}
 }
 
 void FFT_prepare_pp(int32_t s1[], int32_t s2[], int n) {
 	int i;
-	//float freq = 8000./lineFreq;
 #ifdef WV_QCAP
 	while (g_wfbQuiet) osDelayTask(5);	/* [Quiet Capture] M0 캡처 중엔 무거운 FFT 계산 양보(교란 방지) */
 #endif
+	/* 선간(s2-s1)도 동일 리샘플. 선형보간 후 차분. */
 	for (i=0; i<n; i++) {
-		// Test Wave Signal
-		//pFFT->xreal[i] = 10000 * sin(2 * PI * i / freq) + 
-		//1000 * sin(6 * PI * i / freq) + 
-		//1000 * sin(10 * PI * i / freq) + 
-		//1000 * sin(14 * PI * i / freq);			
-		pFFT->xreal[i] = (s2[i] - s1[i]);
+		float p; int i0; float fr, v1, v2;
+		p = i * g_fftRsmp;
+		i0 = (int)p;
+		if (i0 >= n-1) {
+			v1 = (float)s1[n-1];  v2 = (float)s2[n-1];
+		} else {
+			fr = p - i0;
+			v1 = (float)s1[i0] + fr * (float)(s1[i0+1] - s1[i0]);
+			v2 = (float)s2[i0] + fr * (float)(s2[i0+1] - s2[i0]);
+		}
+		pFFT->xreal[i] = v2 - v1;
 		pFFT->ximag[i] = 0;
-	}		
+	}
 }
 
 
@@ -288,8 +301,8 @@ float FFT_postproc(int n, int sel, uint16_t *pHD) {
 	
 	for (i=2; i<=63; i++) {
 	  // harmoics를 각 차수별(2~63)로 %로 환산하여 저장
-		//ix = (i*50)/5;
-		ix = i*FREQ_HZ(db.freq)/5;
+		ix = i*g_fftK;			/* [리샘플 동기] i차 고조파 = bin i*K (K=측정 기본파 사이클수) */
+		if (ix >= n/2) { pHD[i] = 0; continue; }	/* Nyquist 초과 차수 제외 */
 		if(sel == 2) {
 			if(FREQ_HZ(db.freq)==50)
 				gain = i_harm_gain[0][i];
@@ -321,12 +334,12 @@ float calcKF() {
 	float IhSqSum=0, IhNSqSum=0;
 	int i, ix, res;
 
-	res = FREQ_HZ(db.freq)/5;
-//	res = lineFreq/5;
+	res = g_fftK;					/* [리샘플 동기] 측정 기본파 사이클수 K */
 
 	// irms = h1^2+h2^2+ ....h63^2)
 	for (i=1; i<=63; i++) {
 		ix = i*res;
+		if (ix >= N_FFT/2) continue;	/* [리샘플] Nyquist 초과 제외 */
 		IhSqSum += (pFFT->amp[ix]*pFFT->amp[ix]);
 		IhNSqSum += (i*i)*(pFFT->amp[ix]*pFFT->amp[ix]);
 	}	
@@ -449,12 +462,30 @@ void FFT_Task(void)
 #endif		
 		pcntl->wdtTbl[Tid_FFT].count++;
 
+		/* [수정] 라운드로빈(1채널/notify) → 데이터 있는 채널 모두 처리. M1 파형 off 등으로
+		   빈 채널이 슬롯 낭비해 M0 THD 갱신이 느려지던 문제 해결. */
+		for (id=0; id<ACTIVE_METER_CH_COUNT; id++)
 		if (wbFFT8k[id].fr != wbFFT8k[id].re) {
 			pmeter = &meter[id].meter;
 			pcntl  = &meter[id].cntl;
 			pHD    = &meter[id].hd;
-			
-			// 계산시간 : 160 ms/phase, U/Upp/I 모두 처리하는데  1440ms 소요된다 
+
+			/* [고조파 동기 리샘플링] 측정 기본파(meter.Freq)로 K사이클·리샘플비 계산.
+			   C=창의 사이클수(N_FFT*f/8000), K=floor(C)(정수사이클→외삽없음, ≤1 비율),
+			   bin i차=i*K. 주파수 이상(45~65Hz 밖)이면 공칭으로 폴백(리샘플 없음). */
+			{
+				float f = pmeter->Freq;
+				if (f >= 45.0f && f <= 65.0f) {
+					float C = (float)N_FFT * f / 8000.0f;
+					g_fftK    = (int)C;			/* floor */
+					g_fftRsmp = (float)g_fftK / C;	/* ≤ 1.0 */
+				} else {
+					g_fftK    = FREQ_HZ(db.freq) * N_FFT / 8000;	/* 공칭(60→12, 50→10) */
+					g_fftRsmp = 1.0f;
+				}
+			}
+
+			// 계산시간 : 160 ms/phase, U/Upp/I 모두 처리하는데  1440ms 소요된다
 
 			t1 = sysTick64;
 		if (id == 0) {
@@ -544,9 +575,6 @@ void FFT_Task(void)
 								
 			//printf("VTHD:%f, ITHD:%f, elap = %d\n", pmeter->THD_U[0], pmeter->THD_I[0], (int)(t2-t1));
 			wbFFT8k[id].re = wbFFT8k[id].fr;
-		}
-		if (++id >= ACTIVE_METER_CH_COUNT) {
-			id = 0;
 		}
 		//et1 = et2;
 		//et2 = getTickCount();

@@ -375,7 +375,7 @@ int storeAlarmStatus(int id) {
 	const char *path = getAlarmStatusFileName(id);
 	ALARM_STATUS *palm = &meter[id].alarm;
 
-	printf("[WR] storeAlarmStatus id=%d\n", id);	/* 진단: 0x100000(FAT) 처닝원 추적 */
+	/* [진단로그 OFF] printf("[WR] storeAlarmStatus id=%d\n", id); */	/* 진단: 0x100000(FAT) 처닝원 추적 */
 
 	fsFileLock();
 	fp = fopen(path, "wb");
@@ -1344,7 +1344,7 @@ int appendTrendRcrd(int mid, int g) {
 	int j;
 	char fn[64];
 
-	printf("[WR] appendTrendRcrd m=%d g=%d\n", mid, g);	/* 진단: 0x100000(FAT) 처닝원 추적 */
+	/* [진단로그 OFF] printf("[WR] appendTrendRcrd m=%d g=%d\n", mid, g); */	/* 진단: 0x100000(FAT) 처닝원 추적 */
 	if (mid < 0 || mid >= METER_CH_COUNT)
 		return 0;
 

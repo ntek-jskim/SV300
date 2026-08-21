@@ -359,7 +359,7 @@ int appendQualLog(char *fn, void *bf, int size) {
 	FINFO fi;
 #endif
 
-	printf("[WR] appendQualLog %s sz=%d\n", fn, size);	/* 진단: 0x100000(FAT) 처닝원 추적 */
+	/* [진단로그 OFF] printf("[WR] appendQualLog %s sz=%d\n", fn, size); */	/* 진단: 0x100000(FAT) 처닝원 추적 */
 	pqFsLock();
 	fi.fileID = 0;
 	if (ffind (fn, &fi)) {

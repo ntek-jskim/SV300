@@ -2788,7 +2788,11 @@ void meter_scan_2(uint8_t id)
 	/* WFB(파형)은 연속성이 필요하므로 RR/슬라이스와 무관하게 매 page-full(bit17)마다 읽는다(M0와 동일).
 	 * 이전에는 RR+슬라이스로 ~1/6만 읽어 M1/M2 파형이 깨졌음. */
 	if (stat0 & (1u << 17)) {
+#ifndef WV_NO_M12_WFB
 		readWFB_Data(id);
+#else
+		{ static uint32_t skc = 0; if ((skc++ % 300) == 0) printf("[WFB skip M%d]\n", id); }	/* [진단] M1/M2 파형캡처 skip(M0 커플링 격리) */
+#endif
 	}
 	/* 나머지 PQM(period/RMS/THD): CH3 M1↔M2 RR + 19/21 슬라이스로 SSP1 부하 분산 */
 #if defined(CH3) && (!defined(WV_STAGED) || defined(WV_EN_M2))	/* 단계검증: M2 있을 때만 RR */

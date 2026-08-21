@@ -14,9 +14,10 @@
 #define	WV_EN_TREND
 #define	WV_EN_IOM
 #define	WV_EN_M1
-//#define	WV_EN_M2
+#define	WV_EN_M2
 //#define	WV_WINDESPIKE	/* A안: 조립윈도우 median despike - 80K서도 과다검출(fix20~69)로 악화, 폐기/보류 */
 #define	WV_QCAP		/* ★Quiet Capture: CPU워커 동시활동이 M0 readWFB 오염 → 2.4s마다 조용창(워커 양보 400ms)에서만 파형/THD 캡처. 실시간 불필요(2~3s 갱신 OK) */
+//#define	WV_NO_M12_WFB	/* [진단] M1/M2 waveform 캡처 skip — 시험결과 M1 disable해도 M0 THD 안 줄어듦(오히려↑) → M1 커플링 아님. 원복. */
 
 //#include <LPC43xx.h>
 #include "os_port.h"

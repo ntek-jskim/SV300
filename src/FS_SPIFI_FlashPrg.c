@@ -185,7 +185,7 @@ static BOOL EraseSector(U32 adr)
 	if (rc != 0)
 		printf("[SPIFI] erase FAIL adr=0x%08x rc=%d\n", (unsigned)base, (int)rc);
 	else
-		printf("[FLASH] E %08x\n", (unsigned)base);	/* 진단: 30초 대량소거 정체 추적 (완료 후 제거) */
+		/* [진단로그 OFF] printf("[FLASH] E %08x\n", (unsigned)base); */	/* 진단: 30초 대량소거 정체 추적 (완료 후 제거) */
 	return (rc == 0) ? (__TRUE) : (__FALSE);
 }
 

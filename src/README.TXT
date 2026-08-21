@@ -45,6 +45,10 @@
   1) 파형 표시 분산 — copyModbusWaveData에 waveDispIndex(GEMS식: ZX 기준 ix부터 WVDISP_SPAN 구간을 표시 160점에 균등분산)+re=fr-100 윈도우 위상고정 도입: ÷4~10 희석 시 M0 파형 클린. 진단용 WV_STAGED(core만 기동·태스크 단계 ENABLE) 유지 (미완 체크포인트)
   2) 윈도우 despike(A안) 폐기 — ÷2 확대 검증서 소스 잔여가 고립 글리치가 아닌 광범위(윈도우당 20~69샘플)로 규명, 연속윈도우 median 복구는 실신호 왜곡으로 오히려 악화 → WV_WINDESPIKE OFF(코드 보존). 소스 거칠음 원인(고조파/노이즈 vs readWFB 커플링) 추가 규명 예정
 
+26/08/21 FW V00.02
+  1) 파형/THD 근본해결(Quiet Capture: 워커·flash 조용한 창에서만 캡처) + M2 3채널 계측 활성 + THD ~2.6초 갱신
+  2) SPI 20MHz 상향 + 칩 1개 실패해도 web/Modbus 통신(10초 폴백, 부분고장 진단 가능)
+
 
 NOSDMEM : SD MEMORY Y/N
 HWV1 : CH3(METER CHIP SELECT)
