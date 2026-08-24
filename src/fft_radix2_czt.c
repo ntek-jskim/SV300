@@ -496,7 +496,7 @@ void FFT_Task(void)
 				else
 					k = i;
 
-				if (pmeter->U[i] == 0) {
+				if (pmeter->U[i] == 0 || meter[id].cntl.online == 0) {	/* 최소 동작전압 미만(오프라인) → 전압 THD 미계산 */
 					pmeter->THD_U[i] = pmeter->CF_U[i] = 0;
 					memset(pHD->U[i], 0, sizeof(pHD->U)/3);
 				}
@@ -522,7 +522,7 @@ void FFT_Task(void)
 					memcpy(pHD->Upp[i], pHD->U[i], sizeof(pHD->U)/3);
 				}
 				else {
-					if (pmeter->Upp[i] == 0) {
+					if (pmeter->Upp[i] == 0 || meter[id].cntl.online == 0) {	/* 최소 동작전압 미만 → L-L 전압 THD 미계산 */
 						pmeter->CF_Upp[i] = pmeter->THD_Upp[i] = 0;
 						memset(pHD->Upp[i], 0, sizeof(pHD->Upp)/3);
 					}
@@ -553,7 +553,7 @@ void FFT_Task(void)
 		}
 
 			for (i=0; i<3; i++) {
-				if (pmeter->I[i] == 0) {
+				if (pmeter->I[i] < meter[id].cntl.I_start) {	/* 최소 동작전류(시동전류) 미만 → 전류 THD 미계산 */
 					pmeter->CF_I[i] = pmeter->KF_I[i] = pmeter->THD_I[i] = pmeter->TDD_I[i] = 0;
 					memset(pHD->I[i], 0, sizeof(pHD->I)/3);					
 				}

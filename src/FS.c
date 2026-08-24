@@ -765,6 +765,42 @@ void cmd_savecal(char *par) {
 	printf("[[[Save HW Info & Cal. Data ...]]]\n");
 }
 
+/* [FW UPDATE] FTP로 업로드된 usrApp.bin 검증 — 부트로더(SV300_boot) 검증 미러.
+   APP_SIGN(0x5a5a5a5a)이 워드7(바이트28)에 있어야 유효 이미지(부트로더도 progbuf[7]==APP_SIGN 확인).
+   반환: 0=정상, -1=파일없음/FS미마운트, -2=크기이상, -3=읽기실패(너무 작음), -4=서명불량. *psize=바이트크기.
+   ※경로 "\\usrApp.bin"=기본드라이브 루트 — FTP가 쓰는 경로('/'→'\')이자 3CH는 SPI NOR 유일드라이브라
+     부트로더 S0:usrApp.bin과 동일 파일. (SD 병행 모델이면 경로 재확인 필요) */
+int fwCheckUsrApp(uint32_t *psize) {
+	FILE *fp;
+	uint32_t hdr[8];
+	FINFO fi;
+	if (!s_fsMounted) return -1;
+	fi.fileID = 0;
+	if (ffind("usrApp.bin", &fi) != 0) return -1;					/* 파일 없음 */
+	if (fi.size < 1024 || fi.size > (1024UL * 1024UL)) return -2;	/* 크기 이상(앱영역 1MB 상한) */
+	fp = fopen("\\usrApp.bin", "rb");
+	if (fp == NULL) return -1;
+	if (fread(hdr, 1, sizeof(hdr), fp) != sizeof(hdr)) { fclose(fp); return -3; }	/* 헤더 읽기 실패 */
+	fclose(fp);
+	if (hdr[7] != 0x5a5a5a5aUL) return -4;							/* APP_SIGN 불량 */
+	if (psize) *psize = fi.size;
+	return 0;
+}
+
+/* [FW UPDATE] 브라우저 업로드된 .bin을 usrApp.bin으로 스트리밍 저장(FS 로직 분리 — web.c는 FILE 미사용).
+   web.c apiFwUpload가 httpReadStream 청크를 받아 fwWrite로 전달. fh=void*(내부 FILE*). */
+void *fwBeginWrite(void) {
+	return (void *)fopen("\\usrApp.bin", "wb");
+}
+int fwWrite(void *fh, const void *buf, int len) {
+	if (fh == NULL) return -1;
+	return (int)fwrite(buf, 1, (unsigned)len, (FILE *)fh);
+}
+void fwEndWrite(void *fh, int ok) {
+	if (fh) fclose((FILE *)fh);
+	if (!ok) fdelete("\\usrApp.bin");	/* 실패/미완 업로드 → 부분파일 삭제(부트로더 오굽기 방지) */
+}
+
 static void cmd_reboot(char *par) {
 	reqReboot(0x1234);	// smb_rtu.c에 선언
 }

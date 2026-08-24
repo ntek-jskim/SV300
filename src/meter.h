@@ -2247,6 +2247,11 @@ extern void copyEreg32(int id);
 extern void storeEnergy(void);
 extern void applyEregEdit(int id);
 extern int updateEhGrp(int id, int mode, int group, float diff);
+extern int fwCheckUsrApp(uint32_t *psize);	/* [FW UPDATE] 업로드 usrApp.bin 검증(0=OK) */
+extern void *fwBeginWrite(void);			/* [FW UPDATE] usrApp.bin 쓰기 시작(FILE* 반환, void*) */
+extern int fwWrite(void *fh, const void *buf, int len);	/* 청크 쓰기(반환=쓴 바이트) */
+extern void fwEndWrite(void *fh, int ok);	/* 종료(ok=0이면 부분파일 삭제) */
+extern void reqReboot(int cmd);				/* smb_rtu.c: rebootFlag 세팅(지연 리부팅) */
 extern uint32_t sysTick32, sysTick1s, sysTick10s, sysTick10m, sysTick15m, sysTickDemand, WM_tick32;
 extern uint64_t sysTick64;
 

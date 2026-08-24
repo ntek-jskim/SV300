@@ -572,11 +572,12 @@ void calcAbsAngle(int id)
 		meter[id].meter.Pangle[2] = (meter[id].meter.I[2] == 0) ? 0 : 360 - meter[id].cntl.UIangle[2];
 	}
 	
-//	for (i=0; i<3; i++) {
-//		if (pdb->ct.ct_dir[i]){
-//			pmeter->Iangle[i] = fmod(pmeter->Iangle[i]+180, 360);
-//		}
-//	}
+	/* [CT direction] ct_dir(NEGATIVE) 시 전류 방향 반전 → 전류 위상각 180° 반영
+	   (전력/에너지 부호는 calcPF/에너지에서 별도 처리됨). 전류 0이면 위상 무의미 → 스킵. */
+	for (i=0; i<3; i++) {
+		if (db.ct[id].ct_dir[i] && meter[id].meter.I[i] != 0)
+			meter[id].meter.Iangle[i] = _toAngle(meter[id].meter.Iangle[i] + 180);
+	}
 }
 
 // cid: channel id, accm : watt/period

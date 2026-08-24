@@ -15,7 +15,7 @@
 #define	FW_VER	0002
 #define	FW_BUILD_YEAR 26
 #define	FW_BUILD_MON  8
-#define	FW_BUILD_DAY  21
+#define	FW_BUILD_DAY  24
 
 #define	SQRT_2	 1.414213562 
 
@@ -73,6 +73,9 @@ ENERGY_NVRAM 	egyNvr;
 extern void assertEventOutput(int, int);
 
 int		saveLockEnergy=0;
+static uint32_t egyLastSave = 0;	/* [에너지 저장 스로틀] 마지막 storeEnergy 시각(sysTick1s) */
+static int      egyDirty = 0;		/* 전력량 변화 누적(미저장) 표시 */
+#define EGY_SAVE_SEC 300			/* 변화 있으면 5분마다 1회 저장(월변경/클리어는 즉시) */
 volatile uint8_t g_meterReady = 0;   /* 계측 M0~M(ACTIVE-1) Buffer Ready 완료 → 웹/Modbus 통신 게이트 */
 volatile uint8_t g_wfbQuiet = 0;     /* [Quiet Capture] 1=조용창(파형 캡처중) → CPU 워커(RMSLog/PostScan/FFT/Dummy)는 양보. WV_QCAP */
 volatile uint8_t g_sdBusy = 0;       /* [Quiet Capture] sticky: flash ProgramPage/EraseSector가 1로 세움(XIP정지·인터럽트지연으로 M0 교란). Wave_Task가 감시창마다 리셋→체크(활동 있으면 그 캡처 폐기·재시도). WV_QCAP */
@@ -458,6 +461,7 @@ int buildSettings(int id)
 
 	/* 설정 기본값 정규화 — 0(미설정/클리어)이면 default 적용 */
 	if (db.ct[id].I_start == 0) db.ct[id].I_start = 1;		/* 기동전류 계수 default 1 */
+	if (db.ct[id].nTurns == 0)  db.ct[id].nTurns = 1;		/* CT 관선수 default 1 (0=미설정/오설정 → 1) */
 	if (db.ct[id].inorm == 0)   db.ct[id].inorm = 50;		/* 정격전류 default 50% (CT1 대비) */
 	if (db.ct[id].CT1 == 0)     db.ct[id].CT1 = 100;		/* CT 1차 default 100 */
 	if (db.pt[id].vnorm == 0)   db.pt[id].vnorm = 220;		/* 정격전압 default 220 */
@@ -587,8 +591,18 @@ int buildSettings(int id)
 			meter[id].cntl.pga_igain = 3;		// 8x
 		}
 		break;	
-	}	
-	
+	}
+
+	/* [nTurns] CT 관선수(관통 턴수)만큼 전류·전력 스케일을 나눈다 — N턴 관통 시 CT는 N배 전류를 봄.
+	   예: 실제 100A·2턴 → 100/2=50A 표시. iscale(상전류)·wscale(전력=V*I→에너지 반영)·파형전류(reverse).
+	   In(igscale)은 아래에서 5A는 iscale(=/nTurns) 복사로 반영, ZCT는 독립(관선수 무관). */
+	if (db.ct[id].nTurns > 1) {
+		meter[id].cntl.iscale      /= db.ct[id].nTurns;
+		meter[id].cntl.wscale      /= db.ct[id].nTurns;
+		meter[id].wv.iscale        /= db.ct[id].nTurns;
+		meter[id].cntl.wv_ireverse /= db.ct[id].nTurns;
+	}
+
 	if (db.ct[id].CT2 == CT_5A) {
 		meter[id].cntl.pga_ingain = 0;	// 1x
 		meter[id].cntl.igscale = meter[id].cntl.iscale;		// In의 scale은 Ia,Ib,Ic와 같다
@@ -966,12 +980,12 @@ int loadHwSettings(METER_CAL *pcal) {
 	crc = gencrc_modbus((uint8_t *)pcal, sizeof(METER_CAL));
 	
 	if (crc == 0) {
-		dump((void *)pcal, sizeof(METER_CAL));
+//		dump((void *)pcal, sizeof(METER_CAL));
 		return 0;
 	}
 	else {
 		printf("{{Can't load HW Settings, crc=%04x/%04x, magic=%04x ...}}\n", crc, pcal->crc, pcal->magic);		
-		dump((void *)pcal, sizeof(METER_CAL));
+//		dump((void *)pcal, sizeof(METER_CAL));
 		memset(pcal, 0, sizeof(METER_CAL));
 		pcal->hwModel = (METER_CH_COUNT == 2) ? 1 : 0;	/* 빌드 기본값: 2CH=1, 3CH=0 (콘솔로 변경 가능) */
 		storeHwSettings(pcal);
@@ -1114,6 +1128,10 @@ int loadSettings(SETTINGS	*pdb)
 
 	for (id = 0; id < METER_CH_COUNT; id++)
 		buildSettings(id);
+
+	/* [수정] buildSettings가 db에 default(I_start=1·inorm=50·CT1=100 등)를 적용한 뒤 레지스터맵 재동기화.
+	   위 memcpy(1110)는 default 적용 前이라, web/Modbus(meter[0].setting)에 I_start=0으로 보이던 버그 해결. */
+	memcpy(&meter[0].setting, &db, sizeof(SETTINGS));
 
 	for (id = 0; id < METER_CH_COUNT; id++)
 		buildAlarmSettings(id);
@@ -4145,13 +4163,16 @@ void energy_scan(int id, METER_EH_REGS *ereg, ENERGY_NVRAM *pEgyNvr) {
 	}
 
 
-	if(ewF != 0) {	// 달이 변경되거나 0.1kw 이상 변경되면 저장한다
-		//printf("+++ storeEnergy, %x...\n", ewF);
-		if(saveLockEnergy ==0) {
-			for (i=0; i<ENERGY_CH_COUNT; i++) {
-				copyEreg32(i);
-			}
-			storeEnergy();	
+	/* [저장 스로틀] 전력량 변화(ewF!=0)는 dirty 표시만, 실제 FRAM 저장은 5분마다 1회.
+	   단 월변경/클리어(ewF bit3)는 중요·희소 이벤트라 즉시 저장. 채널 루프서 첫 통과 채널이
+	   전 채널 저장 후 egyLastSave 갱신 → 같은 5분창 내 다른 채널은 재저장 안 함(중복 로그 제거). */
+	if (ewF != 0) egyDirty = 1;
+	if (egyDirty && saveLockEnergy == 0) {
+		if ((ewF & (1<<3)) || (uint32_t)(sysTick1s - egyLastSave) >= EGY_SAVE_SEC) {
+			for (i=0; i<ENERGY_CH_COUNT; i++) copyEreg32(i);
+			storeEnergy();
+			egyDirty = 0;
+			egyLastSave = sysTick1s;
 		}
 	}
 

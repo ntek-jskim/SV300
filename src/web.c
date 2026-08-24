@@ -307,11 +307,11 @@ static error_t apiDashboard(HttpConnection *c)
 		m->U[0], m->U[1], m->U[2], m->I[0], m->I[1], m->I[2]);
 	w(c, b);
 	snprintf(b, sizeof(b),
-		"\"p\":%.2f,\"q\":%.2f,\"s\":%.2f,\"pf\":%.1f,"
+		"\"p\":%.2f,\"q\":%.2f,\"s\":%.2f,\"pf\":%.2f,"
 		"\"u_unbal\":%.1f,\"i_unbal\":%.1f,"
 		"\"thd_u\":%.1f,\"thd_i\":%.1f,\"tdd_i\":%.1f,",
 		m->P[3] / 1000.0f, m->Q[3] / 1000.0f, m->S[3] / 1000.0f,
-		(float)fabs(m->PF[3]) * 100.0f,
+		(float)fabs(m->PF[3]),	/* PF는 이미 %(fabs(P/S*100)) — 중복 ×100 제거(9977→99.77) */
 		m->Ubal[0], m->Ibal[0],
 		favg3(m->THD_U), favg3(m->THD_I), favg3(m->TDD_I));
 	w(c, b);
@@ -865,15 +865,88 @@ static error_t apiCommand(HttpConnection *c)
 		if (p) { p++; while (*p && *p != '"' && o < (int)sizeof(cmd) - 1) cmd[o++] = *p++; cmd[o] = 0; }
 	}
 
-	if      (!strcmp(cmd, "clear_alarm")) addr = 7477;   /* clear alarm ALL(260807 맵) */
-	else if (!strcmp(cmd, "clear_event")) addr = 7481;   /* clear event ALL */
-	else if (!strcmp(cmd, "ack_alarm"))   addr = 7493;   /* alarm ack ALL */
-	else if (!strcmp(cmd, "ack_event"))   addr = 7497;   /* event ack ALL */
+	if      (!strcmp(cmd, "clear_alarm")) addr = 7478;   /* clear alarm ALL (260812 맵: +1 시프트) */
+	else if (!strcmp(cmd, "clear_event")) addr = 7482;   /* clear event ALL */
+	else if (!strcmp(cmd, "ack_alarm"))   addr = 7494;   /* alarm ack ALL */
+	else if (!strcmp(cmd, "ack_event"))   addr = 7498;   /* event ack ALL */
 	else return webJsonStatus(c, 400, "{\"ok\":false,\"error\":\"bad cmd\"}");
 
 	writeMemCb(addr, 0x1234);   /* ALL 대상(offset 0) */
 	if (beginJson(c)) return ERROR_WRITE_FAILED;
 	w(c, "{\"ok\":true}");
+	return httpCloseStream(c);
+}
+
+/* [FW UPDATE] 브라우저 업로드 청크버퍼(동시 1개 가정, 스택 절약) */
+static uint8_t s_fwUpBuf[1024];
+
+/* POST /api/fwupload — admin, 브라우저에서 선택한 .bin 원시바디를 usrApp.bin으로 FS에 스트리밍 저장 후 검증 */
+static error_t apiFwUpload(HttpConnection *c)
+{
+	void *fh;
+	size_t total, got = 0, r;
+	int rc, ok;
+	char buf[80];
+
+	if (webRole(c) != ROLE_ADMIN)
+		return webJsonStatus(c, 403, "{\"ok\":false,\"error\":\"admin only\"}");
+	total = c->request.contentLength;
+	if (total < 1024 || total > (1024UL * 1024UL))
+		return webJsonStatus(c, 400, "{\"ok\":false,\"error\":\"bad size\"}");
+	fh = fwBeginWrite();
+	if (fh == NULL)
+		return webJsonStatus(c, 500, "{\"ok\":false,\"error\":\"fs open failed\"}");
+	while (got < total) {
+		size_t want = total - got;
+		if (want > sizeof(s_fwUpBuf)) want = sizeof(s_fwUpBuf);
+		if (httpReadStream(c, s_fwUpBuf, want, &r, 0)) break;
+		if (r == 0) break;
+		if (fwWrite(fh, s_fwUpBuf, (int)r) != (int)r) break;
+		got += r;
+	}
+	ok = (got == total);
+	fwEndWrite(fh, ok);			/* ok=0이면 부분파일 삭제 */
+	if (!ok)
+		return webJsonStatus(c, 400, "{\"ok\":false,\"error\":\"upload failed\"}");
+	rc = fwCheckUsrApp(NULL);	/* 저장 후 서명/크기 검증 */
+	if (beginJson(c)) return ERROR_WRITE_FAILED;
+	snprintf(buf, sizeof(buf), "{\"ok\":true,\"size\":%u,\"valid\":%s,\"err\":%d}",
+	         (unsigned)got, (rc == 0) ? "true" : "false", rc);
+	w(c, buf);
+	return httpCloseStream(c);
+}
+
+/* GET /api/fwstatus — 업로드된 usrApp.bin 검증 상태 */
+static error_t apiFwStatus(HttpConnection *c)
+{
+	char buf[96];
+	uint32_t sz = 0;
+	int rc;
+	if (webRole(c) != ROLE_ADMIN)
+		return webJsonStatus(c, 403, "{\"ok\":false,\"error\":\"admin only\"}");
+	rc = fwCheckUsrApp(&sz);
+	if (beginJson(c)) return ERROR_WRITE_FAILED;
+	snprintf(buf, sizeof(buf), "{\"ok\":true,\"valid\":%s,\"err\":%d,\"size\":%u}",
+	         (rc == 0) ? "true" : "false", rc, (unsigned)sz);
+	w(c, buf);
+	return httpCloseStream(c);
+}
+
+/* POST /api/fwapply — admin, usrApp.bin 검증 통과 시 리부팅(부트로더가 내부플래시에 굽기) */
+static error_t apiFwApply(HttpConnection *c)
+{
+	char buf[80];
+	int rc;
+	if (webRole(c) != ROLE_ADMIN)
+		return webJsonStatus(c, 403, "{\"ok\":false,\"error\":\"admin only\"}");
+	rc = fwCheckUsrApp(NULL);
+	if (rc != 0) {
+		snprintf(buf, sizeof(buf), "{\"ok\":false,\"error\":\"invalid firmware\",\"err\":%d}", rc);
+		return webJsonStatus(c, 400, buf);
+	}
+	if (beginJson(c)) return ERROR_WRITE_FAILED;
+	w(c, "{\"ok\":true,\"rebooting\":true}");
+	reqReboot(0x1234);	/* 지연 리부팅(플래그) → 응답 flush 후 부트로더가 usrApp.bin 굽기 */
 	return httpCloseStream(c);
 }
 
@@ -1221,6 +1294,10 @@ static const char INDEX_HTML[] =
 ".ctbl td.rk,.ctbl th:first-child{text-align:left;color:var(--muted);font-family:inherit}\n"
 ".ctbl .ts{font-size:9px;color:var(--muted)}\n"
 ".ctbl .empty{text-align:center;color:var(--muted)}\n"
+/* [METER] 데이터 유무와 무관하게 3채널 카드 높이 동일하게 — 고정 레이아웃(값 폭에 라벨이 눌려 줄바꿈→카드 커짐/리플로우 방지) */
+".mtbl{table-layout:fixed}\n"
+".mtbl th:first-child,.mtbl td:first-child{width:40%}\n"
+".mtbl td.rk{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n"
 ".cmeta{margin-top:8px;font-size:11px;color:var(--muted);font-family:'Consolas',monospace}\n"
 ".hsub{font-size:11px;color:var(--muted);font-weight:700;margin:10px 0 4px}\n"
 ".ctbl.hsm td,.ctbl.hsm th{padding:3px 5px;font-size:11px}\n"
@@ -1512,7 +1589,7 @@ static const char INDEX_HTML[] =
 "var CT2M={0:'5A',1:'100mA/333mV',2:'Rogowski'},ZCTM={1:'200mV:100mV',2:'200mV:1.5mA',3:'200mV:0.1mA'},DIM={0:'DI',1:'PI'},DIRM={0:'+',1:'-'};\n"
 "var PT_F=[{o:0,l:'Wiring Mode',t:'u16',opt:WM},{o:2,l:'V Nominal',t:'u32'},{o:4,l:'PT1',t:'u32'},{o:6,l:'PT2',t:'u16'}];\n"
 "var CT_F=[{o:0,l:'I Nominal (%)',t:'u16'},{o:1,l:'CT1',t:'u16'},{o:2,l:'CT2',t:'u16',opt:CT2M},{o:3,l:'Turns',t:'u16'},{o:4,l:'Start I',t:'u16',sc:1000},{o:5,l:'CT1 Dir',t:'u16',opt:DIRM},{o:6,l:'CT2 Dir',t:'u16',opt:DIRM},{o:7,l:'CT3 Dir',t:'u16',opt:DIRM},{o:8,l:'Rogowski',t:'u16'},{o:9,l:'Phase Ofs 1',t:'i16'},{o:10,l:'Phase Ofs 2',t:'i16'},{o:11,l:'Phase Ofs 3',t:'i16'},{o:12,l:'ZCT Type',t:'u16',opt:ZCTM},{o:13,l:'ZCT Scale',t:'u16'}];\n"
-"var CMDS=[{g:'System',l:'Reboot',addr:7448,danger:1,note:'reboot'},{g:'System',l:'Save Set',addr:7449},{g:'System',l:'Init Settings',addr:7463,danger:2},{g:'System',l:'Set Time',addr:7438,utc:1}];\n"
+"var CMDS=[{g:'System',l:'Reboot',addr:7448,danger:1,note:'reboot'},{g:'System',l:'Save Set',addr:7449},{g:'System',l:'Init Settings',addr:7464,danger:2},{g:'System',l:'Set Time',addr:7438,utc:1}];\n"
 "var MAIN_TABS=[['general','General'],['pt','PT'],['ct','CT'],['command','Command']];\n"
 "var CHAN_TABS=[['pqevent','PQ Event'],['transient','Transient'],['waveform','Waveform'],['disturb','Disturbance'],['trend','Trend'],['pqreport','PQ Report'],['almdef','Alarm Def'],['alarm','Alarm Settings']];\n"
 "var setMode='main';\n"
@@ -1559,18 +1636,28 @@ static const char INDEX_HTML[] =
 "function loadGroup(kind){var cfg=(kind==='pt')?{base:7172,step:8,fields:PT_F,ti:'PT'}:{base:7244,step:16,fields:CT_F,ti:'CT'};\n"
 " var _npt=NCH*3;\n"
 " return j('/api/regs?addr='+cfg.base+'&n='+(cfg.step*_npt)).then(function(r){if(!r.d.ok){$('setBody').innerHTML=\"<p class='stub'>load error</p>\";return;}var wds=r.d.words,s,sb,so;\n"
-"  var h=\"<div class='settbl-wrap'><table class='settbl'><thead><tr><th>\"+cfg.ti+'</th>';cfg.fields.forEach(function(f){h+='<th>'+esc(f.l)+'</th>';});h+='</tr></thead><tbody>';\n"
+"  var h;\n"
+"  if(kind==='ct'){\n"
+"   h=\"<div class='setgrid'>\";\n"
+"   for(s=0;s<_npt;s++){sb=cfg.base+s*cfg.step;so=s*cfg.step;h+=\"<div class='setcard'><h3>CT #\"+(s+1)+'</h3>';cfg.fields.forEach(function(f){h+=\"<div class='srow'><span class='sk'>\"+esc(f.l)+\"</span><span>\"+grpCtl(f,sb+f.o,decodeF(wds,so+f.o,f.t))+'</span></div>';});h+='</div>';}\n"
+"   h+='</div>';$('setBody').innerHTML=h;sn('Save & Apply.');return;}\n"
+"  h=\"<div class='settbl-wrap'><table class='settbl'><thead><tr><th>\"+cfg.ti+'</th>';cfg.fields.forEach(function(f){h+='<th>'+esc(f.l)+'</th>';});h+='</tr></thead><tbody>';\n"
 "  for(s=0;s<_npt;s++){sb=cfg.base+s*cfg.step;so=s*cfg.step;h+=\"<tr><td class='rk'>#\"+(s+1)+'</td>';cfg.fields.forEach(function(f){h+='<td>'+grpCtl(f,sb+f.o,decodeF(wds,so+f.o,f.t))+'</td>';});h+='</tr>';}\n"
 "  h+='</tbody></table></div>';$('setBody').innerHTML=h;sn('Save & Apply.');});}\n"
 "function tgtOpts(id){var s=\"<select id='t_\"+id+\"' style='width:80px'><option value='0'>ALL</option>\";for(var t=1;t<=NCH;t++)s+=\"<option value='\"+t+\"'>#\"+t+'</option>';return s+'</select>';}\n"
 "function loadCommand(){var gr={},od=[];CMDS.forEach(function(c){if(!gr[c.g]){gr[c.g]=[];od.push(c.g);}gr[c.g].push(c);});var h='';\n"
 " od.forEach(function(g){h+=\"<div class='setcard'><h3>\"+g+'</h3>';gr[g].forEach(function(c){var gi=CMDS.indexOf(c),id='c'+gi,ctl='';\n"
-"  if(c.utc)ctl=\"<input type='datetime-local' step='1' id='u_\"+id+\"' style='width:230px'>\";else if(c.tgt)ctl=tgtOpts(id);\n"
+"  if(c.utc)ctl=\"<input lang='en-US' type='datetime-local' step='1' id='u_\"+id+\"' style='width:230px'>\";else if(c.tgt)ctl=tgtOpts(id);\n"
 "  h+=\"<div class='srow'><span class='sk'>\"+c.l+\"</span><span style='display:flex;gap:8px;align-items:center'>\"+ctl+\"<button class='btn\"+(c.danger?' warn':'')+\"' \"+(IS_ADMIN?'':'disabled')+\" onclick='runCmd(\"+gi+\")'>Run</button></span></div>\";});h+='</div>';});\n"
+" if(IS_ADMIN)h+=\"<div class='setcard'><h3>Firmware Update</h3><div class='srow'><span class='sk'>File (.bin)</span><span style='display:flex;gap:8px;align-items:center'><input type='file' id='fwFile' accept='.bin' style='display:none' onchange='fwFileSel()'><button class='btn' \"+(IS_ADMIN?'':'disabled')+\" onclick='fwPick()'>Choose File</button><span id='fwFName' style='color:var(--muted)'>No file selected</span></span></div><div class='srow'><span class='sk'>Status</span><span class='sv' id='fwStat'>-</span></div><div class='srow'><span></span><span style='display:flex;gap:8px'><button class='btn' \"+(IS_ADMIN?'':'disabled')+\" onclick='fwUpload()'>Upload</button><button class='btn warn' id='fwApplyBtn' disabled onclick='fwApply()'>Apply &amp; Reboot</button></span></div></div>\";\n"
 " $('setBody').innerHTML=\"<div class='setgrid'>\"+h+'</div>';$('setNote').textContent=IS_ADMIN?'Reboot/Init.':'Viewer: no execute.';\n"
 " $('setBody').querySelectorAll('[type=datetime-local]').forEach(function(e){e.value=fdt(new Date()).replace(' ','T');});}\n"
 "function waitReboot(){var tr=0;setTimeout(function pl(){tr++;fetch('/api/me',{cache:'no-store'}).then(function(){location.reload();}).catch(function(){if(tr<40)setTimeout(pl,2000);else location.reload();});},8000);}\n"
 "function cmdDone(r,c){if(r.s===403){alert('Admin only');return;}if(!r.d.ok){alert('Command failed');return;}setRes(c.l+' done');if(c.note==='reboot'){$('setNote').textContent='Rebooting...';waitReboot();}}\n"
+"function fwPick(){$('fwFile').click();}\n"
+"function fwFileSel(){var fi=$('fwFile'),n=(fi&&fi.files&&fi.files[0])?fi.files[0].name:'No file selected';$('fwFName').textContent=n;var ab=$('fwApplyBtn');if(ab)ab.disabled=true;var e=$('fwStat');if(e){e.textContent='-';e.style.color='';}}\n"
+"function fwUpload(){if(!IS_ADMIN){alert('Admin only');return;}var fi=$('fwFile'),f=fi&&fi.files&&fi.files[0];if(!f){alert('Select a .bin file');return;}var e=$('fwStat');e.textContent='uploading '+((f.size/1024)|0)+' KB...';e.style.color='';fetch('/api/fwupload',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:f}).then(function(rs){return rs.json().then(function(d){return{s:rs.status,d:d};},function(){return{s:rs.status,d:null};});}).then(function(r){if(r.s===403){e.textContent='Admin only';e.style.color='var(--bad)';return;}var ab=$('fwApplyBtn');if(r.d&&r.d.ok&&r.d.valid){e.textContent='uploaded & valid, '+((r.d.size/1024)|0)+' KB';e.style.color='var(--ok)';if(ab)ab.disabled=false;}else{e.textContent='failed'+(r.d&&r.d.error?': '+r.d.error:'')+(r.d&&r.d.err!==undefined&&r.d.err!==0?' (sign err '+r.d.err+')':'');e.style.color='var(--bad)';if(ab)ab.disabled=true;}}).catch(function(){e.textContent='upload error';e.style.color='var(--bad)';});}\n"
+"function fwApply(){if(!IS_ADMIN){alert('Admin only');return;}if(!confirm('Apply uploaded usrApp.bin and reboot?\\nDevice will reflash firmware via bootloader.'))return;$('setNote').textContent='Validating firmware...';jp('/api/fwapply',{}).then(function(r){if(r.s===403){alert('Admin only');$('setNote').textContent='';return;}if(!r.d.ok){alert('Apply failed (err '+(r.d.err!==undefined?r.d.err:'?')+').\\nUpload a valid usrApp.bin first.');$('setNote').textContent='';return;}$('setNote').textContent='Firmware apply: rebooting & flashing...';waitReboot();});}\n"
 /* Feeder */
 "function fbadge(w){return `<span class='wb'>${WM[w]||('mode '+w)}</span>`;}\n"
 "function kv(k,v,u){return `<div class='kvi'><span class='kk'>${k}</span><span class='kvv'>${v}<small> ${u}</small></span></div>`;}\n"
@@ -1601,7 +1688,7 @@ static const char INDEX_HTML[] =
 "function r4(nm,a,d){return `<tr><td class='rk'>${nm}</td><td>${n(a[0],d)}</td><td>${n(a[1],d)}</td><td>${n(a[2],d)}</td><td>${n(a[3],d)}</td></tr>`;}\n"
 "function r3(nm,a,d){return `<tr><td class='rk'>${nm}</td><td>${n(a[0],d)}</td><td>${n(a[1],d)}</td><td>${n(a[2],d)}</td><td></td></tr>`;}\n"
 "function rs(nm,v,d){return `<tr><td class='rk'>${nm}</td><td></td><td></td><td></td><td>${n(v,d)}</td></tr>`;}\n"
-"function bMeter(x){var h=\"<table class='ctbl'><tr><th></th><th>L1</th><th>L2</th><th>L3</th><th>Total/Avg</th></tr>\";\n"
+"function bMeter(x){var h=\"<table class='ctbl mtbl'><tr><th></th><th>L1</th><th>L2</th><th>L3</th><th>Total/Avg</th></tr>\";\n"
 " h+=rs('Frequency (Hz)',x.freq,2)+rs('Temp (&deg;C)',x.temp,1)+r4('U (V)',x.u,1)+r4('U L-L (V)',x.upp,1);\n"
 " h+=rs('U unbal Uu (%)',x.uu,2)+rs('U unbal Uo (%)',x.uo,2);\n"
 " h+=rs('U Zero Seq Mag',x.uzs[0],2)+rs('U Zero Seq Ang',x.uzs[1],1)+rs('U Pos Seq Mag',x.ups[0],2)+rs('U Pos Seq Ang',x.ups[1],1)+rs('U Neg Seq Mag',x.uns[0],2)+rs('U Neg Seq Ang',x.uns[1],1);\n"
@@ -1690,21 +1777,21 @@ static const char INDEX_HTML[] =
 " h+=\"<table class='ctbl'><tr><th>Type</th><th>Start Time</th><th>Dur(ms)</th><th>Phase</th><th>Level</th></tr>\";\n"
 " if(!el.length)h+=\"<tr><td colspan='5' class='empty'>No events</td></tr>\";el.forEach(function(e){var t=ET[e.type]||['#'+e.type,'oc'],ph=[];if(e.mask&1)ph.push('L1');if(e.mask&2)ph.push('L2');if(e.mask&4)ph.push('L3');h+=`<tr><td><span class='evt ${t[1]}'>${t[0]}</span></td><td class='ts'>${ts2(e.ts)}</td><td>${e.dur}</td><td>${ph.join(',')||'-'}</td><td>${n(e.level,2)}</td></tr>`;});return h+'</table>';}\n"
 "function wrCmd(a,v){if(!IS_ADMIN){alert('Admin only');return;}jp('/api/setreg',{addr:a,type:'u16',val:v}).then(function(){setTimeout(pollLoop,300);});}\n"
-"function pgAlarm(n,c){wrCmd(7489+n,c);}\n"
-"function clrAlarm(n){if(confirm('Clear Alarm CH'+n+'?'))wrCmd(7477+n,4660);}\n"
-"function pgEvent(n,c){wrCmd(7485+n,c);}\n"
-"function clrEvent(n){if(confirm('Clear Event CH'+n+'?'))wrCmd(7481+n,4660);}\n"
-"function pgItic2(n,c){wrCmd(7502,c);}\n"
+"function pgAlarm(n,c){wrCmd(7490+n,c);}\n"
+"function clrAlarm(n){if(confirm('Clear Alarm CH'+n+'?'))wrCmd(7478+n,4660);}\n"
+"function pgEvent(n,c){wrCmd(7486+n,c);}\n"
+"function clrEvent(n){if(confirm('Clear Event CH'+n+'?'))wrCmd(7482+n,4660);}\n"
+"function pgItic2(n,c){wrCmd(7503,c);}\n"
 "function clrBtn(fn,n){return IS_ADMIN?\"<div class='pgctl'><button class='btn warn' onclick='\"+fn+\"(\"+n+\")'>Clear</button></div>\":'';}\n"
-"function clrMinmax(n){if(confirm('Clear Min/Max CH'+n+'?'))wrCmd(7469+n,4660);}\n"
-"function clrEnergy(n){if(confirm('Clear Energy CH'+n+'?'))wrCmd(7473+n,4660);}\n"
-"function clrDemand(n){if(confirm('Clear Demand CH'+n+'?'))wrCmd(7465+n,4660);}\n"
-"function ackAlarm(n){wrCmd(7493+n,4660);}\n"
-"function ackEvent(n){wrCmd(7497+n,4660);}\n"
-"function clearPI(){if(confirm('Clear PI?'))wrCmd(7464,4660);}\n"
+"function clrMinmax(n){if(confirm('Clear Min/Max CH'+n+'?'))wrCmd(7470+n,4660);}\n"
+"function clrEnergy(n){if(confirm('Clear Energy CH'+n+'?'))wrCmd(7474+n,4660);}\n"
+"function clrDemand(n){if(confirm('Clear Demand CH'+n+'?'))wrCmd(7466+n,4660);}\n"
+"function ackAlarm(n){wrCmd(7494+n,4660);}\n"
+"function ackEvent(n){wrCmd(7498+n,4660);}\n"
+"function clearPI(){if(confirm('Clear PI?'))wrCmd(7465,4660);}\n"
 "var egyEd=0,egyD=null;\n"
 "function egyRender(){if(!egyD)return;var b=IS_ADMIN?(egyEd?\"<div class='pgctl'><button class='btn primary' onclick='egyWr()'>Write</button><button class='btn' onclick='egyEd=0;egyRender()'>Cancel</button></div>\":\"<div class='pgctl'><button class='btn' onclick='egyEd=1;egyRender()'>Edit</button></div>\"):'';$('chbody').innerHTML=chCards(egyD.now,function(x){var lg=egyD.log.filter(function(e){return e.n===x.n;})[0];return b+(egyEd?'':clrBtn('clrEnergy',x.n))+bEgyNow(x,egyEd)+(lg?bEgyLog(lg):'');});}\n"
-"function egyWr(){var els=document.querySelectorAll('#chbody .ein'),c=[],i=0,chs={};els.forEach(function(e){if(e.value!==e.getAttribute('data-o'))c.push(e);});if(!c.length){egyEd=0;egyRender();return;}(function w(){if(i>=c.length){Object.keys(chs).forEach(function(ch){wrCmd(7473+parseInt(ch),0x5678);});if(confirm('Save energy edit to FLASH now? (OK=persist via Save Set / Cancel=RAM only, revert on reboot)'))setTimeout(function(){wrCmd(7449,0x1234);},1200);egyEd=0;setTimeout(pollLoop,400);return;}var e=c[i++],v=Math.round(parseFloat(e.value)*10);if(!isFinite(v)||v<0)v=0;var a=+e.getAttribute('data-a');chs[Math.floor(a/10000)+1]=1;jp('/api/setreg',{addr:a,type:'u32',val:v}).then(w).catch(w);})();}\n"
+"function egyWr(){var els=document.querySelectorAll('#chbody .ein'),c=[],i=0,chs={};els.forEach(function(e){if(e.value!==e.getAttribute('data-o'))c.push(e);});if(!c.length){egyEd=0;egyRender();return;}(function w(){if(i>=c.length){Object.keys(chs).forEach(function(ch){wrCmd(7474+parseInt(ch),0x5678);});if(confirm('Save energy edit to FLASH now? (OK=persist via Save Set / Cancel=RAM only, revert on reboot)'))setTimeout(function(){wrCmd(7449,0x1234);},1200);egyEd=0;setTimeout(pollLoop,400);return;}var e=c[i++],v=Math.round(parseFloat(e.value)*10);if(!isFinite(v)||v<0)v=0;var a=+e.getAttribute('data-a');chs[Math.floor(a/10000)+1]=1;jp('/api/setreg',{addr:a,type:'u32',val:v}).then(w).catch(w);})();}\n"
 "function pbar(fn,n,cf,af){if(!IS_ADMIN)return '';var s=\"<div class='pgctl'>\",L=[[3,'&#8593;&#8593; Top'],[2,'&#8593; Up'],[1,'&#8595; Down'],[4,'&#8595;&#8595; Bottom']];L.forEach(function(t){s+=\"<button class='btn' onclick='\"+fn+\"(\"+n+\",\"+t[0]+\")'>\"+t[1]+\"</button>\";});if(af)s+=\"<button class='btn' onclick='\"+af+\"(\"+n+\")'>Ack</button>\";if(cf)s+=\"<button class='btn warn' onclick='\"+cf+\"(\"+n+\")'>Clear</button>\";return s+'</div>';}\n"
 "function bItic(list,title,fn){var h=\"<div class='hsub'>\"+title+\"</div>\"+pbar(fn,1)+\"<table class='ctbl'><tr><th>Type</th><th>Start Time</th><th>Dur(ms)</th><th>Phase</th><th>Level</th></tr>\";\n"
 " if(!list||!list.length)h+=\"<tr><td colspan='5' class='empty'>No data</td></tr>\";(list||[]).forEach(function(e){var t=ET[e.type]||['#'+e.type,'oc'],ph=[];if(e.mask&1)ph.push('L1');if(e.mask&2)ph.push('L2');if(e.mask&4)ph.push('L3');h+=\"<tr><td><span class='evt \"+t[1]+\"'>\"+t[0]+\"</span></td><td class='ts'>\"+ts2(e.ts)+\"</td><td>\"+e.dur+\"</td><td>\"+(ph.join(',')||'-')+\"</td><td>\"+n(e.level,2)+\"</td></tr>\";});return h+'</table>';}\n"
@@ -1803,6 +1890,9 @@ static error_t webRequestCallback(HttpConnection *c, const char_t *uri)
 	if (!strcmp(uri, "/api/sv300/command")) return apiCommand(c);
 	if (!strcmp(uri, "/api/setreg"))        return apiSetReg(c);
 	if (!strcmp(uri, "/api/savecfg"))       return apiSaveCfg(c);
+	if (!strcmp(uri, "/api/fwupload"))      return apiFwUpload(c);
+	if (!strcmp(uri, "/api/fwstatus"))      return apiFwStatus(c);
+	if (!strcmp(uri, "/api/fwapply"))       return apiFwApply(c);
 
 	/* 조회(로그인 필요) */
 	if (!strncmp(uri, "/api/", 5)) {

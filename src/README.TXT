@@ -49,6 +49,10 @@
   1) 파형/THD 근본해결(Quiet Capture: 워커·flash 조용한 창에서만 캡처) + M2 3채널 계측 활성 + THD ~2.6초 갱신
   2) SPI 20MHz 상향 + 칩 1개 실패해도 web/Modbus 통신(10초 폴백, 부분고장 진단 가능)
 
+26/08/24 FW V00.02
+  1) FW 브라우저 업로드(웹 Setup→Command: .bin 선택→검증→Apply→부트로더 굽기, admin) + 명령맵 off-by-one 일괄수정(clear/ack/Init/Clear PI 등 — Clear PI가 factory reset 오동작하던 것 포함)
+  2) 대시보드 PF·CT 모듈카드·메터카드 동일높이·에너지 5분저장·THD 조건부계산(동작전압/전류)·Start I 표시·nTurns 전류비율·ct_dir 위상180°·datetime 영문
+
 
 NOSDMEM : SD MEMORY Y/N
 HWV1 : CH3(METER CHIP SELECT)
