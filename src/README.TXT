@@ -53,6 +53,10 @@
   1) FW 브라우저 업로드(웹 Setup→Command: .bin 선택→검증→Apply→부트로더 굽기, admin) + 명령맵 off-by-one 일괄수정(clear/ack/Init/Clear PI 등 — Clear PI가 factory reset 오동작하던 것 포함)
   2) 대시보드 PF·CT 모듈카드·메터카드 동일높이·에너지 5분저장·THD 조건부계산(동작전압/전류)·Start I 표시·nTurns 전류비율·ct_dir 위상180°·datetime 영문
 
+26/08/25 FW V00.03
+  1) THD 근본개선 — Goertzel(측정주파수) 고조파엔진 적용(CZT 대비 ~15배, 1~63차 단일패스 동시계산)로 비동기DFT 스펙트럼누설 아티팩트 제거·순수입력 THD 정확화. 웹/confWebApp 고조파 표시 10× 오류 수정(스케일 /10→/100)
+  2) 파형왜곡 원인분석(워커 단계시험: RMSLog/PostScan/Energy/Trend/IOM 전원 무죄·THD 무관, M1/M2 WFB가 파형에 약간 커플링) → 정식운전 복원(진단 WV_STAGED OFF·THD 게이트 원복) + 보정 OFF 유지(WV_NO_DESPIKE 신설, 사용자 방침)
+
 
 NOSDMEM : SD MEMORY Y/N
 HWV1 : CH3(METER CHIP SELECT)

@@ -2,22 +2,25 @@
 
 #define	_METER_H
 
-/* [파형 단계검증] 사용자 5단계 계획 — 어느 태스크가 M0 파형을 깨는지 바닥부터 확정.
-   WV_STAGED 정의 시: core(M0/Wave/FFT/web/network)만 기동 + despike off + g_meterReady 강제.
-   아래 WV_EN_*를 하나씩 주석해제하며(재빌드) 검증. M1/M2도 단계적(4·5단계).
-   정식 빌드는 WV_STAGED만 지우면 전체 복원(태스크 게이트는 !WV_STAGED시 전부 ON). */
-#define	WV_STAGED
-#define	WV_EN_RMSLOG	/* RMSLog (EN50160 RMS/품질 로깅, SD쓰기) */
-#define	WV_EN_POST	/* PostScan (후처리 스캔) — RMSLog와 분리 바이섹션용 */
-//#define	WV_EN_DUMMY	/* 순수 CPU 부하 더미(HIGH, I/O없음) — '일반부하 vs 특정I/O' 판별 */
-#define	WV_EN_ENERGY
-#define	WV_EN_TREND
-#define	WV_EN_IOM
-#define	WV_EN_M1
-#define	WV_EN_M2
-//#define	WV_WINDESPIKE	/* A안: 조립윈도우 median despike - 80K서도 과다검출(fix20~69)로 악화, 폐기/보류 */
-#define	WV_QCAP		/* ★Quiet Capture: CPU워커 동시활동이 M0 readWFB 오염 → 2.4s마다 조용창(워커 양보 400ms)에서만 파형/THD 캡처. 실시간 불필요(2~3s 갱신 OK) */
-//#define	WV_NO_M12_WFB	/* [진단] M1/M2 waveform 캡처 skip — 시험결과 M1 disable해도 M0 THD 안 줄어듦(오히려↑) → M1 커플링 아님. 원복. */
+/* [파형 진단 스캐폴딩] WV_STAGED = 진단 마스터 스위치. 정의 시: core(M0/Wave/FFT/web/network)만 기동
+   + 아래 WV_EN_*로 워커/타칩을 하나씩 ON + despike off + g_meterReady 강제. 어느 워커가 M0 파형에
+   커플링하는지 색출용. [결론] 워커 전원 무죄, THD는 전 구간 정상. M1/M2 WFB가 파형에 약간 커플링(THD 무관).
+   ▶ 정식 운전 = WV_STAGED OFF(전체 태스크 자동 ON). 재진단 시 WV_STAGED만 주석해제하면 아래 블록 재활성. */
+//#define	WV_STAGED		/* [정식운전] OFF. 재진단 시 이 줄만 주석해제 */
+#define	WV_NO_DESPIKE		/* [보정 OFF] despike 우회 유지(사용자 방침). despike 켜려면 이 줄 주석 처리 */
+
+/* ↓ WV_STAGED 진단모드 전용 — 정식운전(WV_STAGED OFF)에선 전부 무효. 재진단 시 필요한 것만 주석해제. */
+//#define	WV_EN_RMSLOG
+//#define	WV_EN_POST
+//#define	WV_EN_DUMMY
+//#define	WV_EN_ENERGY
+//#define	WV_EN_TREND
+//#define	WV_EN_IOM
+//#define	WV_EN_M1
+//#define	WV_EN_M2
+//#define	WV_WINDESPIKE	/* A안: 조립윈도우 median despike - 폐기/보류 */
+//#define	WV_QCAP		/* [보정 OFF] Quiet Capture off — raw 파형(사용자 방침). 켜려면 주석해제 */
+//#define	WV_NO_M12_WFB	/* [진단] M1/M2 WFB skip. 정식운전 OFF(=M1/M2 WFB 정상 캡처) */
 
 //#include <LPC43xx.h>
 #include "os_port.h"

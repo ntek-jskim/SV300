@@ -182,27 +182,17 @@ float calcCF(float sample[], int length) {
 
 
 
-/* [고조파 동기 리샘플링] 고정 8ksps 캡처를 측정 기본파의 정수 K사이클로 리샘플 → DFT bin이
-   고조파에 정확히 정렬(비동기 누설 제거). FFT_Task가 채널 주파수(meter.Freq)로 매번 갱신. */
-static int   g_fftK    = N_FFT * 60 / 8000;	/* 리샘플 후 창의 사이클수(=fundamental bin). 기본 60Hz→12 */
-static float g_fftRsmp = 1.0f;				/* 입력→출력 위치 비율(p=j*rsmp), ≤1이라 외삽 없음 */
+/* [Goertzel 측정freq] 리샘플·CZT 폐기 — 고조파를 실측주파수(coeff=2cos(2π·h·f/8000))에서 직접 평가.
+   FFT_prepare는 원시 샘플만 복사. CZT는 FFT_harmonic 폴백(g_fftGoertzel=0)에서만(공칭 bin). */
 
 void FFT_prepare(int32_t sample[], int n) {
 	int i;
 #ifdef WV_QCAP
 	while (g_wfbQuiet) osDelayTask(5);	/* [Quiet Capture] M0 캡처 중엔 무거운 FFT 계산 양보(교란 방지) */
 #endif
-	/* 선형보간 리샘플: 출력 j → 입력 위치 p=j*rsmp. rsmp=1이면 그대로(정확히 공칭주파수). */
+	/* [Goertzel] 리샘플 불필요 — 원시 샘플 그대로(Goertzel이 측정주파수 coeff로 직접 평가). */
 	for (i=0; i<n; i++) {
-		float p; int i0; float fr;
-		p = i * g_fftRsmp;
-		i0 = (int)p;
-		if (i0 >= n-1) {
-			pFFT->xreal[i] = (float)sample[n-1];
-		} else {
-			fr = p - i0;
-			pFFT->xreal[i] = (float)sample[i0] + fr * (float)(sample[i0+1] - sample[i0]);
-		}
+		pFFT->xreal[i] = (float)sample[i];
 		pFFT->ximag[i] = 0;
 	}
 }
@@ -212,19 +202,9 @@ void FFT_prepare_pp(int32_t s1[], int32_t s2[], int n) {
 #ifdef WV_QCAP
 	while (g_wfbQuiet) osDelayTask(5);	/* [Quiet Capture] M0 캡처 중엔 무거운 FFT 계산 양보(교란 방지) */
 #endif
-	/* 선간(s2-s1)도 동일 리샘플. 선형보간 후 차분. */
+	/* [Goertzel] 리샘플 불필요 — 선간(s2-s1) 원시 차분 그대로. */
 	for (i=0; i<n; i++) {
-		float p; int i0; float fr, v1, v2;
-		p = i * g_fftRsmp;
-		i0 = (int)p;
-		if (i0 >= n-1) {
-			v1 = (float)s1[n-1];  v2 = (float)s2[n-1];
-		} else {
-			fr = p - i0;
-			v1 = (float)s1[i0] + fr * (float)(s1[i0+1] - s1[i0]);
-			v2 = (float)s2[i0] + fr * (float)(s2[i0+1] - s2[i0]);
-		}
-		pFFT->xreal[i] = v2 - v1;
+		pFFT->xreal[i] = (float)s2[i] - (float)s1[i];
 		pFFT->ximag[i] = 0;
 	}
 }
@@ -301,7 +281,7 @@ float FFT_postproc(int n, int sel, uint16_t *pHD) {
 	
 	for (i=2; i<=63; i++) {
 	  // harmoics를 각 차수별(2~63)로 %로 환산하여 저장
-		ix = i*g_fftK;			/* [리샘플 동기] i차 고조파 = bin i*K (K=측정 기본파 사이클수) */
+		ix = i*FREQ_HZ(db.freq)/5;	/* [폴백CZT] i차 고조파 = 공칭 bin i*k1(60→12,50→10) */
 		if (ix >= n/2) { pHD[i] = 0; continue; }	/* Nyquist 초과 차수 제외 */
 		if(sel == 2) {
 			if(FREQ_HZ(db.freq)==50)
@@ -334,7 +314,7 @@ float calcKF() {
 	float IhSqSum=0, IhNSqSum=0;
 	int i, ix, res;
 
-	res = g_fftK;					/* [리샘플 동기] 측정 기본파 사이클수 K */
+	res = FREQ_HZ(db.freq)/5;		/* [폴백CZT] 공칭 기본파 bin 간격 k1(60→12,50→10) */
 
 	// irms = h1^2+h2^2+ ....h63^2)
 	for (i=1; i<=63; i++) {
@@ -434,15 +414,101 @@ void fft_average(int id, int cond) {
 
 
 // 10초 단위로 동작 
-void FFT_Task(void) 
+/* ── [Goertzel 측정freq 엔진] 8k 창의 63고조파를 실측 h·f에서 직접 평가(coeff=2cos(2π·h·f/8000)). ──
+   CZT(157ms×9)+리샘플(K-flip) 대체. 단일패스 63고조파 동시갱신, H1정규화, gain OOB회피 h<63.
+   g_fftGoertzel=1(기본), 0=CZT 폴백(공칭 bin). RSTP 검증(CZT==GZ) 기반의 측정주파수 변형. */
+static float g_gzCoeff[64];
+static float g_gzS1[64], g_gzS2[64];
+static float g_gzFreqM = 0;			/* 캐시된 측정주파수(변경시만 계수 재계산) */
+int g_fftGoertzel = 1;
+
+#pragma push
+#pragma O3
+#pragma Otime
+float FFT_goertzel(float sample[], int n, float freq, int sel, uint16_t *pHD) {
+	int h, i, k1 = FREQ_HZ(db.freq)/5, f50 = (FREQ_HZ(db.freq)==50);
+	float mag[64], thd=0, gain, h1;
+	float *cf = g_gzCoeff, *s1 = g_gzS1, *s2 = g_gzS2;
+
+	if (g_gzFreqM != freq) {		/* 측정주파수 변경시만: 각 고조파를 실측 h·f에서 평가(리샘플 불요) */
+		for (h=1; h<=63; h++)
+			cf[h] = 2.0f * (float)cos(2.0*PI*(double)h*(double)freq/8000.0);
+		g_gzFreqM = freq;
+	}
+	for (h=1; h<=63; h++) { s1[h]=0; s2[h]=0; }
+	for (i=0; i<n; i++) {			/* [CM4최적화] 샘플 1회 읽고 63고조파 동시 갱신 */
+		float x = sample[i];
+		for (h=1; h<=63; h++) {
+			float s0 = x + cf[h]*s1[h] - s2[h];
+			s2[h] = s1[h]; s1[h] = s0;
+		}
+	}
+	for (h=1; h<=63; h++)
+		mag[h] = (float)sqrt((double)(s1[h]*s1[h] + s2[h]*s2[h] - cf[h]*s1[h]*s2[h]));
+	h1 = (mag[1] > 0) ? mag[1] : 1;	/* H1(기본파) 정규화 */
+	for (h=1; h<=63; h++) { mag[h] /= h1; pFFT->amp[h*k1] = mag[h]; }	/* amp[]=calcKF용(공칭 bin 인덱스) */
+	for (h=2; h<63; h++) {			/* THD/HD (postproc 동일 공식, gain OOB 회피 h<63) */
+		gain = (sel==2) ? (f50 ? i_harm_gain[0][h] : i_harm_gain[1][h])
+		                : (f50 ? v_harm_gain[0][h] : v_harm_gain[1][h]);
+		thd += mag[h]*mag[h]*gain*gain;
+		pHD[h] = (uint16_t)(mag[h]*gain*10000);
+	}
+	thd = (float)sqrt((double)thd);
+	pHD[0] = (uint16_t)(thd*10000);
+	pHD[1] = 0;
+	pHD[63] = 0;					/* 63차는 gain 배열([63]=0~62) 없음 → 0 */
+	return thd;
+}
+#pragma pop
+
+/* Goertzel vs CZT 검증: 합성 고조파 주입 → 대조 (shell 'FFTTEST [50|60]') */
+static int32_t s_fftTest[N_FFT] __attribute__((section("EXT_RAM"), zero_init));
+void fft_goertzel_test(int freq) {
+	uint16_t hdc[70], hdg[70];
+	float thc, thg;
+	int i, sf;
+	uint64_t tc0, tc1, tg0, tg1;
+
+	for (i=0; i<N_FFT; i++) {		/* 8ksps: H1=10000, H3=1000(10%), H5=500(5%), H7=300(3%) */
+		double t = (double)i / 8000.0;
+		s_fftTest[i] = (int32_t)( 10000.0*sin(2*PI*freq*t) + 1000.0*sin(2*PI*3*freq*t)
+		                        +   500.0*sin(2*PI*5*freq*t) +  300.0*sin(2*PI*7*freq*t) );
+	}
+	sf = db.freq; db.freq = (freq==50) ? 1 : 0;
+	FFT_prepare(s_fftTest, N_FFT);
+	tg0 = sysTick64;
+	thg = FFT_goertzel(pFFT->xreal, N_FFT, (float)freq, 0, hdg)*100;	/* Goertzel 먼저(xreal 유지) */
+	tg1 = sysTick64;
+	tc0 = sysTick64;
+	FFT_czt(pFFT->xreal, pFFT->ximag, N_FFT, M_FFT);				/* xreal 덮어씀 */
+	thc = FFT_postproc(N_FFT, 0, hdc)*100;
+	tc1 = sysTick64;
+	db.freq = sf;
+
+	printf("\n=== FFT test freq=%d (H3=10%% H5=5%% H7=3%%, 단위 0.01%%) ===\n", freq);
+	printf("       H3    H5    H7    THD\n");
+	printf("CZT : %5u %5u %5u %5u\n", hdc[3], hdc[5], hdc[7], (unsigned)(thc*100));
+	printf("GZ  : %5u %5u %5u %5u\n", hdg[3], hdg[5], hdg[7], (unsigned)(thg*100));
+	printf("time: CZT=%ums  GZ=%ums (채널당). CZT==GZ 여야 정상\n", (unsigned)(tc1-tc0), (unsigned)(tg1-tg0));
+}
+
+/* 고조파/THD 엔진 스위치. sel:0=U,1=Upp,2=I. fMeas=측정주파수. 입력=pFFT->xreal(FFT_prepare가 채움). */
+static float FFT_harmonic(int sel, uint16_t *pHD, float fMeas) {
+	if (g_fftGoertzel)
+		return FFT_goertzel(pFFT->xreal, N_FFT, fMeas, sel, pHD);	/* [기본] Goertzel 측정freq */
+	FFT_czt(pFFT->xreal, pFFT->ximag, N_FFT, M_FFT);	/* [폴백] CZT 공칭 bin */
+	return FFT_postproc(N_FFT, sel, pHD);
+}
+
+void FFT_Task(void)
 {
 	METERING  *pmeter= &meter[0].meter;
 	CNTL_DATA	*pcntl = &meter[0].cntl;
 	HARMONICS *pHD   = &meter[0].hd;
 	uint32_t i, j, k, ix=0, laststat=0;//, et1, et2;
 //	WAVE_8K_BUF *pwb = &wbFFT8k;
-	float thd;
-	uint64_t t1, t2;	
+	float thd, fMeas;
+	uint64_t t1, t2;
 	int id = 0;
 
 	printf("FFT_CZT:%x, size=%d\n", (uint32_t)pFFT, sizeof(*pFFT));
@@ -470,20 +536,9 @@ void FFT_Task(void)
 			pcntl  = &meter[id].cntl;
 			pHD    = &meter[id].hd;
 
-			/* [고조파 동기 리샘플링] 측정 기본파(meter.Freq)로 K사이클·리샘플비 계산.
-			   C=창의 사이클수(N_FFT*f/8000), K=floor(C)(정수사이클→외삽없음, ≤1 비율),
-			   bin i차=i*K. 주파수 이상(45~65Hz 밖)이면 공칭으로 폴백(리샘플 없음). */
-			{
-				float f = pmeter->Freq;
-				if (f >= 45.0f && f <= 65.0f) {
-					float C = (float)N_FFT * f / 8000.0f;
-					g_fftK    = (int)C;			/* floor */
-					g_fftRsmp = (float)g_fftK / C;	/* ≤ 1.0 */
-				} else {
-					g_fftK    = FREQ_HZ(db.freq) * N_FFT / 8000;	/* 공칭(60→12, 50→10) */
-					g_fftRsmp = 1.0f;
-				}
-			}
+			/* [Goertzel 측정freq] 채널 측정 기본파(45~65Hz면 실측, 밖이면 공칭)로 각 고조파를
+			   h·f에서 직접 평가(리샘플 없음). FFT_harmonic에 fMeas 전달. */
+			fMeas = (pmeter->Freq >= 45.0f && pmeter->Freq <= 65.0f) ? pmeter->Freq : (float)FREQ_HZ(db.freq);
 
 			// 계산시간 : 160 ms/phase, U/Upp/I 모두 처리하는데  1440ms 소요된다
 
@@ -503,8 +558,8 @@ void FFT_Task(void)
 				else {
 					FFT_prepare(wbFFT8k[id].U[k], N_FFT);
 					pmeter->CF_U[i] = calcCF(pFFT->xreal, N_FFT);
-					FFT_czt(pFFT->xreal, pFFT->ximag, N_FFT, M_FFT);	// 157 ms
-					pmeter->THD_U[i] = FFT_postproc(N_FFT, 0, pHD->U[i])*100;
+					/* CZT 직접호출 제거 — 고조파는 아래 FFT_harmonic(Goertzel 측정freq). CZT는 폴백(g_fftGoertzel=0)시 내부에서만 */
+					pmeter->THD_U[i] = FFT_harmonic(0, pHD->U[i], fMeas)*100;	// Goertzel 측정freq
 				}
 			}
 
@@ -529,8 +584,8 @@ void FFT_Task(void)
 					else {
 						FFT_prepare_pp(wbFFT8k[id].U[i], wbFFT8k[id].U[(i+1)%3], N_FFT);
 						pmeter->CF_Upp[i] = calcCF(pFFT->xreal, N_FFT);
-						FFT_czt(pFFT->xreal, pFFT->ximag, N_FFT, M_FFT);	// 157 ms
-						pmeter->THD_Upp[i] = FFT_postproc(N_FFT, 1, pHD->Upp[i])*100;
+						/* CZT 직접호출 제거 — 고조파는 아래 FFT_harmonic(Goertzel 측정freq). CZT는 폴백(g_fftGoertzel=0)시 내부에서만 */
+						pmeter->THD_Upp[i] = FFT_harmonic(1, pHD->Upp[i], fMeas)*100;	// Goertzel 측정freq
 					}
 				}
 			}
@@ -561,8 +616,8 @@ void FFT_Task(void)
 					float nt, nh, ih;	// nt:단위토탈전류, nh:단위고조파전류, ih:실효고조파전류
 					FFT_prepare(wbFFT8k[id].I[i], N_FFT);				
 					pmeter->CF_I[i] = calcCF(pFFT->xreal, N_FFT);
-					FFT_czt(pFFT->xreal, pFFT->ximag, N_FFT, M_FFT);	// 157 ms				
-					pmeter->THD_I[i] = FFT_postproc(N_FFT, 2, pHD->I[i])*100;	// 단위 고조파 전류
+					/* CZT 직접호출 제거 — 고조파는 아래 FFT_harmonic(Goertzel 측정freq). CZT는 폴백(g_fftGoertzel=0)시 내부에서만 */				
+					pmeter->THD_I[i] = FFT_harmonic(2, pHD->I[i], fMeas)*100;	// Goertzel 측정freq, 단위 고조파 전류
 					pmeter->KF_I[i] = calcKF();			
 				}
 			}			

@@ -2085,7 +2085,7 @@ void readWFB_Data(int id)
 	SSP_SSEL_Mode(id, 0);
 	ssp1WfbUnlock(id == 0 ? 0 : 1);	/* [파형 A수정] 순차 버스트 락 해제 */
 
-#ifndef WV_STAGED	/* [단계검증] despike 우회 — 생 파형으로 각 단계 영향 관찰 */
+#if !defined(WV_STAGED) && !defined(WV_NO_DESPIKE)	/* despike. WV_STAGED(진단) 또는 WV_NO_DESPIKE(보정 OFF 방침) 시 우회 */
 	/* [2층 마감] ①위 96워드 읽기 = 근본수정(0xC00 spill 원천 제거). ②아래 despike = 잔여 정리:
 	   readWFB 외 SPI·M1/M2 SSP1 커플링으로 남는 스파이크를 소스 wb 링에서 median 검출→복구(파형·FFT·
 	   고조파 함께 반영). 복구식이 핵심 — 단일샘플은 2차 포물선 (4(x-1+x+1)-(x-2+x+2))/6 로 라인·봉우리
@@ -2123,7 +2123,7 @@ void readWFB_Data(int id)
 			}
 		}
 	}
-#endif	/* WV_STAGED: despike 우회 */
+#endif	/* despike (WV_STAGED 또는 WV_NO_DESPIKE 시 우회) */
 
 //	// 8 page 모두 읽은 후 transient task에 알린다
 //	if (tid_app[id] != 0) {

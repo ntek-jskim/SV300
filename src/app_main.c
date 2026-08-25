@@ -680,7 +680,7 @@ void app_init(void *params) {
 #endif
    	}
 
-#if defined(WV_STAGED) && 0	/* [A안으로 대체] 강제해제 비활성 — g_meterReady 게이트가 10초 타임아웃으로 자율해제(부분고장 포함). 강제하면 A안 폴백이 안 돌아감. */
+#if defined(WV_STAGED) && !defined(WV_EN_RMSLOG)	/* RMSLog(=g_meterReady 세터)를 끈 단계시험에선 강제 세팅해 web/Modbus 살림. RMSLog 켜지면 기존 A안 폴백(10초 타임아웃) 정상 동작 */
 	{ extern volatile uint8_t g_meterReady; g_meterReady = 1; }
 #endif
 

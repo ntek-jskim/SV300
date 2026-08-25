@@ -675,6 +675,29 @@ static void cmd_macset(char *par) {
 }
 
 
+static void cmd_thd(char *par) {			/* THD 진단: online·U(RMS)·THD·wbFFT8k(fr/re)로 어디서 끊기는지 확인 */
+	int i;
+	extern WAVE_8K_BUF wbFFT8k[];
+	for (i=0; i<ACTIVE_METER_CH_COUNT; i++) {
+		METERING *m = &meter[i].meter;
+		HARMONICS *h = &meter[i].hd;
+		printf("M%d F=%.2f on=%d U=%.1f/%.1f/%.1f THD_U=%.2f/%.2f/%.2f fr=%d re=%d | Uh2=%.2f h50=%.2f\n",
+			i, m->Freq, meter[i].cntl.online, m->U[0], m->U[1], m->U[2],
+			m->THD_U[0], m->THD_U[1], m->THD_U[2],
+			wbFFT8k[i].fr, wbFFT8k[i].re, h->U[0][2]/100.0, h->U[0][50]/100.0);
+	}
+}
+
+static void cmd_fftTest(char *par) {			/* FFTTEST [50|60]: Goertzel vs CZT 대조·시간(기본 60) */
+	char *p, *next;
+	extern void fft_goertzel_test(int freq);
+	int freq = 60;
+
+	p = get_entry (par, &next);
+	if (p != NULL && atoi(p) == 50) freq = 50;
+	fft_goertzel_test(freq);
+}
+
 static void cmd_hwModel(char *par) {
 	char *p, *next;
 
@@ -1054,6 +1077,8 @@ static const SCMD cmd[] = {
 	"SNSET", cmd_macset,
 	"MODEL", cmd_hwModel,
 //	"HWMODEL", cmd_hwModel,
+	"FFTTEST", cmd_fftTest,			/* Goertzel vs CZT 고조파/시간 대조(검증) */
+	"THD", cmd_thd,				/* THD/전압고조파 즉시출력(태스크 단계시험용) */
 	"HWVER", cmd_hwVersion,
 //	"GWENABLE", cmd_gwEnable,
 	"DEVINFO", cmd_devInfo,

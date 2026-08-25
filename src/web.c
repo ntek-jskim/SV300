@@ -615,7 +615,7 @@ static error_t apiHarmonics(HttpConnection *c)
 		w(c, b);
 		for (ph = 0; ph < 3; ph++) {
 			w(c, ph ? ",[" : "[");
-			for (o = 2; o <= 63; o++) { snprintf(b, sizeof(b), "%s%.1f", o > 2 ? "," : "", arr[ph][o] / 10.0f); w(c, b); }
+			for (o = 2; o <= 63; o++) { snprintf(b, sizeof(b), "%s%.1f", o > 2 ? "," : "", arr[ph][o] / 100.0f); w(c, b); }	/* hd=비율×10000=%×100 → /100=% (기존 /10은 10×오류) */
 			w(c, "]");
 		}
 		w(c, "]}");

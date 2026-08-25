@@ -12,10 +12,10 @@
 #include "crc.h"
 #include "alarm.h"
 
-#define	FW_VER	0002
+#define	FW_VER	0003
 #define	FW_BUILD_YEAR 26
 #define	FW_BUILD_MON  8
-#define	FW_BUILD_DAY  24
+#define	FW_BUILD_DAY  25
 
 #define	SQRT_2	 1.414213562 
 
@@ -4893,6 +4893,7 @@ void Meter0_Task(void *param)
 	
 	
 	memset(&wQ[id], 0, sizeof(wQ[id]));
+	wQ[id].hs = 0;	// 8ksps
 	
 	wbFFT8k[id].fr = wbFFT8k[id].re = 0;
 
