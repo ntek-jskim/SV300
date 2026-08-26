@@ -999,7 +999,6 @@ typedef struct {
 
 /* card: 0=Device Information, 1=Communication, 2=ETC, 3=Status */
 static const GField GEN[] = {
-	{ "name",            "Name",                 7134, WT_STR,    0, 1, 16 },
 	{ "serial",          "Serial Number",        7070, WT_SERIAL, 0, 1, 0 },
 	{ "mac",             "MAC Address",          7076, WT_MAC,    0, 1, 0 },
 	{ "hw_version",      "HW Version",           7086, WT_U16,    0, 1, 0 },
@@ -1178,7 +1177,6 @@ static const char INDEX_HTML[] =
 ".mono{font-family:'Consolas',monospace}\n"
 /* topbar */
 ".topbar{display:flex;align-items:center;gap:20px;padding:10px 18px;background:var(--panel);border-bottom:1px solid var(--line)}\n"
-".brand{font-weight:800;font-size:17px;color:var(--accent);letter-spacing:.3px}\n"
 ".topbar nav{display:flex;gap:14px}.topbar nav a{color:var(--fg);padding:4px 8px;border-radius:6px;cursor:pointer}\n"
 ".topbar nav a:hover{background:var(--panel2);text-decoration:none}\n"
 ".topbar nav a.on{background:var(--panel2);color:#fff;box-shadow:inset 0 -2px 0 var(--accent)}\n"
@@ -1373,7 +1371,6 @@ static const char INDEX_HTML[] =
 /* ---------- app view ---------- */
 "<div id='v-app' style='display:none'>\n"
 " <header class='topbar'>\n"
-"  <div class='brand'>SV300</div>\n"
 "  <nav>\n"
 "   <a id='nav-dash' class='on' onclick=\"go('dash')\">Dashboard</a>\n"
 "   <a id='nav-feeder' onclick=\"go('feeder')\">Feeder</a>\n"
