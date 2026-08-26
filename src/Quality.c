@@ -837,6 +837,26 @@ int updateQualData(int id)
 	
 	pq10m->count10m++;	// 10분 평균 위한 1s 데이터 카운트	
 	
+	/* [VQ 편차] 실시간 전압 부족/초과 편차 — 공칭전압 db.pt[id].vnorm 기준(EN50160 uLo/uHi와 동일 소스).
+	 *  Flicker(Pi/Pst/Plt)는 IEC 61000-4-15 미구현이라 0 유지(보류). Uuv/Uov=해당조건 시 전압값. */
+	{
+		VQDATA *pvq = &meter[id].vq;
+		float vnorm = (float)db.pt[id].vnorm;
+		float u, dev;
+		for (i = 0; i < 3; i++) {
+			if (pcntl->online && vnorm > 0) {
+				u = pmeter->U[i];
+				dev = (u - vnorm) / vnorm * 100.0f;
+				pvq->Uud[i] = (dev < 0) ? -dev : 0;
+				pvq->Uod[i] = (dev > 0) ?  dev : 0;
+				pvq->Uuv[i] = (dev < 0) ? u : 0;
+				pvq->Uov[i] = (dev > 0) ? u : 0;
+			} else {
+				pvq->Uud[i] = pvq->Uod[i] = pvq->Uuv[i] = pvq->Uov[i] = 0;
+			}
+		}
+	}
+
 	// 주파수 평균 계산위한 summation
 	pqsum->freq += pmeter->Freq;
 	pq10m->count10s++;	
