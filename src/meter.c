@@ -15,7 +15,7 @@
 #define	FW_VER	0003
 #define	FW_BUILD_YEAR 26
 #define	FW_BUILD_MON  8
-#define	FW_BUILD_DAY  25
+#define	FW_BUILD_DAY  28
 
 #define	SQRT_2	 1.414213562 
 
@@ -1450,7 +1450,6 @@ void getTrgFileName(char *title, uint64_t ts, char *buf) {
 // event 발생 위치가 pprev와 pcurr 사이 
 int wavePreCaptureLF(int id, WAVE_WINDOW *pcur, WAVE_WINDOW *pprev, WAVE_WINDOW *pnext, WAVE_LF_CAP *pCap, PQ_EVT_Q *pqE) {
 	int dx, sx, cnt, j, n, ms;
-	int32_t *psrc;
 	FILE *fp;
 	FS_MSG fsmsg;
 	char path[64];
@@ -1461,7 +1460,9 @@ int wavePreCaptureLF(int id, WAVE_WINDOW *pcur, WAVE_WINDOW *pprev, WAVE_WINDOW 
 	pCap->ts = pqE->Ts;
 	pCap->pos = ms/0.125;	//1600;	
 	pCap->mask = pqE->mask;	
-	pCap->scale = (pqE->eType == E_OC) ? meter[id].cntl.iscale : meter[id].cntl.vscale;
+	pCap->scale  = meter[id].cntl.vscale;	// 전압 scale
+	pCap->iscale = meter[id].cntl.iscale;	// 전류 scale
+	pCap->ver    = 1;						// 포맷: 전압+전류 동시저장
 	
 	if (pCap->pos >= N_LFCAP) {
 		printf("&&& invalid pCap->pos(%d), abort capture ...\n", pCap->pos);
@@ -1474,8 +1475,8 @@ int wavePreCaptureLF(int id, WAVE_WINDOW *pcur, WAVE_WINDOW *pprev, WAVE_WINDOW 
 	cnt = 1600-sx;			
 	// 이벤트 발생시점을 기준으로 800 이전 sample 부터 복사
 	for (n=cnt*sizeof(int), j=0; j<3; j++) {
-		psrc = (pqE->eType == E_OC) ? &pprev->lI.w[j][sx] : &pprev->lU.w[j][sx];
-		memcpy(&pCap->lW[j][dx], psrc, n);
+		memcpy(&pCap->lW[j][dx], &pprev->lU.w[j][sx], n);	// 전압
+		memcpy(&pCap->lI[j][dx], &pprev->lI.w[j][sx], n);	// 전류
 	}						
 	//
 	sx = 0;
@@ -1483,16 +1484,16 @@ int wavePreCaptureLF(int id, WAVE_WINDOW *pcur, WAVE_WINDOW *pprev, WAVE_WINDOW 
 	cnt = 3200-dx;
 	if (cnt > 1600) cnt = 1600;	
 	for (n=cnt*sizeof(int), j=0; j<3; j++) {
-		psrc = (pqE->eType == E_OC) ? &pprev->lI.w[j][sx] : &pprev->lU.w[j][sx];
-		memcpy(&pCap->lW[j][dx], psrc, n);
+		memcpy(&pCap->lW[j][dx], &pprev->lU.w[j][sx], n);	// 전압
+		memcpy(&pCap->lI[j][dx], &pprev->lI.w[j][sx], n);	// 전류
 	}						
 	// 
 	sx = 0;
 	dx += cnt;
 	cnt = 3200-dx;	
 	for (n=cnt*sizeof(int), j=0; j<3; j++) {
-		psrc = (pqE->eType == E_OC) ? &pprev->lI.w[j][sx] : &pprev->lU.w[j][sx];
-		memcpy(&pCap->lW[j][dx], psrc, n);
+		memcpy(&pCap->lW[j][dx], &pprev->lU.w[j][sx], n);	// 전압
+		memcpy(&pCap->lI[j][dx], &pprev->lI.w[j][sx], n);	// 전류
 	}					
 
 	// FS_Task 에 쓰기 요청한다 
@@ -2712,9 +2713,57 @@ void Test_task(void *arg)
 	}
 }
 
+/* [캡처 로테이션] mask에 맞고 접두어 집합(fx)에 속하는 파일이 keepN 초과면
+ *  시간상 가장 오래된 1개 삭제. FS_task가 fsFileLock 보유 중에 호출한다.
+ *  파일명 '_' 뒤 YYYYMMDDT... 문자열 비교로 시간순 정렬(WSAG_/WOC_ 접두어 길이차 무시). */
+static const char *const CAP_W_FX[] = { "WSAG_", "WSWL_", "WOC_" };	/* 파형(LF) 캡처 */
+static const char *const CAP_D_FX[] = { "DSAG_", "DSWL_", "DOC_" };	/* RMS 캡처 */
+
+static int capNameInGroup(const char *nm, const char *const *fx, int nfx) {
+	int i;
+	for (i = 0; i < nfx; i++) {
+		if (strncmp(nm, fx[i], strlen(fx[i])) == 0)
+			return 1;
+	}
+	return 0;
+}
+
+static const char *capTsPart(const char *nm) {
+	const char *p = strchr(nm, '_');
+	return p ? (p + 1) : nm;
+}
+
+static void trimCaptureGroup(const char *mask, const char *dir,
+                             const char *const *fx, int nfx, int keepN) {
+	FINFO info;
+	char oldest[64], path[96];
+	int count = 0, have = 0, res;
+
+	info.fileID = 0;
+	while (ffind(mask, &info) == 0) {
+		const char *nm = (const char *)info.name;
+		if (!capNameInGroup(nm, fx, nfx))
+			continue;
+		count++;
+		if (!have || strcmp(capTsPart(nm), capTsPart(oldest)) < 0) {
+			strcpy(oldest, nm);
+			have = 1;
+		}
+	}
+	if (have && count > keepN) {
+		sprintf(path, "%s\\%s", dir, oldest);
+#ifdef USE_CMSIS_RTOS2
+		res = fdelete(path, NULL);
+#else
+		res = fdelete(path);
+#endif
+		printf("trimCapture: delete %s (n=%d>%d, res=%d)\n", path, count, keepN, res);
+	}
+}
+
 // case 1: Update 하는경우
-// size:115232, 107ms, 234ms,  233ms, 496ms, 509ms, 473ms, 
-// case 2: 새로 만드는 경우 
+// size:115232, 107ms, 234ms,  233ms, 496ms, 509ms, 473ms,
+// case 2: 새로 만드는 경우
 // size:115232, 279ms, 145ms, 78ms, 71ms, 169ms, 74ms
 static void trimFixedRecordFileFs(const char *path, uint32_t recSize, uint32_t keepCount) {
 #ifdef USE_CMSIS_RTOS2
@@ -2863,6 +2912,13 @@ void FS_task(void *arg)
 						(strncmp(pmsg->fname, EVENT_LIST_FILE, strlen(EVENT_LIST_FILE)) == 0)) {
 						trimFixedRecordFileFs(pmsg->fname, sizeof(EVENT_LOG), EVENT_LOG_CAP);
 					}
+					/* [로테이션] PQ 캡처: W계열/D계열 각각 최근 CAP_KEEP_EVENTS 이벤트만 유지 */
+					else if (strncmp(pmsg->fname, "\\Trg_PQ\\W", 9) == 0) {
+						trimCaptureGroup("\\Trg_PQ\\W*.d", "\\Trg_PQ", CAP_W_FX, 3, CAP_KEEP_EVENTS);
+					}
+					else if (strncmp(pmsg->fname, "\\Trg_PQ\\D", 9) == 0) {
+						trimCaptureGroup("\\Trg_PQ\\D*.d", "\\Trg_PQ", CAP_D_FX, 3, CAP_KEEP_EVENTS);
+					}
 				}
 				t2 = sysTick64;			
 				printf("FS, write(%s, %s, %d), elap=%lld\n", pmsg->fname, pmsg->mode, pmsg->size, t2-t1);
@@ -2982,30 +3038,19 @@ void RMSCapture(int id, int ix) {
 		// 현 위치를 기준으로 1초 전 데이터 부터, 10초간 데이터 복사
 		pWin = _getFastRMSBuf(id, ix-1);				
 		
-		if (eType == E_OC) {
-			for (i=0; i<1200; i++) {
-				pCap->rms[0][i] = scaleIrms(id, pWin->I[0][pos]);
-				pCap->rms[1][i] = scaleIrms(id, pWin->I[1][pos]);
-				pCap->rms[2][i] = scaleIrms(id, pWin->I[2][pos]);
-				
-				if (++pos >= meter[id].cntl.nFastRMS) {
-					pos = 0;
-					if (++ix >= N_FASTRMS_BUF) ix = 0;
-					pWin = _getFastRMSBuf(id, ix-1);
-				}
-			}			
-		}
-		else {
-			for (i=0; i<1200; i++) {
-				pCap->rms[0][i] = scaleVrms(id, pWin->U[0][pos]);
-				pCap->rms[1][i] = scaleVrms(id, pWin->U[1][pos]);
-				pCap->rms[2][i] = scaleVrms(id, pWin->U[2][pos]);
-				
-				if (++pos >= meter[id].cntl.nFastRMS) {
-					pos = 0;
-					if (++ix >= N_FASTRMS_BUF) ix = 0;
-					pWin = _getFastRMSBuf(id, ix-1);
-				}
+		pCap->ver = 1;		// 포맷: 전압+전류 동시저장
+		for (i=0; i<1200; i++) {
+			pCap->rms[0][i] = scaleVrms(id, pWin->U[0][pos]);	// 전압 RMS
+			pCap->rms[1][i] = scaleVrms(id, pWin->U[1][pos]);
+			pCap->rms[2][i] = scaleVrms(id, pWin->U[2][pos]);
+			pCap->I[0][i]   = scaleIrms(id, pWin->I[0][pos]);	// 전류 RMS
+			pCap->I[1][i]   = scaleIrms(id, pWin->I[1][pos]);
+			pCap->I[2][i]   = scaleIrms(id, pWin->I[2][pos]);
+
+			if (++pos >= meter[id].cntl.nFastRMS) {
+				pos = 0;
+				if (++ix >= N_FASTRMS_BUF) ix = 0;
+				pWin = _getFastRMSBuf(id, ix-1);
 			}
 		}
 #ifdef _DIRECT_FS
@@ -3838,6 +3883,33 @@ int storeMaxMin() {
 	return 0;	
 }
 
+/* [나이 로테이션] sysTick1s(현재 epoch) 기준 days일 전 날짜키(YYYYMMDD).
+ *  RTC 미설정(2020 이전, epoch<1.6e9)이면 0 반환 → 나이 트림 비활성(언더플로/오삭제 방지). */
+uint32_t logCutoffKeyDays(int days) {
+	struct tm ltm;
+	uint32_t t;
+
+	if (sysTick1s < 1600000000UL)
+		return 0;
+	t = sysTick1s - (uint32_t)days * 24u * 3600u;
+	uLocalTime(&t, &ltm);	/* uLocalTime: tm_year=전체연도, tm_mon=1~12 */
+	return (uint32_t)ltm.tm_year * 10000u + (uint32_t)ltm.tm_mon * 100u + (uint32_t)ltm.tm_mday;
+}
+
+/* [나이 로테이션-월] months개월 전 월키(YYYYMM). RTC 미설정 시 0. 에너지 월단위 아카이브용. */
+uint32_t logCutoffKeyMonths(int months) {
+	struct tm ltm;
+	int y, m;
+
+	if (sysTick1s < 1600000000UL)
+		return 0;
+	uLocalTime(&sysTick1s, &ltm);	/* tm_year=전체연도, tm_mon=1~12 */
+	y = ltm.tm_year;
+	m = ltm.tm_mon - months;
+	while (m <= 0) { m += 12; y -= 1; }
+	return (uint32_t)y * 100u + (uint32_t)m;
+}
+
 #ifdef HWV2
 /* HWV2: 완료된 하루의 에너지 로그를 일단위 파일(\log_egy\e<YYYYMMDD>_m<id>.d)로 아카이브.
  *  예산(FLASH_LOG_BUDGET_EGY) 초과 시 가장 오래된(날짜 최소) 파일부터 삭제 → 약 35일 보존. */
@@ -3890,6 +3962,27 @@ static void trimEgyArchBudget(void) {
 	}
 }
 
+/* [나이 로테이션] 에너지 아카이브(e*) 중 날짜키 < cutoffKey 인 가장 오래된 1개 삭제(호출당 최대 1개). */
+static void trimEgyArchAge(uint32_t cutoffKey) {
+	char oldestName[64], path[96];
+	uint32_t total = 0;
+	int res;
+
+	if (cutoffKey == 0)
+		return;
+	if (!findOldestEgyArch(oldestName, &total))
+		return;
+	if (egyArchNameKey(oldestName) >= cutoffKey)
+		return;		/* 최古도 보존기간 내 → 삭제 없음 */
+	sprintf(path, "%s\\%s", LOG_EGY_DIR, oldestName);
+#ifdef USE_CMSIS_RTOS2
+	res = fdelete(path, NULL);
+#else
+	res = fdelete(path);
+#endif
+	printf("trimEgyArchAge: delete %s (cutoff=%u, res=%d)\n", path, cutoffKey, res);
+}
+
 static void archiveEnergyLogDay(int id, ENERGY_LOG *pDay) {
 	char path[96];
 	struct tm ltm;
@@ -3908,18 +4001,20 @@ static void archiveEnergyLogDay(int id, ENERGY_LOG *pDay) {
 	if (fp != NULL)
 		fclose(fp);
 
-	sprintf(path, "%s%04d%02d%02d_m%d.d", EGY_ARCH_FILE,
-	        ltm.tm_year, ltm.tm_mon, ltm.tm_mday, id);
-	fp = fopen(path, "wb");
+	/* 월 단위 파일에 하루치(ENERGY_LOG) append — 월 바뀌면 새 파일 */
+	sprintf(path, "%s%04d%02d_m%d.d", EGY_ARCH_FILE,
+	        ltm.tm_year, ltm.tm_mon, id);
+	fp = fopen(path, "ab");
 	if (fp == NULL) {
 		trimEgyArchBudget();
-		fp = fopen(path, "wb");
+		fp = fopen(path, "ab");
 	}
 	if (fp != NULL) {
 		fwrite(pDay, sizeof(ENERGY_LOG), 1, fp);
 		fclose(fp);
 	}
 	trimEgyArchBudget();
+	trimEgyArchAge(logCutoffKeyMonths(EGY_KEEP_MONTHS));	/* 24개월 경과 아카이브 1개 정리 */
 	fsFileUnlock();
 }
 #endif	/* HWV2 */
@@ -4486,17 +4581,23 @@ void Energy_Task(void *arg)
    uint32_t notificationValue;
    int	id=0;
  
-	// demand time stamp 초기화
-	meter[id].cntl.dmdTs = sysTickDemand;
-	meter[id].cntl.dmdTs15m = sysTick15m;
-	//meter[id].cntl.dmdTs1H = meter[id].cntl.tod.tm_hour;
-	meter[id].cntl.dmdStartTs = sysTick1s;
-	meter[id].cntl.dmdStartTs15m = sysTick1s;	
-	
-	// energy log
-	meter[id].cntl.egyTs1H = meter[id].cntl.tod.tm_hour;
-	meter[id].cntl.egyTs1D = meter[id].cntl.tod.tm_mday;
-	meter[id].cntl.egyStartTs1D = sysTick1s;
+	// demand/energy time stamp 초기화 — 전 활성채널 (초기화가 id=0에만 적용되어 m1/m2가
+	//  조기 롤오버로 부분 아카이브를 만들던 버그 수정). 날짜/시각은 Task 시작 시 확실히
+	//  유효한 meter[0].cntl.tod 를 공유해 사용(전 채널 동일 클럭, app_main에서 m0→전채널 복사).
+	for (id = 0; id < ACTIVE_METER_CH_COUNT; id++) {
+		// demand time stamp 초기화
+		meter[id].cntl.dmdTs = sysTickDemand;
+		meter[id].cntl.dmdTs15m = sysTick15m;
+		//meter[id].cntl.dmdTs1H = meter[id].cntl.tod.tm_hour;
+		meter[id].cntl.dmdStartTs = sysTick1s;
+		meter[id].cntl.dmdStartTs15m = sysTick1s;
+
+		// energy log
+		meter[id].cntl.egyTs1H = meter[0].cntl.tod.tm_hour;
+		meter[id].cntl.egyTs1D = meter[0].cntl.tod.tm_mday;
+		meter[id].cntl.egyStartTs1D = sysTick1s;
+	}
+	id = 0;
 	
 //	initEnergyLog();
 	_enableTaskMonitor(Tid_Energy, 50);

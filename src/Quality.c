@@ -226,6 +226,35 @@ static void trimQualLogBudget(void) {
 	pqFsUnlock();
 }
 
+/* [나이 로테이션] ql/qw 중 날짜키 < cutoffKey 인 가장 오래된 1개 삭제(호출당 최대 1개).
+ *  cutoffKey==0(RTC 미설정)이면 삭제 없음. findOldestQualLog가 금주(현재 주) 파일은 보호. */
+static void trimQualLogAge_nolock(uint32_t cutoffKey) {
+	char oldestName[64], path[96];
+	uint32_t oldestSize = 0, totalSize = 0;
+	int res;
+
+	if (cutoffKey == 0)
+		return;
+	if (!findOldestQualLog(oldestName, &oldestSize, &totalSize))
+		return;
+	if ((uint32_t)parseDateKey8(oldestName) >= cutoffKey)
+		return;		/* 최古도 보존기간 내 → 삭제 없음 */
+
+	sprintf(path, "%s\\%s", LOG_PQ_DIR, oldestName);
+#ifdef USE_CMSIS_RTOS2
+	res = fdelete(path, NULL);
+#else
+	res = fdelete(path);
+#endif
+	printf("trimQualLogAge: delete %s (cutoff=%u, res=%d)\n", path, cutoffKey, res);
+}
+
+static void trimQualLogAge(uint32_t cutoffKey) {
+	pqFsLock();
+	trimQualLogAge_nolock(cutoffKey);
+	pqFsUnlock();
+}
+
 void uLocalTime(const uint32_t *utc, struct tm *ptm) {
 	if (*utc == 0) {
 		memset(ptm, 0, sizeof(*ptm));
@@ -314,10 +343,7 @@ void getQualLogFN(char *path, int id) {
 	char dstr[16];
 	
 	getQualStartDate(dstr);
-	if (METER_CH_COUNT > 1 && id > 0)
-		sprintf(path, "%s%s_m%d.d", QL_FILE, dstr, id);
-	else
-		sprintf(path, "%s%s.d", QL_FILE, dstr);
+	sprintf(path, "%s%s_m%d.d", QL_FILE, dstr, id);		/* 전 채널 통일: M0=_m0 */
 }
 
 // 현재 시간 기준으로 금주의 시작일을 구한다 또는 Test용으로 오늘 날짜를 구한다 
@@ -325,10 +351,7 @@ void getQualWeekFN(char *path, int id) {
 	char dstr[16];
 		
 	getQualStartDate(dstr);
-	if (METER_CH_COUNT > 1 && id > 0)
-		sprintf(path, "%s%s_m%d.d", QW_FILE, dstr, id);
-	else
-		sprintf(path, "%s%s.d", QW_FILE, dstr);
+	sprintf(path, "%s%s_m%d.d", QW_FILE, dstr, id);		/* 전 채널 통일: M0=_m0 */
 }
 
 // 현재 시간 기준으로 전주의 시작일을 구한다 
@@ -336,10 +359,7 @@ void getQualLastWeekFN(char *path, int id) {
 	char dstr[16];
 	
 	getQualLastStartDate(dstr);
-	if (METER_CH_COUNT > 1 && id > 0)
-		sprintf(path, "%s%s_m%d.d", QW_FILE, dstr, id);
-	else
-		sprintf(path, "%s%s.d", QW_FILE, dstr);
+	sprintf(path, "%s%s_m%d.d", QW_FILE, dstr, id);		/* 전 채널 통일: M0=_m0 */
 }
 
 
@@ -395,8 +415,10 @@ int writeQual10mData(int id, char *path, QualData10m *pq10m) {
 	struct tm lt;
 	
 	appendQualLog(path, &pq10m->avg, sizeof(pq10m->avg));
-	if (id == 0)
+	if (id == 0) {
 		trimQualLogBudget();
+		trimQualLogAge(logCutoffKeyDays(QUAL_KEEP_DAYS));	/* 90일 경과 ql/qw 1개 정리 */
+	}
 	uLocalTime(&sysTick1s, &lt);
 	printf("{{Qual10m(%s) TS[%d-%d-%d %d:%d:%d], C[%d] U[%f,%f,%f]}\n", 
 		path, lt.tm_year, lt.tm_mon, lt.tm_mday, 

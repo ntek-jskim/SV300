@@ -43,7 +43,7 @@
 
 #define	ALOG_VER "0"
 #define	ELOG_VER "0"
-#define	QUAL_VER "1"
+#define	QUAL_VER ""		/* 파일명 버전접두어 제거(ql1→ql, qw1→qw). 채널구분은 _mN 접미어로 통일(M0=_m0) */
 #define	CONCAT(x, y) x""y
 #define	CONCAT3(x, y, z) x""y""z
 #define	CONCAT4(x, y, z, a) x""y""z""a
@@ -65,7 +65,7 @@
 
 #define	ENERGY_LOG_FILE0	CONCAT(SYS_DIR, "\\egy_log0.d")
 #define	ENERGY_LOG_FILE1	CONCAT(SYS_DIR, "\\egy_log1.d")
-#define	EGY_ARCH_FILE		CONCAT(LOG_EGY_DIR, "\\e")	/* HWV2: e<YYYYMMDD>_m{id}.d */
+#define	EGY_ARCH_FILE		CONCAT(LOG_EGY_DIR, "\\e")	/* HWV2: e<YYYYMM>_m{id}.d 월단위 append */
 
 #define	MAXMIN_FILE	CONCAT(SYS_DIR, "\\maxmin.d")
 #define	ALARM_ST_FILE CONCAT(SYS_DIR, "\\astat.d")
@@ -95,7 +95,7 @@
  *  PQ    ~11.1MB(10분×3CH×35일), Trend ~2.77MB(15분×4그룹×35일), 에너지 아카이브 ~42KB */
 #define	FLASH_LOG_BUDGET_PQ		(11500UL * 1024UL)
 #define	FLASH_LOG_BUDGET_TREND	(3000UL * 1024UL)
-#define	FLASH_LOG_BUDGET_EGY	(256UL * 1024UL)	/* e<date>_m{id}.d 일단위 35일+여유 */
+#define	FLASH_LOG_BUDGET_EGY	(1024UL * 1024UL)	/* e<YYYYMM>_m{id}.d 월단위 24개월+여유 */
 #else
 #if (METER_CH_COUNT > 1)
 #define	FLASH_LOG_BUDGET_PQ		(1400UL * 1024UL)	/* 3CH: ql/qw × M0~M2 */
@@ -104,6 +104,13 @@
 #endif
 #define	FLASH_LOG_BUDGET_TREND	(320UL * 1024UL)
 #endif
+
+/* 로그 로테이션 보존정책 — 새 로그 생성 시 오래된 것 1개 정리(용량 예산 트림과 병행). */
+#define	CAP_KEEP_EVENTS		50	/* PQ 캡처: WSAG/WSWL/WOC 계열·DSAG/DSWL/DOC 계열 각각 최근 50 이벤트 */
+#define	QUAL_KEEP_DAYS		90	/* ql/qw(주간): 최근 90일 */
+#define	EGY_KEEP_MONTHS		24	/* 에너지 아카이브(월간): 최근 24개월(2년) */
+uint32_t logCutoffKeyDays(int days);	/* meter.c: days일 전 날짜키(YYYYMMDD), RTC 미설정 시 0 */
+uint32_t logCutoffKeyMonths(int months);	/* meter.c: months개월 전 월키(YYYYMM), RTC 미설정 시 0 */
 
 // trdTime[] 인덱스 4 => 10분
 #define	TREND_DEFAULT_INTERVAL_INDEX	4
@@ -356,14 +363,16 @@ typedef struct {
 
 typedef struct {
 	uint64_t ts;		// 발생시각
-	float		scale;	
+	float		scale;	// 전압 scale (vscale)
 	uint16_t pos;
 	uint16_t mask;	// 발생이벤트 위치, mask
 
 	uint16_t srate;
-	uint16_t _r;
-	
-	int32_t lW[3][N_LFCAP];	//int32_t lI[3][N_LFCAP];	
+	uint16_t ver;		// 포맷버전(기존 _r): 1 = 전압+전류 동시저장
+
+	float		iscale;	// 전류 scale (신규)
+	int32_t lW[3][N_LFCAP];	// 전압 파형(항상)
+	int32_t lI[3][N_LFCAP];	// 전류 파형(신규, 항상)
 } WAVE_LF_CAP;
 
 #define	N_FASTRMS_BUF	60
@@ -382,9 +391,9 @@ typedef struct {
 
 typedef struct {
 	uint64_t ts;
-	uint16_t pos, mask, _r0[2];
-	float	rms[3][1200];
-	//float	I[3][1200];
+	uint16_t pos, mask, ver, _r0;	// ver(기존 _r0[0]): 1 = 전압+전류 동시저장
+	float	rms[3][1200];	// 전압 RMS(항상)
+	float	I[3][1200];		// 전류 RMS(신규, 항상)
 } RMS_CAP;
 
 

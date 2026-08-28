@@ -123,12 +123,19 @@ error_t fsGetFileSize(const char_t *path, uint32_t *size)
 {
    int status;
    FINFO fileInfo;
-	
+   char *p;
+
 	//printf("%s --> %s\n", __FUNCTION__, path);
 
    //Check parameters
    if(path == NULL || size == NULL)
       return ERROR_INVALID_PARAMETER;
+
+   // '/' => '\\' 변환: flat EFS의 ffind는 '/' 경로를 못 찾아 실패한다(fsOpenFile은 동일 변환 후 fopen).
+   //   FTP SIZE가 "/xxxx.d"를 넘겨 ffind 실패 → 550 → 파일 크기 0 표시되던 문제 수정.
+   for (p = (char *)path; *p != 0; p++) {
+      if (*p == '/') *p = '\\';
+   }
 
    //The fileID field must be initialized to zero
    fileInfo.fileID = 0;
@@ -621,6 +628,22 @@ FsDir *fsOpenDir(const char_t *path)
  * @return Error code
  **/
 
+//[손상 파일명 판별] 비출력/제어/고위 바이트가 있으면 손상된 이름 → FTP LIST에서 skip 대상.
+static int fsNameIsValid(const char *name)
+{
+   int i;
+   unsigned char c;
+   if (name == NULL || name[0] == 0)
+      return 0;
+   for (i = 0; i < FS_MAX_NAME_LEN && name[i] != 0; i++)
+   {
+      c = (unsigned char)name[i];
+      if (c < 0x20 || c > 0x7E)
+         return 0;
+   }
+   return 1;
+}
+
 error_t fsReadDir(FsDir *dir, FsDirEntry *dirEntry)
 {
    error_t error;
@@ -633,6 +656,19 @@ error_t fsReadDir(FsDir *dir, FsDirEntry *dirEntry)
 
    //Clear directory entry
    osMemset(dirEntry, 0, sizeof(FsDirEntry));
+
+   //[손상 파일명 skip] 현재 엔트리 이름이 비정상(비출력 바이트 포함)이면 유효한 다음 엔트리까지 전진.
+   //  파일 하나의 손상된 이름이 FTP 디렉터리 리스트 전체를 중단(426·연결끊김)시키던 문제 차단.
+   while (!fsNameIsValid((const char *)dir->info.name))
+   {
+      if (dir->eof)
+         return ERROR_END_OF_STREAM;
+      if (ffind(dir->path, &dir->info) != 0)
+      {
+         dir->eof = 1;
+         return ERROR_END_OF_STREAM;
+      }
+   }
 
 	//printf("%s --> %s\n", __FUNCTION__, dir->info.name);
 	

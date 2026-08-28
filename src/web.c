@@ -624,6 +624,28 @@ static error_t apiHarmonics(HttpConnection *c)
 	return httpCloseStream(c);
 }
 
+/* GET /api/vq — 전압품질: 전압편차(Under/Over Deviation·Value) CH1만(전압 M0~M2 공유).
+ *  Flicker(Pi/Pst/Plt)는 미구현이라 미포함. meter[0].vq(=Quality.c에서 채움). */
+static error_t apiVq(HttpConnection *c)
+{
+	char b[48];
+	int ph;
+	VQDATA *vq = &meter[0].vq;
+
+	if (beginJson(c)) return ERROR_WRITE_FAILED;
+	w(c, "{\"ok\":true,\"rows\":[");
+	w(c, "{\"name\":\"U Under Deviation\",\"unit\":\"%\",\"l\":[");
+	for (ph = 0; ph < 3; ph++) { snprintf(b, sizeof(b), "%s%.3f", ph ? "," : "", vq->Uud[ph]); w(c, b); }
+	w(c, "]},{\"name\":\"U Under Value\",\"unit\":\"V\",\"l\":[");
+	for (ph = 0; ph < 3; ph++) { snprintf(b, sizeof(b), "%s%.3f", ph ? "," : "", vq->Uuv[ph]); w(c, b); }
+	w(c, "]},{\"name\":\"U Over Deviation\",\"unit\":\"%\",\"l\":[");
+	for (ph = 0; ph < 3; ph++) { snprintf(b, sizeof(b), "%s%.3f", ph ? "," : "", vq->Uod[ph]); w(c, b); }
+	w(c, "]},{\"name\":\"U Over Value\",\"unit\":\"V\",\"l\":[");
+	for (ph = 0; ph < 3; ph++) { snprintf(b, sizeof(b), "%s%.3f", ph ? "," : "", vq->Uov[ph]); w(c, b); }
+	w(c, "]}]}");
+	return httpCloseStream(c);
+}
+
 /* GET /api/waveform — 채널별 V/I 파형(상별 160샘플). wv는 read-trigger라 갱신 후 직렬화 */
 static error_t apiWaveform(HttpConnection *c)
 {
@@ -1462,6 +1484,7 @@ static const char INDEX_HTML[] =
 "     <a class='gp-tab' id='ct-harmonics' onclick=\"chSetTab('harmonics')\">Harmonics</a>\n"
 "     <a class='gp-tab' id='ct-waveform' onclick=\"chSetTab('waveform')\">Waveform</a>\n"
 "     <a class='gp-tab' id='ct-report' onclick=\"chSetTab('report')\">Report</a>\n"
+"     <a class='gp-tab' id='ct-vq' onclick=\"chSetTab('vq')\">VQ</a>\n"
 "     <a class='gp-tab' id='ct-monthly' onclick=\"chSetTab('monthly')\">Monthly</a>\n"
 "     <a class='gp-tab' id='ct-energy' onclick=\"chSetTab('energy')\">Energy</a>\n"
 "     <a class='gp-tab' id='ct-demand' onclick=\"chSetTab('demand')\">Demand</a>\n"
@@ -1600,7 +1623,7 @@ static const char INDEX_HTML[] =
 " var _chs=[];for(var _k=1;_k<=NCH;_k++)_chs.push(_k);\n"
 " Promise.all(_chs.map(function(ch){return j('/api/regs?addr='+(lo+(ch-1)*10000)+'&n='+nn).then(function(r){return (r.d&&r.d.ok)?r.d.words:null;}).catch(function(){return null;});})).then(function(bl){if(setCur!==key)return;\n"
 "  var h=\"<div class='setgrid'>\";for(var ch=1;ch<=NCH;ch++){var wds=bl[ch-1];h+=\"<div class='setcard'><h3>CH\"+ch+'</h3>';\n"
-"   if(!wds){h+=\"<p class='stub'>no data</p>\";}else{var pg=null;f.forEach(function(p){if(ch>1&&p[3])return;var g=p[2]||'';if(g&&g!==pg){h+=\"<div class='sgrp'>\"+esc(g)+\"</div>\";}pg=g;var addr=p[0]+(ch-1)*10000,v=wds[p[0]-lo]||0;h+=\"<div class='srow'><span class='sk'>\"+esc(p[1])+\"</span><input type='number' data-addr='\"+addr+\"' data-type='u16' data-orig='\"+v+\"' value='\"+v+\"' \"+(IS_ADMIN?'':'disabled')+\" oninput='setMark(this)'></div>\";});}\n"
+"   if(!wds){h+=\"<p class='stub'>no data</p>\";}else{var pg=null;f.forEach(function(p){if(ch>1&&p[3])return;var g=p[2]||'';if(g&&g!==pg){h+=\"<div class='sgrp'>\"+esc(g)+\"</div>\";}pg=g;var addr=p[0]+(ch-1)*10000,v=wds[p[0]-lo]||0,ctl;if(p[1]==='Trigger Action'){ctl=\"<select data-addr='\"+addr+\"' data-type='u16' data-orig='\"+v+\"' \"+(IS_ADMIN?'':'disabled')+\" onchange='setMark(this)'><option value='0'\"+(v==0?' selected':'')+\">NONE</option><option value='1'\"+(v==1?' selected':'')+\">EVENT</option><option value='2'\"+(v==2?' selected':'')+\">WAVE CAPTURE</option></select>\";}else{ctl=\"<input type='number' data-addr='\"+addr+\"' data-type='u16' data-orig='\"+v+\"' value='\"+v+\"' \"+(IS_ADMIN?'':'disabled')+\" oninput='setMark(this)'>\";}h+=\"<div class='srow'><span class='sk'>\"+esc(p[1])+\"</span>\"+ctl+\"</div>\";});}\n"
 "   h+='</div>';}h+='</div>';$('setBody').innerHTML=h;sn('Save & Apply.');});}\n"
 "function fmtV(f){return (f.type==='bool')?(f.val?'On':'Off'):esc(f.val)}\n"
 "function ctlOf(f){var d=\"data-addr='\"+f.addr+\"' data-type='\"+f.type+\"' data-orig='\"+esc(f.val)+\"'\",dis=IS_ADMIN?'':'disabled';\n"
@@ -1674,7 +1697,7 @@ static const char INDEX_HTML[] =
 "var chTabCur='meter',CHN=[{n:1},{n:2},{n:3}];\n"
 "var harmOpt='pv',harmView='table',PCOL=['#8b5cf6','#38bdf8','#84cc16'];\n"
 "function chEnter(){chSetTab(chTabCur);}\n"
-"function chSetTab(t){chTabCur=t;egyEd=0;['meter','phase','minmax','harmonics','waveform','report','monthly','energy','demand','alarm','event'].forEach(function(x){var e=$('ct-'+x);if(e)e.className='gp-tab'+(x===t?' on':'');});var cc=$('chctl');if(cc)cc.style.display=(t==='harmonics')?'flex':'none';syncHv();$('chbody').innerHTML=\"<p class='stub'>loading...</p>\";pollLoop();}\n"
+"function chSetTab(t){chTabCur=t;egyEd=0;['meter','phase','minmax','harmonics','waveform','report','vq','monthly','energy','demand','alarm','event'].forEach(function(x){var e=$('ct-'+x);if(e)e.className='gp-tab'+(x===t?' on':'');});var cc=$('chctl');if(cc)cc.style.display=(t==='harmonics')?'flex':'none';syncHv();$('chbody').innerHTML=\"<p class='stub'>loading...</p>\";pollLoop();}\n"
 "function chStat(ok){var e=$('chstat');if(e){e.className='ph2 '+(ok?'on':'bad');e.innerHTML=ok?'&#9679; live &#8635; 1s':'&#9679; read error';}}\n"
 "function chFail(){chStat(false);var b=$('chbody');if(b&&b.innerHTML.indexOf('loading')>=0)b.innerHTML=\"<p class='stub'>read error - retrying...</p>\";}\n"
 "function chCards(list,fn){var h=\"<div class='chgrid'>\";list.forEach(function(x){h+=`<div class='chcard'><div class='chh'>CH${x.n}${x.wiring!==undefined?' '+fbadge(x.wiring):''}</div>${fn(x)}</div>`;});return h+'</div>';}\n"
@@ -1735,6 +1758,7 @@ static const char INDEX_HTML[] =
 "var EN_ROWS=[['Frequency Variation 1','(+1%~-1%),99.5%/Wk',99.5],['Frequency Variation 2','(+4%~-6%),100%/Wk',100],['Voltage Variation 1','(+10%~-10%),95%/Wk',95],['Voltage Variation 2','(+10~-15%),100%/Wk',100],['Voltage Unbalance','(<2%),100%/Wk',100],['THD','(<8%),95%/Wk',95],['Harmonics','(0.5%~6%),95%/Wk',95],['Plt','(1),95%/Wk',95]],EN_INFO=['Voltage Sag','Voltage Swell','Short Interruption','Signaling Volt.'];\n"
 "function passOf(v,thr){var ok=true,any=false,i;for(i=0;i<3;i++){if(v[i]!=null){any=true;if(v[i]<thr)ok=false;}}return (any&&ok)?1:0;}\n"
 "function enNv(v){return (v==null)?'-':Number(v).toFixed(1);}\n"
+"function bVq(rows){var h=\"<div class='chcard'><div class='chh'>CH1 · Voltage Quality</div><table class='ctbl'><tr><th>Metric</th><th>L1</th><th>L2</th><th>L3</th></tr>\";(rows||[]).forEach(function(r){h+=\"<tr><td class='rk'>\"+r.name+(r.unit?' ('+r.unit+')':'')+\"</td><td>\"+(+r.l[0]).toFixed(3)+\"</td><td>\"+(+r.l[1]).toFixed(3)+\"</td><td>\"+(+r.l[2]).toFixed(3)+\"</td></tr>\";});return h+'</table></div>';}\n"
 "function bReport(x){var okAll=x.rows.every(function(r,ri){return passOf(r.v,EN_ROWS[ri][2])===1;});\n"
 " var h=`<div class='cmeta'>${ts2(x.start)} ~ ${ts2(x.end)} · <span class='enb ${okAll?'pass':'fail'}'>${okAll?'Compliant':'Non-compliant'}</span></div><table class='ctbl hsm'><tr><th>Parameter</th><th>L1</th><th>L2</th><th>L3</th><th>Comp</th><th>Requirement</th></tr>`;\n"
 " x.rows.forEach(function(r,ri){var p=passOf(r.v,EN_ROWS[ri][2]);h+=`<tr><td class='rk'>${EN_ROWS[ri][0]}</td><td>${enNv(r.v[0])}</td><td>${enNv(r.v[1])}</td><td>${enNv(r.v[2])}</td><td><span class='enb ${p?'pass':'fail'}'>${p?'Pass':'Fail'}</span></td><td class='ph2'>${EN_ROWS[ri][1]}</td></tr>`;});\n"
@@ -1811,6 +1835,7 @@ static const char INDEX_HTML[] =
 "  $('chbody').innerHTML=chCards(r.d.channels,function(x){return \"<div class='hsub'>Voltage</div><canvas id='wv\"+x.n+\"' class='wcv'></canvas><div class='hsub'>Current</div><canvas id='wi\"+x.n+\"' class='wcv'></canvas>\";});\n"
 "  r.d.channels.forEach(function(x){drawLines('wv'+x.n,x.v);drawLines('wi'+x.n,x.i);});}).catch(chFail);\n"
 " if(t==='report')return j('/api/en50160').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);var x=r.d.ch[0];if(!x)return;$('chbody').innerHTML=\"<div class='chcard'><div class='chh'>CH\"+x.n+\" · EN50160</div>\"+bReport(x)+bItic(r.d.itic2,'ITIC List (Voltage)','pgItic2')+'</div>';drawITIC('it'+x.n);}).catch(chFail);\n"
+" if(t==='vq')return j('/api/vq').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=bVq(r.d.rows);}).catch(chFail);\n"
 " if(t==='monthly')return j('/api/monthly').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=chCards(r.d.ch,bMonthly);}).catch(chFail);\n"
 " if(t==='alarm'||t==='event')return j('/api/sv300/events').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=chCards(CHN,function(x){return (t==='alarm'?bAlarm:bEvent)(x,r.d);});}).catch(chFail);\n"
 " return Promise.resolve();}\n"
@@ -1906,6 +1931,7 @@ static error_t webRequestCallback(HttpConnection *c, const char_t *uri)
 		if (!strcmp(uri, "/api/harmonics"))    return apiHarmonics(c);
 		if (!strcmp(uri, "/api/waveform"))     return apiWaveform(c);
 		if (!strcmp(uri, "/api/en50160"))      return apiEn50160(c);
+		if (!strcmp(uri, "/api/vq"))           return apiVq(c);
 		if (!strcmp(uri, "/api/monthly"))      return apiMonthly(c);
 		if (!strcmp(uri, "/api/general"))      return apiGeneral(c);
 		if (!strncmp(uri, "/api/regs", 9))     return apiRegs(c);
