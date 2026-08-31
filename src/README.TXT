@@ -61,6 +61,10 @@
   1) 로그 로테이션 신설(PQ캡처 계열별 50이벤트·ql/qw 90일·에너지 24개월, '새 로그 생성 시 오래된 것 1개' 방식·RTC미설정 시 비활성) + 에너지 아카이브 월단위 전환(e<YYYYMM>_m{id}.d append, 예산 1MB) + 에너지 초기화 버그(Energy_Task 타임스탬프 초기화가 id=0 전용→m1/m2 조기 부분아카이브) 전채널 수정 — 파일 무한누적·FTP 리스트 홀딩 방지
   2) 이벤트 파형/RMS 캡처에 전압+전류 동시저장(WAVE_LF_CAP +lI·+iscale, RMS_CAP +I, 폴리모픽 제거·모든 이벤트 V+I) + FTP 리스트 견고화(fsReadDir 깨진 파일명 skip·fsGetFileSize '/'→'\' SIZE 수정). ※confWebApp: PQ뷰어 COMTRADE 내보내기·LIST 1회조회·캡처 V+I 2패널·에너지 월뷰
 
+26/08/31 FW V00.03
+  1) PQ 이벤트/RMS 캡처 안정화 — 이벤트 FIFO 재부팅유실(wb 스냅샷)·RMS캡처 미발화 견고화·FS 대용량버퍼 파일손상(putFsQ useData 방어)·RMS 트리거 파형과 정렬·인터럽션 캡처 WINT/DINT 구분
+  2) 설정 연결·정합 — PQ Report Active/StartDay·INTERRUPTION Level/Action 실제반영, 월간 이벤트로그 24B 정합·에너지 아카이브 egy rename·내장웹 알람/이벤트 시각 로컬화(getUTC*)
+
 ────────────────────────────────────────────────────────────
 [릴리스 노트/요약] 26/08/25 FW V00.03 — THD 정확화 & 파형 원인규명
 ────────────────────────────────────────────────────────────

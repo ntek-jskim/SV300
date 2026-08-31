@@ -135,6 +135,10 @@ void putFsQ(FS_MSG *p) {
 		copy.useData = 1;
 		copy.pbuf = NULL;
 	}
+	else if (copy.pbuf != NULL) {
+		copy.useData = 0;	/* [버그수정] 인라인 불가한 큰 버퍼(RMS_CAP 28816B 등): pbuf 사용 강제.
+					   호출자 스택의 미초기화 useData가 nonzero면 빈 data가 기록돼 파일이 0/garbage 되던 문제 */
+	}
 
 	for (;;) {
 		primask = __get_PRIMASK();
@@ -367,6 +371,53 @@ static void initMeterPqeSettings(int id)
 	meter[id].pqRpt.active = 1;
 	meter[id].trend[0].chan[0] = 1;
 	meter[id].trend[0].chan[1] = 2;
+}
+
+/* PQE/Transient/Waveform(rcrd)/Trend/PqRpt 설정 블록(pqevt~almSet 직전)을 파일로 영속화.
+   이 블록은 settings.dat에 없고 RAM 전용이라 부팅 시 initMeterPqeSettings default로 리셋됨 → 별도 저장 필요. */
+#define PQE_DEF_MAGIC 0x50514544u	/* 'PQED' */
+
+int storePqeDef(void) {
+	FILE *fp;
+	int id, blk = (int)((char *)&meter[0].almSet - (char *)&meter[0].pqevt);
+	uint32_t magic = PQE_DEF_MAGIC;
+
+	fsFileLock();
+	fp = fopen(PQE_DEF_FILE, "wb");
+	if (fp == NULL) { fsFileUnlock(); return -1; }
+	fwrite(&magic, sizeof(magic), 1, fp);
+	for (id = 0; id < METER_CH_COUNT; id++)
+		fwrite(&meter[id].pqevt, blk, 1, fp);
+	fclose(fp);
+	fsFileUnlock();
+	printf("[[Store PqeDef(%s), blk=%d]]\n", PQE_DEF_FILE, blk);
+	return 0;
+}
+
+/* 부팅 시 로드 — 파일 있으면 initMeterPqeSettings default를 덮어씀(loadAlarmDef 뒤 호출). */
+int loadPqeDef(void) {
+	FILE *fp;
+	int id, blk = (int)((char *)&meter[0].almSet - (char *)&meter[0].pqevt);
+	uint32_t magic = 0;
+
+	fp = fopen(PQE_DEF_FILE, "rb");
+	if (fp == NULL)
+		return -1;
+	if (fread(&magic, sizeof(magic), 1, fp) != 1 || magic != PQE_DEF_MAGIC) {
+		fclose(fp);
+		printf("[[PqeDef invalid, keep defaults]]\n");
+		return -1;
+	}
+	for (id = 0; id < METER_CH_COUNT; id++) {
+		if (fread(&meter[id].pqevt, blk, 1, fp) != 1) {
+			fclose(fp);
+			printf("[[PqeDef short, keep defaults]]\n");
+			return -1;
+		}
+	}
+	fclose(fp);
+	printf("[[Load PqeDef(%s)]]\n", PQE_DEF_FILE);
+	return 0;
 }
 
 int initSettings(int id)
@@ -1448,77 +1499,77 @@ void getTrgFileName(char *title, uint64_t ts, char *buf) {
 
 
 // event 발생 위치가 pprev와 pcurr 사이 
-int wavePreCaptureLF(int id, WAVE_WINDOW *pcur, WAVE_WINDOW *pprev, WAVE_WINDOW *pnext, WAVE_LF_CAP *pCap, PQ_EVT_Q *pqE) {
-	int dx, sx, cnt, j, n, ms;
-	FILE *fp;
+int wavePreCaptureLF(int id, WAVE_WINDOW_BLK *pblk, WAVE_LF_CAP *pCap, PQ_EVT_Q *pqE) {
+	int k, j, ev_rix, pos_ev, pre_cyc, post_cyc, spc, pre_samp, post_samp, count, g, win_off, gi, ri;
+	int32_t *dat;
+	WAVE_WINDOW *pw;
 	FS_MSG fsmsg;
 	char path[64];
-		
-	printf("PreCapLF: %lld, %lld, %lld : %lld\n", pprev->ts, pcur->ts, pnext->ts, pqE->Ts);
-		
-	ms = (pqE->Ts < pcur->ts) ? pqE->Ts - pprev->ts : pqE->Ts - pcur->ts;		
-	pCap->ts = pqE->Ts;
-	pCap->pos = ms/0.125;	//1600;	
-	pCap->mask = pqE->mask;	
-	pCap->scale  = meter[id].cntl.vscale;	// 전압 scale
-	pCap->iscale = meter[id].cntl.iscale;	// 전류 scale
-	pCap->ver    = 1;						// 포맷: 전압+전류 동시저장
-	
-	if (pCap->pos >= N_LFCAP) {
-		printf("&&& invalid pCap->pos(%d), abort capture ...\n", pCap->pos);
+
+	/* pre/post trigger 설정(cycle) — rcrd[0] 레지스터(6746/6747). 미설정 시 기본, 합 30 클램프(방어). */
+	pre_cyc  = meter[id].rcrd[0].pre;
+	post_cyc = meter[id].rcrd[0].post;
+	if (pre_cyc <= 0 && post_cyc <= 0) { pre_cyc = DEF_PRE_CYC; post_cyc = DEF_POST_CYC; }
+	if (pre_cyc < 0) pre_cyc = 0;
+	if (post_cyc < 0) post_cyc = 0;
+	if (pre_cyc + post_cyc > 30) { post_cyc = 30 - pre_cyc; if (post_cyc < 0) { pre_cyc = 30; post_cyc = 0; } }
+
+	spc = 8000 / FREQ_HZ(db.freq);			/* samples/cycle (60Hz→133, 50Hz→160) */
+	pre_samp  = pre_cyc * spc;
+	post_samp = post_cyc * spc;
+	count = pre_samp + post_samp;
+	if (count > N_LFCAP) count = N_LFCAP;
+	if (count <= 0) return -1;
+
+	/* 이벤트 T를 담은 윈도우를 링에서 찾는다(ts 기준, 200ms 윈도우) */
+	ev_rix = -1;
+	for (k = 0; k < N_WAVE_WIN; k++) {
+		if (pqE->Ts >= pblk->ww[k].ts && pqE->Ts < pblk->ww[k].ts + 200) { ev_rix = k; break; }
+	}
+	if (ev_rix < 0) {
+		printf("&&& wavePreCaptureLF: event window not found (T=%lld)\n", pqE->Ts);
 		return -1;
 	}
-			
-	sx = pCap->pos-800;
-	if (sx < 0) sx += 1600;
-	dx = 0;
-	cnt = 1600-sx;			
-	// 이벤트 발생시점을 기준으로 800 이전 sample 부터 복사
-	for (n=cnt*sizeof(int), j=0; j<3; j++) {
-		memcpy(&pCap->lW[j][dx], &pprev->lU.w[j][sx], n);	// 전압
-		memcpy(&pCap->lI[j][dx], &pprev->lI.w[j][sx], n);	// 전류
-	}						
-	//
-	sx = 0;
-	dx += cnt;		
-	cnt = 3200-dx;
-	if (cnt > 1600) cnt = 1600;	
-	for (n=cnt*sizeof(int), j=0; j<3; j++) {
-		memcpy(&pCap->lW[j][dx], &pprev->lU.w[j][sx], n);	// 전압
-		memcpy(&pCap->lI[j][dx], &pprev->lI.w[j][sx], n);	// 전류
-	}						
-	// 
-	sx = 0;
-	dx += cnt;
-	cnt = 3200-dx;	
-	for (n=cnt*sizeof(int), j=0; j<3; j++) {
-		memcpy(&pCap->lW[j][dx], &pprev->lU.w[j][sx], n);	// 전압
-		memcpy(&pCap->lI[j][dx], &pprev->lI.w[j][sx], n);	// 전류
-	}					
+	pos_ev = (int)(((int64_t)pqE->Ts - (int64_t)pblk->ww[ev_rix].ts) / 0.125);
+	if (pos_ev < 0) pos_ev = 0; else if (pos_ev >= L_LFWVWIN) pos_ev = L_LFWVWIN - 1;
 
-	// FS_Task 에 쓰기 요청한다 
-	if (pqE->eType == E_SAG) {
-		strcpy(path, "\\Trg_PQ\\");
-		strcat(path, "WSAG_");		
+	pCap->ts = pqE->Ts;
+	pCap->pos = (uint16_t)pre_samp;			/* 캡처 내 트리거 위치 */
+	pCap->mask = pqE->mask;
+	pCap->scale  = meter[id].cntl.vscale;
+	pCap->iscale = meter[id].cntl.iscale;
+	pCap->srate = 8000;
+	pCap->ver = 2;							/* V+I + 가변길이(count) */
+	pCap->count = (uint16_t)count;
+
+	/* dense 저장: lW/lI 영역을 flat int32[6*N_LFCAP]로 보고 V[3*count]+I[3*count] 밀집기록.
+	   샘플 k의 글로벌 인덱스 g(이벤트윈도우 기준)=pos_ev-pre_samp+k → 윈도우/샘플 매핑. */
+	dat = &pCap->lW[0][0];
+	for (k = 0; k < count; k++) {
+		g = pos_ev - pre_samp + k;
+		win_off = (g >= 0) ? (g / L_LFWVWIN) : -(((-g) + L_LFWVWIN - 1) / L_LFWVWIN);	/* floor */
+		gi = g - win_off * L_LFWVWIN;		/* [0, L_LFWVWIN) */
+		ri = ((ev_rix + win_off) % N_WAVE_WIN + N_WAVE_WIN) % N_WAVE_WIN;
+		pw = &pblk->ww[ri];
+		for (j = 0; j < 3; j++) {
+			dat[j * count + k]             = pw->lU.w[j][gi];	/* 전압 */
+			dat[3 * count + j * count + k] = pw->lI.w[j][gi];	/* 전류 */
+		}
 	}
-	else if (pqE->eType == E_SWELL) {
-		strcpy(path, "\\Trg_PQ\\");
-		strcat(path, "WSWL_");
-	}
-	else if (pqE->eType == E_OC) {
-		strcpy(path, "\\Trg_PQ\\");
-		strcat(path, "WOC_");
-	}
-	else
-		return 0;
-	
+
+	/* FS_Task 쓰기(헤더 + dense 데이터, 가변 크기) */
+	if (pqE->eType == E_SAG)        { strcpy(path, "\\Trg_PQ\\"); strcat(path, "WSAG_"); }
+	else if (pqE->eType == E_SWELL) { strcpy(path, "\\Trg_PQ\\"); strcat(path, "WSWL_"); }
+	else if (pqE->eType == E_OC)    { strcpy(path, "\\Trg_PQ\\"); strcat(path, "WOC_"); }
+	else if (pqE->eType == E_sINTR || pqE->eType == E_lINTR) { strcpy(path, "\\Trg_PQ\\"); strcat(path, "WINT_"); }
+	else return 0;
+
 	getTrgFileName(path, pqE->Ts, fsmsg.fname);
 	strcpy(fsmsg.mode, "wb");
 	fsmsg.pbuf = pCap;
-	fsmsg.size = sizeof(*pCap);
+	fsmsg.size = (int)((uint8_t*)dat - (uint8_t*)pCap) + 6 * count * (int)sizeof(int32_t);	/* 헤더 + V+I dense */
 	putFsQ(&fsmsg);
-	printf("wavePreCaptureLF1 PQ Event: %s\n", fsmsg.fname);
-	
+	printf("wavePreCaptureLF: %s (count=%d, pre=%dc post=%dc)\n", fsmsg.fname, count, pre_cyc, post_cyc);
 	return 0;
 }
 
@@ -2043,14 +2094,14 @@ static int waveDispIndex(int ix, int i, int nPts, int nWin)
 void copyModbusWaveData(int id) {
 	/* wvblk.ix는 Wave_Task가 '지금 채우는 중'인 버퍼를 가리킴(채운 뒤 전진).
 	   그 버퍼(ww[ix])를 읽으면 덮어쓰기와 겹쳐 torn read(파형 seam→허위 고조파).
-	   → 최근 완료된 버퍼 ww[(ix+2)%3](=ix-1)를 읽는다(ww[3] 링). */
-	int rix = wvblk[id].ix + 2;
+	   → 최근 완료된 버퍼 ww[ix-1]을 읽는다(ww[N_WAVE_WIN] 링). */
+	int rix = wvblk[id].ix + N_WAVE_WIN - 1;
 	WAVE_WINDOW *pww;
 	WAVE_PHASE_LF *wv, *wi;
 	int i, j, k, prev, ix=0, dx, nwin;
 	float vscl[3], iscl[3];
 
-	if (rix >= 3) rix -= 3;
+	if (rix >= N_WAVE_WIN) rix -= N_WAVE_WIN;
 	pww = &wvblk[id].ww[rix];
 
 	// scale이 작으면 계단파로 보이는 문제 있다
@@ -2526,10 +2577,37 @@ void Wave_Task(void *arg)
 				// copy fft data
 				copyFftData(id, pww, &tick10s[id]);
 
+				/* [파형 이벤트 캡처] ww[bx]=최신 완료. 이벤트+post 데이터가 링에 다 들어오면 캡처
+				   (post는 rcrd[0].post cycle만큼 지연 후 확보). pre는 링(6윈도우=1200ms)에 남아있음. */
+				{
+					PQ_EVT_CAP_Q *evq = &meter[id].cntl.pqe.wQ;
+					uint64_t newestEnd = wvblk[id].ww[bx].ts + 200;				/* 최신 완료 윈도우 끝(ms) */
+					uint64_t oldestTs  = wvblk[id].ww[(bx+1)%N_WAVE_WIN].ts;		/* 링 최古(다음 덮어쓸 윈도우) */
+					int post_ms = (meter[id].rcrd[0].post > 0 ? meter[id].rcrd[0].post : DEF_POST_CYC)
+					              * 1000 / FREQ_HZ(db.freq);						/* post 소요 ms */
+					int pre_ms  = (meter[id].rcrd[0].pre  > 0 ? meter[id].rcrd[0].pre  : DEF_PRE_CYC)
+					              * 1000 / FREQ_HZ(db.freq);						/* pre 소요 ms */
+					while (evq->fr != evq->re) {
+						PQ_EVT_Q *ev = &evq->Q[evq->re];
+						if (ev->Ts < oldestTs) {								/* 링에서 밀려남 → 폐기 */
+							evq->re = (evq->re + 1) % 8;
+						}
+						else if (ev->Ts + post_ms < newestEnd) {				/* post 확보 */
+							/* [naming 일관성] sag 분류중(sagSt==2)이면 인터럽션 판정(재태깅)을 기다렸다 기록
+							   → 파형(W)·RMS(D) 접두어 일치. 단 pre-data가 링에서 밀려나기 직전이면 즉시 캡처. */
+							if (meter[id].cntl.sagSt == 2 && ev->Ts > oldestTs + pre_ms + 200)
+								break;
+							wavePreCaptureLF(id, &wvblk[id], &wbCapLF[id], ev);
+							evq->re = (evq->re + 1) % 8;
+						}
+						else break;											/* post 대기 */
+					}
+				}
+
 				/* pww를 완전히 처리(캡처+다운샘플+FFT복사)한 뒤에 ix 전진.
 				   ix를 먼저 올리면 copyModbusWaveData가 아직 downSampling(lU/lI) 중인
 				   버퍼(ww[ix-1])를 읽어 torn read(파형 seam) 발생 → 처리 완료 후 전진. */
-				if (++bx >= 3) {
+				if (++bx >= N_WAVE_WIN) {
 					bx = 0;
 					bF = 1;
 				}
@@ -2716,8 +2794,8 @@ void Test_task(void *arg)
 /* [캡처 로테이션] mask에 맞고 접두어 집합(fx)에 속하는 파일이 keepN 초과면
  *  시간상 가장 오래된 1개 삭제. FS_task가 fsFileLock 보유 중에 호출한다.
  *  파일명 '_' 뒤 YYYYMMDDT... 문자열 비교로 시간순 정렬(WSAG_/WOC_ 접두어 길이차 무시). */
-static const char *const CAP_W_FX[] = { "WSAG_", "WSWL_", "WOC_" };	/* 파형(LF) 캡처 */
-static const char *const CAP_D_FX[] = { "DSAG_", "DSWL_", "DOC_" };	/* RMS 캡처 */
+static const char *const CAP_W_FX[] = { "WSAG_", "WSWL_", "WOC_", "WINT_" };	/* 파형(LF) 캡처(WINT=인터럽션) */
+static const char *const CAP_D_FX[] = { "DSAG_", "DSWL_", "DOC_", "DINT_" };	/* RMS 캡처(DINT=인터럽션) */
 
 static int capNameInGroup(const char *nm, const char *const *fx, int nfx) {
 	int i;
@@ -2866,36 +2944,28 @@ void FS_task(void *arg)
 				printf("FS, delete(%s, %s), elap=%lld\n", pmsg->fname, pmsg->mode, t2-t1);
 			}
 			else if (strcmp(pmsg->mode, "ff") == 0) {
-				const void *payload = fsMsgPayload(pmsg);
+				/* [RL-FlashFS] r+b 인플레이스 갱신은 FAT 손상 → 재부팅 시 이벤트 유실.
+				 *  alarm FIFO(alarmFifoFileAppend)와 동일하게 RAM eventFifo 스냅샷을 wb로 전체 재기록. */
+				int eid = pmsg->argv & 0xff;
 
-				if (payload == NULL)
-					;
-				else if ((fp = fopen(pmsg->fname, "r+b")) == NULL) {
-					memset(&elog, 0, sizeof(elog));
-					elog.head.magic = 0x1234abcd;
-					elog.head.fr = 1;
-					elog.head.count = 1;
-					elog.head.ts = sysTick1s;
+				if (eid >= 0 && eid < METER_CH_COUNT) {
+					EVENT_FIFO *pEF = &meter[eid].eventFifo;
+					int en = pEF->count, ei;
+
+					if (en > N_EVENT_FIFO)
+						en = N_EVENT_FIFO;
 					fp = fopen(pmsg->fname, "wb");
 					if (fp != NULL) {
+						memset(&elog, 0, sizeof(elog));
+						elog.head.magic = 0x1234abcd;	/* == EVENT_FIFO_MAGIC(하단 정의) */
+						elog.head.fr    = pEF->fr;
+						elog.head.count = en;
+						elog.head.ts    = sysTick1s;
 						fwrite(&elog, sizeof(elog), 1, fp);
-						fwrite(payload, pmsg->size, 1, fp);
+						for (ei = 0; ei < en; ei++)
+							fwrite(&pEF->elog[ei], sizeof(EVENT_U), 1, fp);
 						fclose(fp);
 					}
-				}
-				else {
-					fread(&elog, sizeof(elog), 1, fp);
-					if (elog.head.count < pmsg->argv) {
-						elog.head.count++;
-					}
-					if (++elog.head.fr > pmsg->argv) {
-						elog.head.fr = 1;
-					}
-					fseek(fp, 0, SEEK_SET);
-					fwrite(&elog, sizeof(elog), 1, fp);
-					fseek(fp, sizeof(elog) * elog.head.fr, SEEK_SET);
-					fwrite(payload, pmsg->size, 1, fp);
-					fclose(fp);
 				}
 			}
 			else if (strcmp(pmsg->mode, "af") == 0 || strcmp(pmsg->mode, "al") == 0) {
@@ -2914,10 +2984,10 @@ void FS_task(void *arg)
 					}
 					/* [로테이션] PQ 캡처: W계열/D계열 각각 최근 CAP_KEEP_EVENTS 이벤트만 유지 */
 					else if (strncmp(pmsg->fname, "\\Trg_PQ\\W", 9) == 0) {
-						trimCaptureGroup("\\Trg_PQ\\W*.d", "\\Trg_PQ", CAP_W_FX, 3, CAP_KEEP_EVENTS);
+						trimCaptureGroup("\\Trg_PQ\\W*.d", "\\Trg_PQ", CAP_W_FX, 4, CAP_KEEP_EVENTS);
 					}
 					else if (strncmp(pmsg->fname, "\\Trg_PQ\\D", 9) == 0) {
-						trimCaptureGroup("\\Trg_PQ\\D*.d", "\\Trg_PQ", CAP_D_FX, 3, CAP_KEEP_EVENTS);
+						trimCaptureGroup("\\Trg_PQ\\D*.d", "\\Trg_PQ", CAP_D_FX, 4, CAP_KEEP_EVENTS);
 					}
 				}
 				t2 = sysTick64;			
@@ -2935,6 +3005,7 @@ void FS_task(void *arg)
 			memcpy(&db, &meter[0].setting, sizeof(SETTINGS));
 			saveSettings(&db);
 			storeAlarmDef();	/* 알람설정(almSet) 영속화 — SETTINGS에 미포함이라 별도 저장 */
+			storePqeDef();		/* PQE/Transient/Waveform/Trend 설정 영속화 — SETTINGS 미포함, 별도 저장 */
 			storeEnergy();		/* 에너지 편집(Energy Edit) 영속화 — Save Set에서만 FRAM 저장 */
 
 			meter[id].cntl.saveSetting = 0;
@@ -3004,7 +3075,7 @@ FAST_RMS *_getFastRMSBuf(int id, int ix)
 void RMSCapture(int id, int ix) {
 	FAST_RMS *pCur, *pNext, *pWin;
 	uint64_t Ts;
-	int i, pos, n, sx, eType;
+	int i, pos, eType, preCyc, postCyc, preSamp, evpos, sf, sp;
 	FILE *fp;
 	FS_MSG fsmsg;
 	PQ_EVENT *pqE;
@@ -3023,20 +3094,49 @@ void RMSCapture(int id, int ix) {
 		return;
 	
 	Ts = pqE->rQ.Q[pqE->rQ.re].Ts;
-	
-	if (pCur->ts <= Ts && Ts < pNext->ts) {				
+
+	/* [견고화] pNext(아직 미채움) 대신 프레임 길이로 이벤트 프레임을 ix(=re)에서 뒤로 찾고,
+	   post(1200샘플≈10프레임) 확보될 때까지 대기한 뒤 ix를 이벤트 프레임으로 재설정.
+	   → 프레임정렬 실패/stuck·미완성 post 로 D(RMS)캡처가 누락되던 문제 해결. */
+	{
+		uint64_t frameDur = (uint64_t)meter[id].cntl.nFastRMS * 1000 / FREQ_HZ(db.freq);
+		int efr = ix, kk, ahead, found = 0;
+		for (kk = 0; kk < N_FASTRMS_BUF; kk++) {
+			FAST_RMS *pe = _getFastRMSBuf(id, efr);
+			if (pe->ts != 0 && pe->ts <= Ts && Ts < pe->ts + frameDur) { found = 1; break; }
+			if (--efr < 0) efr = N_FASTRMS_BUF - 1;
+		}
+		if (!found) { pqE->rQ.re = (pqE->rQ.re + 1) % 8; return; }	/* 링 밖(오래됨) → 이벤트 폐기 */
+		ahead = ix - efr; if (ahead < 0) ahead += N_FASTRMS_BUF;
+		if (ahead < 11) return;						/* post 데이터 부족 → 다음 프레임에 재시도 */
+		ix = efr;							/* 이벤트 프레임으로 재설정 → 이하 기존 로직 그대로 */
+		pCur  = _getFastRMSBuf(id, ix);
+		pNext = _getFastRMSBuf(id, ix+1);
+	}
+
+	if (pCur->ts <= Ts && Ts < pNext->ts) {
 		i = 1000./FREQ_HZ(db.freq);	// 시간간격		
-		pCap->pos  = pos = (Ts-pCur->ts)/i;	// sag 시작위치 검색
+		evpos = (int)((Ts - pCur->ts)/i);	// 이벤트의 프레임내 위치
+		/* [정렬] 파형(W)과 동일 pre/post 비율(rcrd[0])을 1200샘플 창에 비례 배치 → 트리거 위치 일치 */
+		preCyc = meter[id].rcrd[0].pre; postCyc = meter[id].rcrd[0].post;
+		if (preCyc <= 0 && postCyc <= 0) { preCyc = DEF_PRE_CYC; postCyc = DEF_POST_CYC; }
+		if (preCyc < 0) preCyc = 0; if (postCyc < 0) postCyc = 0;
+		if (preCyc + postCyc <= 0) postCyc = 1;
+		preSamp = (int)((long)preCyc * 1200 / (preCyc + postCyc));
+		if (preSamp < 0) preSamp = 0; if (preSamp > 1199) preSamp = 1199;
+		sf = ix; sp = evpos - preSamp;		// 시작 = 이벤트에서 preSamp 만큼 뒤로
+		while (sp < 0) { sp += meter[id].cntl.nFastRMS; if (--sf < 0) sf += N_FASTRMS_BUF; }
+		pCap->pos  = preSamp;			// 캡처 내 트리거 위치 = pre 샘플수
 		pCap->ts   = Ts;
 		pCap->mask = pqE->rQ.Q[pqE->rQ.re].mask;
 		eType       = pqE->rQ.Q[pqE->rQ.re].eType;
 		
 		pqE->rQ.re = (pqE->rQ.re+1)%8;
 		
-		printf("===> PQ EVENT(%d): %d, %lld, %lld, %d\n", eType, ix, pCur->ts, Ts, pos);
+		printf("===> PQ EVENT(%d): efr=%d ts=%lld preSamp=%d\n", eType, ix, Ts, preSamp);
 		
-		// 현 위치를 기준으로 1초 전 데이터 부터, 10초간 데이터 복사
-		pWin = _getFastRMSBuf(id, ix-1);				
+		ix = sf; pos = sp;			// 트리거 preSamp 앞선 지점부터 복사
+		pWin = _getFastRMSBuf(id, ix);				
 		
 		pCap->ver = 1;		// 포맷: 전압+전류 동시저장
 		for (i=0; i<1200; i++) {
@@ -3050,7 +3150,7 @@ void RMSCapture(int id, int ix) {
 			if (++pos >= meter[id].cntl.nFastRMS) {
 				pos = 0;
 				if (++ix >= N_FASTRMS_BUF) ix = 0;
-				pWin = _getFastRMSBuf(id, ix-1);
+				pWin = _getFastRMSBuf(id, ix);
 			}
 		}
 #ifdef _DIRECT_FS
@@ -3073,7 +3173,11 @@ void RMSCapture(int id, int ix) {
 		}
 		else if (eType == E_OC) {
 			strcpy(path, "\\Trg_PQ\\");
-			strcat(path, "DOC_");		
+			strcat(path, "DOC_");
+		}
+		else if (eType == E_sINTR || eType == E_lINTR) {
+			strcpy(path, "\\Trg_PQ\\");
+			strcat(path, "DINT_");
 		}
 		else
 			return;
@@ -3911,14 +4015,18 @@ uint32_t logCutoffKeyMonths(int months) {
 }
 
 #ifdef HWV2
-/* HWV2: 완료된 하루의 에너지 로그를 일단위 파일(\log_egy\e<YYYYMMDD>_m<id>.d)로 아카이브.
+/* HWV2: 완료된 하루의 에너지 로그를 월단위 파일(\log_egy\egy<YYYYMM>_m<id>.d)로 아카이브.
  *  예산(FLASH_LOG_BUDGET_EGY) 초과 시 가장 오래된(날짜 최소) 파일부터 삭제 → 약 35일 보존. */
 static unsigned long egyArchNameKey(const char *name) {
 	unsigned long key = 0;
 	int i;
-	/* name = "e20260628_m1.d" → 'e' 다음 8자리 YYYYMMDD */
-	for (i = 1; i <= 8 && name[i] >= '0' && name[i] <= '9'; i++)
+	/* 아카이브만 인식: "egy" 다음 YYYYMM(6자리). egy_log*(egy 다음 '_')·기타 접두어는 0 반환→트림 제외 */
+	if (name[0] != 'e' || name[1] != 'g' || name[2] != 'y')
+		return 0;
+	for (i = 3; i <= 8 && name[i] >= '0' && name[i] <= '9'; i++)
 		key = key * 10 + (unsigned long)(name[i] - '0');
+	if (i == 3)
+		return 0;		/* egy 다음이 숫자 아님 → 아카이브 아님 */
 	return key;
 }
 
@@ -3926,12 +4034,14 @@ static int findOldestEgyArch(char *oldestName, uint32_t *totalSize) {
 	FINFO info;
 	int found = 0;
 	unsigned long oldestKey = 0xFFFFFFFFUL;
-	char mask[] = CONCAT(LOG_EGY_DIR, "\\e*.d");
+	char mask[] = CONCAT(LOG_EGY_DIR, "\\egy*.d");
 
 	*totalSize = 0;
 	info.fileID = 0;
 	while (ffind(mask, &info) == 0) {
 		unsigned long key = egyArchNameKey((const char *)info.name);
+		if (key == 0)
+			continue;		/* 평면 EFS에서 egy_log* 등이 glob에 걸려도 아카이브 아니면 제외(다른 파일 보호) */
 		*totalSize += info.size;
 		if (!found || key < oldestKey) {
 			oldestKey = key;
@@ -4483,18 +4593,18 @@ int pushEvent(int id, PQ_EVENT_INFO *pInf) {
 	// 월단위 이벤트 로그에 추가
 	sprintf(fsmsg.fname, "%s%04d%02d.d", EVENT_LIST_FILE, meter[id].cntl.tod.tm_year, meter[id].cntl.tod.tm_mon);
 	//sprintf(fsmsg.fname, "%s%04d.d", EVENT_LIST_FILE, meter[id].cntl.tod.tm_year);
-	strcpy(fsmsg.mode, "ab");	
+	strcpy(fsmsg.mode, "ab");
 	fsmsg.pbuf = (uint8_t *)pilog;	// 전역변수 만 쓸 수 있다
-	fsmsg.size = sizeof(*pilog);
-	putFsQ(&fsmsg);	
-	
+	fsmsg.size = sizeof(EVENT_LOG);	/* 아카이브는 EVENT_LOG(24B): trim/report(qw)/storeEventLog와 정합 (ITIC_LOG 앞 24B=EVENT_LOG, norm 제외) */
+	putFsQ(&fsmsg);
+
 	// event FIFO File에 추가
 	getEventFifoFileName(id, fsmsg.fname);
 	strcpy(fsmsg.mode, "ff");
-	fsmsg.argv = EVENT_LOG_CAP;
+	fsmsg.argv = (EVENT_LOG_CAP << 8) | (id & 0xff);	/* ff 핸들러가 id로 RAM eventFifo 스냅샷을 wb 재기록 */
 	fsmsg.pbuf = (uint8_t *)pilog;	// 전역변수 만 쓸 수 있다
 	fsmsg.size = sizeof(*pilog);
-	putFsQ(&fsmsg);	
+	putFsQ(&fsmsg);
 	
 	// Event FiFo에 추가한다
 	memcpy(&pEvtFifo->elog[pEvtFifo->fr], pilog, sizeof(*pilog));	

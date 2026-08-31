@@ -65,13 +65,16 @@
 
 #define	ENERGY_LOG_FILE0	CONCAT(SYS_DIR, "\\egy_log0.d")
 #define	ENERGY_LOG_FILE1	CONCAT(SYS_DIR, "\\egy_log1.d")
-#define	EGY_ARCH_FILE		CONCAT(LOG_EGY_DIR, "\\e")	/* HWV2: e<YYYYMM>_m{id}.d 월단위 append */
+#define	EGY_ARCH_FILE		CONCAT(LOG_EGY_DIR, "\\egy")	/* HWV2: egy<YYYYMM>_m{id}.d 월단위 append (egy_log*와 접두어 통일) */
 
 #define	MAXMIN_FILE	CONCAT(SYS_DIR, "\\maxmin.d")
 #define	ALARM_ST_FILE CONCAT(SYS_DIR, "\\astat.d")
 #define	ALARM_ST_FILE1 CONCAT(SYS_DIR, "\\astat.d1")
 #define	ALARM_ST_FILE2 CONCAT(SYS_DIR, "\\astat.d2")
 #define	ALARM_DEF_FILE CONCAT(SYS_DIR, "\\almdef.d")	/* 알람설정(almSet) 영속 파일(3채널) */
+#define	PQE_DEF_FILE CONCAT(SYS_DIR, "\\pqedef.d")	/* PQE/Transient/Waveform/Trend 설정 영속(3채널, SETTINGS 미포함분) */
+int storePqeDef(void);
+int loadPqeDef(void);
 #define ALARM_LIST_FILE CONCAT4(ALARM_DIR, "\\alog", ALOG_VER, "_")
 #define EVENT_LIST_FILE CONCAT4(EVENT_DIR, "\\elog", ELOG_VER, "_")
 #define TREND_FILE CONCAT(LOG_TREND_DIR, "\\trd")
@@ -95,7 +98,7 @@
  *  PQ    ~11.1MB(10분×3CH×35일), Trend ~2.77MB(15분×4그룹×35일), 에너지 아카이브 ~42KB */
 #define	FLASH_LOG_BUDGET_PQ		(11500UL * 1024UL)
 #define	FLASH_LOG_BUDGET_TREND	(3000UL * 1024UL)
-#define	FLASH_LOG_BUDGET_EGY	(1024UL * 1024UL)	/* e<YYYYMM>_m{id}.d 월단위 24개월+여유 */
+#define	FLASH_LOG_BUDGET_EGY	(1024UL * 1024UL)	/* egy<YYYYMM>_m{id}.d 월단위 24개월+여유 */
 #else
 #if (METER_CH_COUNT > 1)
 #define	FLASH_LOG_BUDGET_PQ		(1400UL * 1024UL)	/* 3CH: ql/qw × M0~M2 */
@@ -106,7 +109,7 @@
 #endif
 
 /* 로그 로테이션 보존정책 — 새 로그 생성 시 오래된 것 1개 정리(용량 예산 트림과 병행). */
-#define	CAP_KEEP_EVENTS		50	/* PQ 캡처: WSAG/WSWL/WOC 계열·DSAG/DSWL/DOC 계열 각각 최근 50 이벤트 */
+#define	CAP_KEEP_EVENTS		100	/* PQ 캡처: WSAG/WSWL/WOC 계열·DSAG/DSWL/DOC 계열 각각 최근 100 이벤트 */
 #define	QUAL_KEEP_DAYS		90	/* ql/qw(주간): 최근 90일 */
 #define	EGY_KEEP_MONTHS		24	/* 에너지 아카이브(월간): 최근 24개월(2년) */
 uint32_t logCutoffKeyDays(int days);	/* meter.c: days일 전 날짜키(YYYYMMDD), RTC 미설정 시 0 */
@@ -248,6 +251,7 @@ typedef struct {
 
 #define	L_HFWVWIN	6400	// 32k sps, 200ms 저장
 #define	L_LFWVWIN	1600	//  8k sps, 200ms 저장
+#define	N_WAVE_WIN	6		/* WAVE_WINDOW 링 깊이(30cycle pre/post 확보, 200ms×6=1200ms) */
 
 typedef struct {
 	int32_t w[3][L_HFWVWIN];
@@ -277,7 +281,7 @@ typedef struct {
 
 typedef struct {
 	int ix;
-	WAVE_WINDOW	ww[3];	
+	WAVE_WINDOW	ww[N_WAVE_WIN];
 } WAVE_WINDOW_BLK;
 
 //typedef struct {
@@ -359,20 +363,24 @@ typedef struct {
 } WAVE_HF_CAP;
 
 //// Sag/Swell Capture용
-#define	N_LFCAP	(1600*2)
+#define	N_LFCAP	(1600*3)	/* 4800 = 30cycle@50Hz(600ms@8kHz) 최대 캡처 버퍼 */
+#define	DEF_PRE_CYC	6		/* 기본 pre-trigger(cycle) — 레지스터 미설정 시 */
+#define	DEF_POST_CYC	18		/* 기본 post-trigger(cycle) */
 
 typedef struct {
 	uint64_t ts;		// 발생시각
 	float		scale;	// 전압 scale (vscale)
-	uint16_t pos;
+	uint16_t pos;		// 캡처 내 트리거 위치(=pre 샘플수)
 	uint16_t mask;	// 발생이벤트 위치, mask
 
 	uint16_t srate;
-	uint16_t ver;		// 포맷버전(기존 _r): 1 = 전압+전류 동시저장
+	uint16_t ver;		// 포맷버전: 2 = V+I + 가변길이(count)
 
-	float		iscale;	// 전류 scale (신규)
-	int32_t lW[3][N_LFCAP];	// 전압 파형(항상)
-	int32_t lI[3][N_LFCAP];	// 전류 파형(신규, 항상)
+	float		iscale;	// 전류 scale
+	uint16_t count;		// 상별 유효 샘플수(pre+post, 가변) — dense 저장
+	uint16_t _pad;
+	int32_t lW[3][N_LFCAP];	// 전압(dense: [3][count] 유효, 이후는 미사용)
+	int32_t lI[3][N_LFCAP];	// 전류
 } WAVE_LF_CAP;
 
 #define	N_FASTRMS_BUF	60

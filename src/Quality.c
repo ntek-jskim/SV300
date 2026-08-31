@@ -311,7 +311,8 @@ void getQualStartDate(char *str) {
 	sprintf(str, "%04d%02d%02d", ltm.tm_year, ltm.tm_mon, ltm.tm_mday);			
 #else	
 	uLocalTime(&sysTick1s, &ltm);			
-	t = sysTick1s-(ltm.tm_wday*24*3600);
+	{ int sd = meter[0].pqRpt.startDay; if (sd < 0 || sd > 6) sd = 0;	/* PQ Report Start Day 기준 이번 주 시작 */
+	  t = sysTick1s - (uint32_t)((ltm.tm_wday - sd + 7) % 7)*24*3600; }
 	uLocalTime(&t, &ltm);			
 	sprintf(str, "%04d%02d%02d", ltm.tm_year, ltm.tm_mon, ltm.tm_mday);			
 #endif	
@@ -331,7 +332,8 @@ void getQualLastStartDate(char *str) {
 	sprintf(str, "%04d%02d%02d", ltm.tm_year, ltm.tm_mon, ltm.tm_mday);			
 #else	
 	uLocalTime(&sysTick1s, &ltm);			
-	t = sysTick1s-(ltm.tm_wday+7)*24*3600;
+	{ int sd = meter[0].pqRpt.startDay; if (sd < 0 || sd > 6) sd = 0;	/* 전주 시작 = 이번주 시작 - 7일 */
+	  t = sysTick1s - (uint32_t)(((ltm.tm_wday - sd + 7) % 7) + 7)*24*3600; }
 	uLocalTime(&t, &ltm);			
 	sprintf(str, "%04d%02d%02d", ltm.tm_year, ltm.tm_mon, ltm.tm_mday);			
 #endif	
@@ -617,7 +619,8 @@ uint32_t getQualWeekEndTs(CNTL_DATA *pcntl) {
 	ltm.tm_hour = ltm.tm_min = ltm.tm_sec = 0;
 	
 	utc = mktime(&ltm);
-	utc += (6 - pcntl->tod.tm_wday + 1) * 86400;	// 다음 주기 시작일 계산 	
+	{ int sd = meter[0].pqRpt.startDay; if (sd < 0 || sd > 6) sd = 0;	/* 다음 주기 시작일(Start Day 기준) */
+	  utc += (uint32_t)(7 - ((pcntl->tod.tm_wday - sd + 7) % 7)) * 86400; }
 	uLocalTime(&utc, &ltm);
 #endif	
 
@@ -1005,8 +1008,9 @@ int updateQualData(int id)
 		
 		writeLogData(id, sysTick1s);
 					
-		// report 주기 변동 여부 확인 
-		if (id != 0) {	/* M0~M2 동일전압: EN50160(전압품질)은 M0만 산출 → M1/M2는 M0 결과 복사(ql1/qw1 write·QualWeek 중복 제거). 전류/전력(avgExp·writeLogData)은 위에서 채널별 유지 */
+		// report 주기 변동 여부 확인
+		if (!meter[0].pqRpt.active) { }		/* PQ Report Active=0(Disable) → EN50160 리포트 생성 skip (전류/전력·에너지 로그는 위 writeLogData로 유지) */
+		else if (id != 0) {	/* M0~M2 동일전압: EN50160(전압품질)은 M0만 산출 → M1/M2는 M0 결과 복사(ql1/qw1 write·QualWeek 중복 제거). 전류/전력(avgExp·writeLogData)은 위에서 채널별 유지 */
 			meter[id].rpt[0] = meter[0].rpt[0];
 			meter[id].rpt[1] = meter[0].rpt[1];
 		}

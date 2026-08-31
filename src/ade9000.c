@@ -2144,7 +2144,7 @@ void setPqEventLevel(int id) {
 	meter[id].cntl.sagRetLevel   = scale * (meter[id].pqevt[PQE_SAG].level+5)/100.;
 	meter[id].cntl.swellLevel    = scale * meter[id].pqevt[PQE_SWELL].level/100.;
 	meter[id].cntl.swellRetLevel = scale * (meter[id].pqevt[PQE_SWELL].level-5)/100.;
-	meter[id].cntl.intrLevel     = scale * 5/100.;
+	meter[id].cntl.intrLevel     = scale * meter[id].pqevt[PQE_INTR].level/100.;	/* INTERRUPTION Level(%) 설정 반영(기존 5% 하드코딩 제거) */
 	printf("---> sag level=%d, swell level=%d\n", meter[id].cntl.sagLevel, meter[id].cntl.swellLevel);
 	
 	// 전류
@@ -2459,11 +2459,19 @@ int min_n(uint32_t *val, int n) {
 
 void putEventCap(PQ_EVT_CAP_Q *pq, uint64_t ts, int type) {
 	int fr = (pq->fr+1)%8;
-	// Full 검사 
+	// Full 검사
 	if (fr != pq->re) {
 		pq->Q[pq->fr].Ts = ts;
 		pq->Q[pq->fr].eType = type;
-		pq->fr = fr;	
+		pq->fr = fr;
+	}
+}
+
+/* 대기중(미기록) 캡처의 마지막 엔트리 타입을 oldType→newType 갱신(sag→인터럽션 재분류) */
+static void updateLastCapType(PQ_EVT_CAP_Q *pq, int oldType, int newType) {
+	if (pq->fr != pq->re) {
+		int last = (pq->fr + 8 - 1) % 8;
+		if (pq->Q[last].eType == oldType) pq->Q[last].eType = newType;
 	}
 }
 
@@ -2565,7 +2573,21 @@ void checkPqEvent(int id) {
 	}
 	// sag 
 	else if (meter[id].cntl.sagSt == 2) {				
-		if (meter[id].cntl.online == 0)  {			
+		int isIntr = (meter[id].cntl.online == 0);	/* ZX 소멸(전압붕괴) */
+		if (!isIntr && meter[id].cntl.sagMask) {	/* 깊이기반: sag 중 전압 < INTERRUPTION Level → 인터럽션 */
+			for (i = 0; i < 3; i++)
+				if ((meter[id].cntl.sagMask & (1<<i)) && ade9000[id].urmsFast[i] < meter[id].cntl.intrLevel) { isIntr = 1; break; }
+		}
+		if (isIntr)  {
+			/* [연동+구분] 캡처를 인터럽션 타입(E_sINTR)으로 태깅 → WINT/DINT 파일명(Ts=sag시작=pre 확보) */
+			if (meter[id].pqevt[PQE_SAG].action == 2) {
+				updateLastCapType(&meter[id].cntl.pqe.wQ, E_SAG, E_sINTR);	/* sag시작 큐잉분 재분류 */
+				updateLastCapType(&meter[id].cntl.pqe.rQ, E_SAG, E_sINTR);
+			}
+			else if (meter[id].pqevt[PQE_INTR].action == 2) {
+				putEventCap(&meter[id].cntl.pqe.wQ, pSag->startTs, E_sINTR);	/* INTR전용 큐잉 */
+				putEventCap(&meter[id].cntl.pqe.rQ, pSag->startTs, E_sINTR);
+			}			
 			meter[id].cntl.sagSt = 3;			
 			//printf("+++ Interruption \n");
 		}
