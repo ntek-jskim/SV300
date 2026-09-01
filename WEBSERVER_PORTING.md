@@ -7,7 +7,95 @@ confWebApp(외부 뷰어)에서 구현했지만 **내장웹(web.c)에는 아직 
 
 ---
 
-## ✅ 1. 이벤트/알람 신규 항목 블링킹  ← 최우선(오늘 confWebApp 신규)
+## ★ 제한 원칙 / 역할 분담 (2026/09/01 확정)
+
+내장 WEBSERVER는 confWebApp의 모든 기능을 이식하지 **않는다**. 장치(LPC4357)는 **실시간 계측이 최우선**이고 RAM/Flash/CPU가 제한되므로 역할을 나눈다.
+
+**WEBSERVER(내장) — 실시간·경량·안전 (RAM/레지스터 기반)**
+- 대시보드·채널 라이브 계측·알람/이벤트·기본 설정(레지스터)·**FW 업데이트**
+- **소형 라이브 CSV**만 — web.c가 이미 읽는 실시간 데이터. 구현됨: `/api/demand.csv`(수요 96×15분), `/api/energy.csv`(24h 당일/전일 kWh)
+
+**confWebApp(외부) — 파일기반·분석·리치 (FTP + PC 자원)**
+- PQ/Trend **파일뷰어**·**아카이브 CSV**(egy·trd)·**COMTRADE**·**PDF**
+- 채널설정 편집기·Calibration·Backup/Restore·3단계 권한(SUPER)
+
+**WEBSERVER 금지/제한 (web.c 상단 주석에도 명문화)**
+1. **FS 대용량 파일 파싱 금지** — PQ/에너지 월아카이브·Trend·캡처 파일 (`fsFileLock`·SPIFI 활동 → 계측·파형캡처 seam 교란)
+2. **CSV는 RAM 라이브만**, 아카이브(과거)는 ✗
+3. **PDF 서버생성 금지**(라이브러리·RAM 부적합) — 필요시 브라우저 인쇄
+4. **COMTRADE 금지**(캡처 파싱 무거움)
+5. 핸들러는 **짧고 빠르게**, FS락/CPU 장시간 보유 금지, 대용량 응답 지양
+6. 무거운 UI·3단계 권한은 confWebApp에
+
+> 이력: 2026/09/01 `apiEgyCsv`(FS 아카이브 CSV)를 시도했다가 원칙 #1·#2 위반으로 **철회**. WEBSERVER CSV는 demand/energy 라이브까지만 유지.
+
+---
+
+## 📊 종합 비교표 — WEBSERVER 지원 현황 (confWebApp 전체 기능 대비, 2026/09/01)
+
+범례: **✅ 지원** · **❌ 미지원**(→confWebApp) · **△ 부분/구버전** · **☑️ 반영됨** · **— 해당없음**
+
+### 1) 측정 / 모니터링 (RAM·레지스터 라이브 — WEBSERVER 강점)
+| 기능 | WEBSERVER | confWebApp | 비고 |
+|---|:---:|:---:|---|
+| Dashboard | ✅ | ✅ | CH1 순시 |
+| Feeder | ✅ | ✅ | 피더별 계측 |
+| Channel · Meter / Phase / Min·Max | ✅ | ✅ | |
+| Channel · Harmonics | ✅ | ✅ | 차수 2~63 |
+| Channel · Waveform | ✅ | ✅ | V/I 파형 |
+| Channel · Report (EN50160+ITIC) | △ | ✅ | web.c EN50160표·ITIC커브 有 / 이벤트점·**PDF**·**CSV**는 confWebApp |
+| Channel · VQ (전압편차) | ✅ | ✅ | Flicker 미구현(양쪽) |
+| Channel · Monthly (10분평균) | ✅ | ✅ | |
+| Channel · Energy (매트릭스+편집) | ✅ | ✅ | |
+| Channel · Demand (수요 프로파일) | ✅ | ✅ | |
+| Channel · Alarm / Event | ✅ | ✅ | 상태·로그 |
+| IO 모듈 (DI/PI/Temp) | ✅ | ✅ | web.c 전용 **IO 페이지**(상단 nav 'IO') + 대시보드 IO DATA 카드: DI/PI/Temp 표시·Type/Deb/Scale 편집·Clear PI (7050~7069) |
+
+### 2) PQ / Trend 파일뷰어 (FTP·FS 파일 기반) — **원칙상 WEBSERVER 미지원**
+| 기능 | WEBSERVER | confWebApp | 비고 |
+|---|:---:|:---:|---|
+| PQ Log (ql VQ트렌드 파일) | ❌ | ✅ | FS 파일뷰어 |
+| PQ Report (qw 주간 파일) | ❌ | ✅ | +ITIC점·**PDF**·**CSV** |
+| PQ Trigger (캡처 W/D) | ❌ | ✅ | 파형/RMS |
+| PQ Energy (egy 월아카이브) | ❌ | ✅ | +**CSV** |
+| Trend (trd pen recorder) | ❌ | ✅ | +**CSV**·Device Files |
+| Device Files 선택/전체 삭제 | ❌ | ✅ | FTP DELE |
+| **COMTRADE** 내보내기 | ❌ | ✅ | 캡처 CFG/DAT |
+
+### 3) 내보내기 (Export)
+| 기능 | WEBSERVER | confWebApp | 비고 |
+|---|:---:|:---:|---|
+| 라이브 CSV (demand·energy) | ✅ | — | web.c 신규 `/api/demand.csv`·`/api/energy.csv` (octet-stream 다운로드) |
+| 아카이브 CSV (egy·trd) | ❌ | ✅ | FS 파싱 필요 → confWebApp |
+| **PDF** (리포트) | ❌ | ✅ | 서버생성 금지(라이브러리·RAM); 필요시 브라우저 인쇄 |
+
+### 4) 설정 (Settings)
+| 기능 | WEBSERVER | confWebApp | 비고 |
+|---|:---:|:---:|---|
+| Main Setting (Comm/PT/CT/ETC/Freq) | ✅ | ✅ | 레지스터 |
+| Channel Setting 편집기 | △ | ✅ | web.c 有(PQEvent/Transient/Waveform/Disturb/Trend/PQReport/AlarmDef/Alarm+PT/CT) / confWebApp은 정리됨(콤보·Active접기·Alarm병합·Transient·Disturb·Version 미사용제거·CH KF I3제한) |
+| **Calibration** | ❌ | ✅ | confWebApp SUPER 전용 |
+| **Backup / Restore** | ❌ | ✅ | 설정 CSV 백업/복원 |
+
+### 5) 시스템 / 공통
+| 기능 | WEBSERVER | confWebApp | 비고 |
+|---|:---:|:---:|---|
+| 로그인 / 권한 | △ | ✅ | web.c **2단계**(admin ntek·viewer sv300) / confWebApp **3단계**(**SUPER**·admin·viewer) |
+| FW Update (웹 업로드/적용) | ✅ | — | web.c 전용(장치 자체 플래시) |
+| Manual R/W (레지스터) | ✅ | ✅ | |
+| 신규 이벤트/알람 **블링킹** | ❌(불필요) | ✅ | 웹서버는 블링킹 불필요로 결정(2026/09/01)·ACK Alarm/Event 버튼 제거 |
+| 시각 로컬화 (getUTC*) | ☑️ | ✅ | web.c 반영됨 |
+
+### 요약 — WEBSERVER **미지원**(=confWebApp 전용) 핵심
+- **파일기반 전부**: PQ/Trend 파일뷰어·아카이브 CSV·COMTRADE (원칙: FS 대용량 파싱 금지)
+- **PDF** 서버생성 (원칙: 라이브러리·RAM)
+- **Calibration**, **Backup/Restore**, **3단계 권한(SUPER)**, 신규 **블링킹**(웹서버 불필요로 미적용, 2026/09/01)
+- **△(구버전)**: Channel Setting 편집기(정리 전), Report(ITIC 이벤트점 미표시), 로그인(2단계)
+
+---
+
+## ❌ 1. 이벤트/알람 신규 항목 블링킹 — 웹서버 불필요로 최종 제외(2026/09/01)
+> **결정(2026/09/01)**: 웹서버엔 블링킹 불필요. 이식했다가 **전량 원복**하고 대시보드 **ACK Alarm/Event 버튼도 삭제**. 아래는 이력용 스펙.
 **동작**: Event/Alarm Log에서 **아직 ACK 안 한(=신규) 행의 Type/State 뱃지만** 깜빡임. ACK 누르면 정지, 새 이벤트 오면 다시 깜빡.
 **confWebApp**: `sv300ser.html`
 - `getSeen/setSeen`(localStorage, key `sv300blink_ev`/`_al`) — "ACK한 최신 ts" 저장.
@@ -42,8 +130,8 @@ web.c는 **실시간 대시보드**라 FTP 파일뷰어가 없음. 아래는 임
 - **PQ 파일 다중/전체 삭제**(FTP DELE, 설정파일 보호 `_sv_pq_deletable`).
 - **Trend 파일 뷰어**(FTP \log_trend 72B 레코드).
 
-## ⚠️ 5. VQ(전압품질) 페이지
-confWebApp 전용(`/api/vquality`, base+780). web.c에 VQ 탭 신설 시 이식 가능(레지스터는 이미 노출).
+## ☑️ 5. VQ(전압품질) 페이지 — web.c 반영 완료
+web.c에 **VQ 채널 탭 구현됨**(`/api/vq`·`bVq`, `meter[0].vq` Uud/Uuv, 커밋 93a72d9). Flicker(Pi/Pst/Plt)는 양쪽 미구현. (종합 비교표 1)의 ✅와 일치.
 
 ---
 

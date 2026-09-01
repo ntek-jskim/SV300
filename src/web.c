@@ -8,6 +8,13 @@
  *   - Dashboard: /api/dashboard(CH1 순시) + /api/sv300/events(3CH 알람/이벤트).
  *   - 데이터: meter[id].meter(METERING) 및 meter[id].alarm/alist/elist 직렬화.
  *   - 정적파일은 S0:(SPI Flash) 폴백(HTTP_SERVER_FS_SUPPORT).
+ *
+ *  ★ 제한 원칙 (confWebApp과 역할 분담 — 장치 실시간 계측이 최우선):
+ *   1. CSV/응답은 RAM 라이브 데이터만(web.c가 이미 읽는 실시간). FS 로그파일 파싱 금지.
+ *   2. PQ/에너지 월아카이브·Trend·캡처 파일뷰어/CSV, COMTRADE, PDF 서버생성 → confWebApp(외부, FTP) 담당.
+ *   3. 핸들러는 짧고 빠르게(FS락/CPU 장시간 보유 금지 → 계측·파형캡처 seam 교란 방지), 대용량 응답 지양.
+ *   4. 무거운 UI(채널설정 편집·Calibration·Backup)·3단계 권한도 confWebApp에.
+ *   상세: SV300/WEBSERVER_PORTING.md
  *----------------------------------------------------------------------------*/
 #include <string.h>
 #include <stdlib.h>
@@ -144,6 +151,17 @@ static error_t beginJson(HttpConnection *c)
 	c->response.noCache         = TRUE;
 	/* 폴링 엔드포인트는 keep-alive 유지(커넥션 재사용 → TIME_WAIT 소켓 처닝 방지).
 	 * idle 점유는 HTTP_SERVER_TIMEOUT(3s)로 완화. */
+	return httpWriteHeader(c);
+}
+
+/* CSV 다운로드 응답 시작 — CycloneTCP는 Content-Disposition 미지원이라
+ * application/octet-stream으로 강제 다운로드(브라우저 인라인 표시 방지, 파일명=URL의 .csv). beginJson과 동일 스트리밍 */
+static error_t beginCsv(HttpConnection *c)
+{
+	httpInitResponseHeader(c);
+	c->response.contentType     = "application/octet-stream";
+	c->response.chunkedEncoding = TRUE;
+	c->response.noCache         = TRUE;
 	return httpWriteHeader(c);
 }
 
@@ -565,6 +583,30 @@ static error_t apiEnergyLog(HttpConnection *c)
 	return httpCloseStream(c);
 }
 
+/* GET /api/energy.csv — 채널별 시간별(24h) 당일/전일 kWh CSV 다운로드 */
+static error_t apiEnergyCsv(HttpConnection *c)
+{
+	char b[96];
+	int i, k, nch = webNch();
+
+	if (beginCsv(c)) return ERROR_WRITE_FAILED;
+	w(c, "hour");
+	for (i = 0; i < nch; i++) { snprintf(b, sizeof(b), ",CH%d_today_kWh,CH%d_last_kWh", i + 1, i + 1); w(c, b); }
+	w(c, "\r\n");
+	for (k = 0; k < 24; k++) {
+		snprintf(b, sizeof(b), "%02d", k);
+		w(c, b);
+		for (i = 0; i < nch; i++) {
+			uint16_t *E = (uint16_t *)&meter[i].elog[0];   /* E[2+8k]=전일, E[202+8k]=당일 시간별 kWh */
+			snprintf(b, sizeof(b), ",%.2f,%.2f",
+				w2f(E[202 + 8 * k], E[203 + 8 * k]), w2f(E[2 + 8 * k], E[3 + 8 * k]));
+			w(c, b);
+		}
+		w(c, "\r\n");
+	}
+	return httpCloseStream(c);
+}
+
 /* GET /api/demandlog — 채널별 96점(15분) P 수요 프로파일(kW) */
 static error_t apiDemandLog(HttpConnection *c)
 {
@@ -591,6 +633,28 @@ static error_t apiDemandLog(HttpConnection *c)
 		w(c, b);
 	}
 	w(c, "]}");
+	return httpCloseStream(c);
+}
+
+/* GET /api/demand.csv — 수요 프로파일(96×15분, 채널별 kW) CSV 다운로드 */
+static error_t apiDemandCsv(HttpConnection *c)
+{
+	char b[96];
+	int i, k, nch = webNch();
+
+	if (beginCsv(c)) return ERROR_WRITE_FAILED;
+	w(c, "slot");
+	for (i = 0; i < nch; i++) { snprintf(b, sizeof(b), ",CH%d_kW", i + 1); w(c, b); }
+	w(c, "\r\n");
+	for (k = 0; k < 96; k++) {
+		snprintf(b, sizeof(b), "%02d:%02d", (k * 15) / 60, (k * 15) % 60);
+		w(c, b);
+		for (i = 0; i < nch; i++) {
+			snprintf(b, sizeof(b), ",%.2f", meter[i].dm.DP_P_Log[k] / 1000.0f);
+			w(c, b);
+		}
+		w(c, "\r\n");
+	}
 	return httpCloseStream(c);
 }
 
@@ -852,17 +916,26 @@ static error_t apiEvents(HttpConnection *c)
 		}
 	}
 
-	/* summary: PQ_EVENT_COUNT 합산(3CH) */
+	/* summary: 이벤트 로그를 타입별 집계(표시 로그와 일치·confWebApp 동일). pqEvtCnt는 부팅 시 리셋되어 로그와 어긋나므로 미사용 */
 	{
-		unsigned tv = 0, ti = 0, oc = 0, sag = 0, sw = 0, intr = 0;
+		unsigned sag = 0, sw = 0, sintr = 0, lintr = 0, oc = 0;
 		for (i = 0; i < webNch(); i++) {
-			PQ_EVENT_COUNT *p = &meter[i].pqEvtCnt;
-			tv += p->tvc; ti += p->tcc; oc += p->oc;
-			sag += p->sag; sw += p->swell; intr += p->intr;
+			EVENT_LIST *E = &meter[i].elist;
+			int cnt = E->count; if (cnt > N_EVENT_LIST) cnt = N_EVENT_LIST;
+			for (k = 0; k < cnt; k++) {
+				switch (E->elog[k].type) {
+				case E_SAG:   sag++;   break;
+				case E_SWELL: sw++;    break;
+				case E_sINTR: sintr++; break;
+				case E_lINTR: lintr++; break;
+				case E_OC:    oc++;    break;
+				default: break;
+				}
+			}
 		}
 		snprintf(b, sizeof(b),
-			"],\"summary\":{\"tv\":%u,\"ti\":%u,\"oc\":%u,\"sag\":%u,\"swell\":%u,\"intr\":%u}}",
-			tv, ti, oc, sag, sw, intr);
+			"],\"summary\":{\"sag\":%u,\"swell\":%u,\"sintr\":%u,\"lintr\":%u,\"oc\":%u}}",
+			sag, sw, sintr, lintr, oc);
 		w(c, b);
 	}
 	return httpCloseStream(c);
@@ -1465,9 +1538,9 @@ static const char INDEX_HTML[] =
 "     </div>\n"
 "    </div>\n"
 "    <div class='dgrid2'>\n"
-"     <div class='dcard e1'><div class='dct'>Alarm Status <span id='as-cnt' class='dbadge'>0</span><button class='ebtn' id='b-ackal' onclick=\"svCmd('ack_alarm')\" disabled>ACK Alarm</button></div><div class='elist'><table class='etbl' id='as-tbl'></table></div></div>\n"
+"     <div class='dcard e1'><div class='dct'>Alarm Status <span id='as-cnt' class='dbadge'>0</span></div><div class='elist'><table class='etbl' id='as-tbl'></table></div></div>\n"
 "     <div class='dcard e2'><div class='dct'>Alarm Log<button class='ebtn' id='b-clral' onclick=\"svCmd('clear_alarm')\" disabled>Clear Alarm</button></div><div class='elist'><table class='etbl' id='al-tbl'></table></div></div>\n"
-"     <div class='dcard e3'><div class='dct'>Event Log<button class='ebtn' id='b-clrev' onclick=\"svCmd('clear_event')\" disabled>Clear Event</button><button class='ebtn' id='b-ackev' onclick=\"svCmd('ack_event')\" disabled>ACK Event</button></div><div class='elist'><table class='etbl' id='el-tbl'></table></div><div class='esum' id='el-sum'></div></div>\n"
+"     <div class='dcard e3'><div class='dct'>Event Log<button class='ebtn' id='b-clrev' onclick=\"svCmd('clear_event')\" disabled>Clear Event</button></div><div class='elist'><table class='etbl' id='el-tbl'></table></div><div class='esum' id='el-sum'></div></div>\n"
 "    </div>\n"
 "   </div>\n"
 /* setup page (Phase 2에서 구현) */
@@ -1540,7 +1613,7 @@ static const char INDEX_HTML[] =
 "function me(){return j('/api/me').then(function(r){\n"
 " if(r.d.auth){IS_ADMIN=(r.d.role==='admin');if(r.d.nch)NCH=r.d.nch;\n"
 "  $('role').textContent=r.d.user+' ('+(IS_ADMIN?'Admin':'Viewer')+')';$('role').className='role '+(IS_ADMIN?'admin':'viewer');\n"
-"  ['b-ackal','b-clral','b-clrev','b-ackev'].forEach(function(id){$(id).disabled=!IS_ADMIN});\n"
+"  ['b-clral','b-clrev'].forEach(function(id){$(id).disabled=!IS_ADMIN});\n"
 "  showApp();go('dash');pollLoop();return true;}\n"
 " showLogin();return false;});}\n"
 "function logout(){j('/api/logout').then(function(){IS_ADMIN=false;showLogin()})}\n"
@@ -1598,10 +1671,10 @@ static const char INDEX_HTML[] =
 "  if(!d.eventlog.length)h+=\"<tr><td class='empty' colspan='5'>No events</td></tr>\";\n"
 "  d.eventlog.forEach(function(x){var t=ET[x.type]||['#'+x.type,'oc'],ph=[];if(x.mask&1)ph.push('L1');if(x.mask&2)ph.push('L2');if(x.mask&4)ph.push('L3');\n"
 "   h+=\"<tr><td><span class='evt \"+t[1]+\"'>\"+t[0]+'</span> '+chip(x.chn)+\"</td><td class='mono'>\"+ts2(x.ts)+'</td><td>'+x.dur+'</td><td>'+(ph.join(',')||'-')+'</td><td>'+n(x.level,2)+'</td></tr>'});$('el-tbl').innerHTML=h;\n"
-"  var s=d.summary,L=[['Transient V',s.tv],['Transient I',s.ti],['Over Current',s.oc],['Sag',s.sag],['Swell',s.swell],['Interruption',s.intr]],e='';\n"
+"  var s=d.summary,L=[['Sag',s.sag],['Swell',s.swell],['Short Intr',s.sintr],['Long Intr',s.lintr],['Over Current',s.oc]],e='';\n"
 "  L.forEach(function(x){e+=\"<div class='sb'><span>\"+x[0]+'</span><b>'+x[1]+'</b></div>'});$('el-sum').innerHTML=e;\n"
 " }).catch(function(){});}\n"
-"function svCmd(cmd){var lbl={ack_alarm:'ACK Alarm',clear_alarm:'Clear Alarm',clear_event:'Clear Event',ack_event:'ACK Event'}[cmd];\n"
+"function svCmd(cmd){var lbl={clear_alarm:'Clear Alarm',clear_event:'Clear Event'}[cmd];\n"
 " if(!confirm(lbl+' - proceed?'))return;\n"
 " jp('/api/sv300/command',{cmd:cmd}).then(function(r){\n"
 "  if(r.s===403){alert('Admin only');return}if(!r.d.ok){alert('Command failed');return}loadEvents();});}\n"
@@ -1930,7 +2003,9 @@ static error_t webRequestCallback(HttpConnection *c, const char_t *uri)
 		if (!strcmp(uri, "/api/minmax"))       return apiMinmax(c);
 		if (!strcmp(uri, "/api/energynow"))    return apiEnergyNow(c);
 		if (!strcmp(uri, "/api/energylog"))    return apiEnergyLog(c);
+		if (!strcmp(uri, "/api/energy.csv"))   return apiEnergyCsv(c);
 		if (!strcmp(uri, "/api/demandlog"))    return apiDemandLog(c);
+		if (!strcmp(uri, "/api/demand.csv"))   return apiDemandCsv(c);
 		if (!strcmp(uri, "/api/harmonics"))    return apiHarmonics(c);
 		if (!strcmp(uri, "/api/waveform"))     return apiWaveform(c);
 		if (!strcmp(uri, "/api/en50160"))      return apiEn50160(c);
