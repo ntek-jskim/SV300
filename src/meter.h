@@ -111,7 +111,7 @@ int loadPqeDef(void);
 /* 로그 로테이션 보존정책 — 새 로그 생성 시 오래된 것 1개 정리(용량 예산 트림과 병행). */
 #define	CAP_KEEP_EVENTS		100	/* PQ 캡처: WSAG/WSWL/WOC 계열·DSAG/DSWL/DOC 계열 각각 최근 100 이벤트 */
 #define	QUAL_KEEP_DAYS		90	/* ql/qw(주간): 최근 90일 */
-#define	EGY_KEEP_MONTHS		24	/* 에너지 아카이브(월간): 최근 24개월(2년) */
+#define	EGY_KEEP_MONTHS		6	/* 에너지 아카이브(월간): 최근 6개월. 15분 슬롯(96)로 레코드 1552B/일(약 4배↑) → 6개월 유지로 예산 1MB 내 */
 uint32_t logCutoffKeyDays(int days);	/* meter.c: days일 전 날짜키(YYYYMMDD), RTC 미설정 시 0 */
 uint32_t logCutoffKeyMonths(int months);	/* meter.c: months개월 전 월키(YYYYMM), RTC 미설정 시 0 */
 
@@ -1527,6 +1527,27 @@ typedef struct {
 	} egy[24];
 	uint16_t _r[4], magic, crc;
 } ENERGY_LOG;
+
+/* 15분 슬롯(96) 에너지 아카이브 로그 — METER_DEF 밖 별도 전역(Modbus 맵 무영향).
+ * elog(24시간)는 Modbus This/Last-day 표시용 그대로 두고, 월 아카이브는 이 15분 로그로 기록. */
+typedef struct {
+	uint32_t ts;			/* 당일 시작 epoch(로컬) */
+	struct {
+		uint32_t kwh, kvarh[2], kVAh;
+	} egy[96];			/* q = tm_hour*4 + tm_min/15, 0..95 */
+	uint16_t _r[4], magic, crc;
+} ENERGY_LOG15;			/* 1552B */
+
+typedef struct {
+	ENERGY_LOG15 log[2];	/* [0]=today, [1]=전일(아카이브 대기) */
+	uint32_t buf[4];		/* 15분 기준선(EGY_TOTAL 스냅샷): kwh/kvarh_imp/kvarh_exp/kVAh */
+	uint32_t lastQ;			/* 마지막 기록(누적) 슬롯(0..95) */
+	uint32_t lastQstore;	/* 마지막 flash 저장 슬롯 — today파일 저장을 정각에서 2분 비켜 기록 */
+	uint32_t dayMday;		/* 일 변경 추적(tm_mday) */
+	uint32_t dayStartTick;	/* 당일 시작 sysTick1s(+3분 지연 아카이브 타이머) */
+	uint32_t pendArch;		/* 전일 아카이브 지연 대기 플래그 */
+} EGY15_CH;
+extern EGY15_CH egy15[METER_CH_COUNT];
 
 typedef struct {
 	uint32_t ts;

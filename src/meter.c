@@ -14,8 +14,8 @@
 
 #define	FW_VER	0003
 #define	FW_BUILD_YEAR 26
-#define	FW_BUILD_MON  8
-#define	FW_BUILD_DAY  28
+#define	FW_BUILD_MON  9
+#define	FW_BUILD_DAY  1
 
 #define	SQRT_2	 1.414213562 
 
@@ -69,6 +69,7 @@ FFT_CZT *pFFT = &fftMem;
 
 extern OsTaskId  tid_fft;
 ENERGY_NVRAM 	egyNvr;
+EGY15_CH		egy15[METER_CH_COUNT];	/* 15분 슬롯 에너지 아카이브(METER_DEF 밖 별도 전역) */
 
 extern void assertEventOutput(int, int);
 
@@ -3843,6 +3844,50 @@ void storeEnergyLogFs(int id, int sel, ENERGY_LOG *pEgyLog)
 	fsFileUnlock();
 }
 
+/* ===== 15분 슬롯 에너지 로그(egy15) — 별도 전역, 월아카이브 소스 ===== */
+static void getEnergyLog15FileName(int id, int sel, char *path)
+{
+	sprintf(path, "%s\\egy15_%d_m%d.d", SYS_DIR, sel, id);
+}
+
+static void initEnergyLog15Blob(void *blob)
+{
+	ENERGY_LOG15 *plog = blob;
+	memset(plog, 0, sizeof(ENERGY_LOG15));
+	plog->magic = 0x1234abcd;
+	plog->ts = sysTick1s;
+}
+
+void storeEnergyLog15Fs(int id, int sel)
+{
+	char path[64];
+	FILE *fp;
+
+	if (id < 0 || id >= METER_CH_COUNT || sel < 0 || sel > 1)
+		return;
+	getEnergyLog15FileName(id, sel, path);
+	fsFileLock();
+	fp = fopen(path, "wb");
+	if (fp != NULL) {
+		fwrite(&egy15[id].log[sel], sizeof(ENERGY_LOG15), 1, fp);
+		fclose(fp);
+	}
+	fsFileUnlock();
+}
+
+void loadEnergyLog15Fs(void)
+{
+	int id;
+	char path[64];
+
+	for (id = 0; id < METER_CH_COUNT; id++) {
+		getEnergyLog15FileName(id, 0, path);
+		loadOrCreateFsBlob(path, &egy15[id].log[0], sizeof(ENERGY_LOG15), initEnergyLog15Blob);
+		getEnergyLog15FileName(id, 1, path);
+		loadOrCreateFsBlob(path, &egy15[id].log[1], sizeof(ENERGY_LOG15), initEnergyLog15Blob);
+	}
+}
+
 // energy
 
 void storeEnergy(void) {
@@ -4093,7 +4138,7 @@ static void trimEgyArchAge(uint32_t cutoffKey) {
 	printf("trimEgyArchAge: delete %s (cutoff=%u, res=%d)\n", path, cutoffKey, res);
 }
 
-static void archiveEnergyLogDay(int id, ENERGY_LOG *pDay) {
+static void archiveEnergyLog15Day(int id, ENERGY_LOG15 *pDay) {
 	char path[96];
 	struct tm ltm;
 	uint32_t ts;
@@ -4111,7 +4156,7 @@ static void archiveEnergyLogDay(int id, ENERGY_LOG *pDay) {
 	if (fp != NULL)
 		fclose(fp);
 
-	/* 월 단위 파일에 하루치(ENERGY_LOG) append — 월 바뀌면 새 파일 */
+	/* 월 단위 파일에 하루치(ENERGY_LOG15, 15분 96슬롯) append — 월 바뀌면 새 파일 */
 	sprintf(path, "%s%04d%02d_m%d.d", EGY_ARCH_FILE,
 	        ltm.tm_year, ltm.tm_mon, id);
 	fp = fopen(path, "ab");
@@ -4120,11 +4165,11 @@ static void archiveEnergyLogDay(int id, ENERGY_LOG *pDay) {
 		fp = fopen(path, "ab");
 	}
 	if (fp != NULL) {
-		fwrite(pDay, sizeof(ENERGY_LOG), 1, fp);
+		fwrite(pDay, sizeof(ENERGY_LOG15), 1, fp);
 		fclose(fp);
 	}
 	trimEgyArchBudget();
-	trimEgyArchAge(logCutoffKeyMonths(EGY_KEEP_MONTHS));	/* 24개월 경과 아카이브 1개 정리 */
+	trimEgyArchAge(logCutoffKeyMonths(EGY_KEEP_MONTHS));	/* 보존기간 경과 아카이브 1개 정리 */
 	fsFileUnlock();
 }
 #endif	/* HWV2 */
@@ -4158,11 +4203,7 @@ int putEnergyLog(int id, int hix)
 	if (meter[id].cntl.egyTs1D != meter[id].cntl.tod.tm_mday) {
 		meter[id].cntl.egyTs1D = meter[id].cntl.tod.tm_mday;
 
-		memcpy(&pegylog[1], peLog, sizeof(ENERGY_LOG));
-#ifdef HWV2
-		/* 완료된 하루를 일단위 아카이브에 보존(약 35일) */
-		archiveEnergyLogDay(id, &pegylog[1]);
-#endif
+		memcpy(&pegylog[1], peLog, sizeof(ENERGY_LOG));	/* Modbus This/Last-day 표시용 스냅샷(월아카이브는 egy15가 담당) */
 		memset(peLog, 0, sizeof(ENERGY_LOG));
 		peLog->ts = meter[id].cntl.egyStartTs1D = sysTick1s;
 
@@ -4175,6 +4216,49 @@ int putEnergyLog(int id, int hix)
 	}
 
 	return wF;
+}
+
+/* 15분 슬롯 에너지 기록 — 직전 슬롯(q) 확정 + 일 변경 처리. egy15 별도 전역(Modbus 무영향) */
+void putEnergyLog15(int id, int q)
+{
+	ENERGY_LOG15 *pt = &egy15[id].log[0];
+	uint32_t now[4];
+
+	if (id < 0 || id >= METER_CH_COUNT || q < 0 || q >= 96)
+		return;
+
+	if (pt->ts == 0)
+		pt->ts = egy15[id].dayStartTick ? egy15[id].dayStartTick : sysTick1s;
+
+	now[0] = EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KWH,   EGY_SIGN_IMPORT);
+	now[1] = EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KVARH, EGY_SIGN_IMPORT);
+	now[2] = EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KVARH, EGY_SIGN_EXPORT);
+	now[3] = EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KVAH,  EGY_SIGN_IMPORT);
+
+	/* 직전 15분 슬롯 = 15분간 EGY_TOTAL 델타(정확, 4값) */
+	pt->egy[q].kwh      = now[0] - egy15[id].buf[0];
+	pt->egy[q].kvarh[0] = now[1] - egy15[id].buf[1];
+	pt->egy[q].kvarh[1] = now[2] - egy15[id].buf[2];
+	pt->egy[q].kVAh     = now[3] - egy15[id].buf[3];
+
+	egy15[id].buf[0] = now[0];
+	egy15[id].buf[1] = now[1];
+	egy15[id].buf[2] = now[2];
+	egy15[id].buf[3] = now[3];
+
+	/* 일 변경 → 전일 스냅샷 후 리셋. 아카이브는 energy_scan에서 +3분 뒤(정각 부하 분산) */
+	if (egy15[id].dayMday != (uint32_t)meter[id].cntl.tod.tm_mday) {
+		egy15[id].dayMday = meter[id].cntl.tod.tm_mday;
+		memcpy(&egy15[id].log[1], pt, sizeof(ENERGY_LOG15));
+#ifdef HWV2
+		egy15[id].pendArch = 1;
+#endif
+		storeEnergyLog15Fs(id, 1);			/* 전일 파일 보존(리부팅 대비, 일 1회) */
+		memset(pt, 0, sizeof(ENERGY_LOG15));
+		pt->magic = 0x1234abcd;
+		pt->ts = egy15[id].dayStartTick = sysTick1s;
+	}
+	/* today 파일 flash 저장은 energy_scan에서 정각+2분에 수행(demand 15분 버스트와 분리) */
 }
 
 
@@ -4305,13 +4389,35 @@ void energy_scan(int id, METER_EH_REGS *ereg, ENERGY_NVRAM *pEgyNvr) {
 	}
 	
 	// 1시간에 마다 전력량 데이터 기록
-	if (meter[id].cntl.egyTs1H != meter[id].cntl.tod.tm_hour) {		
-		//storeEnergyFs(pEgyNvr);		
-		// 1시간 에너지 로그 갱신한다 
+	if (meter[id].cntl.egyTs1H != meter[id].cntl.tod.tm_hour) {
+		//storeEnergyFs(pEgyNvr);
+		// 1시간 에너지 로그 갱신한다
 		putEnergyLog(id, meter[id].cntl.egyTs1H);
 		meter[id].cntl.egyTs1H = meter[id].cntl.tod.tm_hour;
 	}
-	
+
+	// 15분 clock 슬롯 에너지 기록(egy15 별도 전역 — Modbus 무영향, :00/:15/:30/:45 정렬)
+	{
+		int q15 = meter[id].cntl.tod.tm_hour * 4 + meter[id].cntl.tod.tm_min / 15;	/* 0..95 */
+		if ((uint32_t)q15 != egy15[id].lastQ) {
+			putEnergyLog15(id, egy15[id].lastQ);	/* 직전 슬롯 확정(RAM 누적) */
+			egy15[id].lastQ = q15;
+		}
+	}
+	// today 파일 flash 저장: 정각에서 2분 비켜 기록(demand 15분 flash 버스트와 분리 → 동시 flash 활동↓)
+	if (egy15[id].lastQstore != egy15[id].lastQ && (meter[id].cntl.tod.tm_min % 15) >= 2) {
+		storeEnergyLog15Fs(id, 0);
+		egy15[id].lastQstore = egy15[id].lastQ;
+	}
+#ifdef HWV2
+	// 일 변경 3분 뒤 전일 egy15를 월아카이브에 저장(자정 정각 태스크 집중 분산)
+	if (egy15[id].pendArch &&
+	    (uint32_t)(sysTick1s - egy15[id].dayStartTick) >= 180) {
+		archiveEnergyLog15Day(id, &egy15[id].log[1]);
+		egy15[id].pendArch = 0;
+	}
+#endif
+
 	
 	if (meter[id].cntl.rstDemand == 0x1234) {
 		meter[id].cntl.rstDemand = 0;
@@ -4515,25 +4621,9 @@ int pushEvent(int id, PQ_EVENT_INFO *pInf) {
 	pilog->startTs = pInf->startTs/1000;
 	pilog->msec = pInf->startTs%1000;
 	
-	// long interrupt는 최대 10000s로 한다 
-#if 1
+	// Dur 필드는 u16(ms). 65535ms 이상(주로 long interruption)은 65535로 클램프 — wrap/초인코딩 방지
 	i = (pInf->endTs - pInf->startTs);
-	if (i < 10000) {
-		pilog->duration = i;
-	}
-	else {
-		// sec로 변환
-		pilog->duration = i/1000 | 0x8000;
-	}
-#else	
-	if (pInf->type == E_lINTR) {
-		i = (pInf->endTs - pInf->startTs)/1000;
-		pelog->duration = (i > 10000) ? 10000 : i;
-	}
-	else {
-		pelog->duration =  pInf->endTs - pInf->startTs;	
-	}
-#endif	
+	pilog->duration = (i >= 65535) ? 65535 : i;
 	pilog->mask = pInf->mask;
 	
 // 2020-4-3, TrV, TrC 추가	
@@ -4706,6 +4796,34 @@ void Energy_Task(void *arg)
 		meter[id].cntl.egyTs1H = meter[0].cntl.tod.tm_hour;
 		meter[id].cntl.egyTs1D = meter[0].cntl.tod.tm_mday;
 		meter[id].cntl.egyStartTs1D = sysTick1s;
+
+		// 15분 슬롯 에너지(egy15) — 기준선/추적자 초기화(Ereg32는 loadEnergy에서 유효)
+		egy15[id].lastQ = meter[0].cntl.tod.tm_hour * 4 + meter[0].cntl.tod.tm_min / 15;
+		egy15[id].lastQstore = egy15[id].lastQ;	/* 부팅 직후 불필요 저장 방지(다음 슬롯 +2분에 첫 저장) */
+		egy15[id].dayMday = meter[0].cntl.tod.tm_mday;
+		egy15[id].dayStartTick = sysTick1s;
+		egy15[id].pendArch = 0;
+		egy15[id].buf[0] = EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KWH,   EGY_SIGN_IMPORT);
+		egy15[id].buf[1] = EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KVARH, EGY_SIGN_IMPORT);
+		egy15[id].buf[2] = EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KVARH, EGY_SIGN_EXPORT);
+		egy15[id].buf[3] = EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KVAH,  EGY_SIGN_IMPORT);
+		// 부팅 시 로드된 today가 지난 날짜면 → 아카이브 후 리셋(과거일이 오늘 슬롯과 섞이지 않게)
+		if (egy15[id].log[0].ts) {
+			struct tm lt0;
+			uint32_t t0 = egy15[id].log[0].ts;
+			uLocalTime(&t0, &lt0);
+			if (lt0.tm_mday != meter[0].cntl.tod.tm_mday || lt0.tm_mon != meter[0].cntl.tod.tm_mon) {
+				memcpy(&egy15[id].log[1], &egy15[id].log[0], sizeof(ENERGY_LOG15));
+#ifdef HWV2
+				archiveEnergyLog15Day(id, &egy15[id].log[1]);
+				storeEnergyLog15Fs(id, 1);
+#endif
+				memset(&egy15[id].log[0], 0, sizeof(ENERGY_LOG15));
+				egy15[id].log[0].magic = 0x1234abcd;
+				egy15[id].log[0].ts = sysTick1s;
+				storeEnergyLog15Fs(id, 0);
+			}
+		}
 	}
 	id = 0;
 	

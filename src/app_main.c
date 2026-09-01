@@ -69,6 +69,7 @@ extern void init_mcast_session(void);
 extern void init_udp_session(void);
 extern void init_telnet_session(int);
 extern int  loadEnergyLogFs();
+extern void loadEnergyLog15Fs();
 extern void W5500_TcpServer();
 extern void timeStampChanged();
 
@@ -415,6 +416,7 @@ void db_init(void)
 	loadEventLog();
 	
 	loadEnergyLogFs();
+	loadEnergyLog15Fs();	/* 15분 슬롯 에너지 로그(egy15) today/전일 로드 */
 
    
    init_smb();   

@@ -65,6 +65,10 @@
   1) PQ 이벤트/RMS 캡처 안정화 — 이벤트 FIFO 재부팅유실(wb 스냅샷)·RMS캡처 미발화 견고화·FS 대용량버퍼 파일손상(putFsQ useData 방어)·RMS 트리거 파형과 정렬·인터럽션 캡처 WINT/DINT 구분
   2) 설정 연결·정합 — PQ Report Active/StartDay·INTERRUPTION Level/Action 실제반영, 월간 이벤트로그 24B 정합·에너지 아카이브 egy rename·내장웹 알람/이벤트 시각 로컬화(getUTC*)
 
+26/09/01 FW V00.03
+  1) 전력량 아카이브 15분화 — ENERGY_LOG15(96슬롯 15분) 별도전역 egy15로 월아카이브 저장(elog 24시간은 Modbus 표시용 유지), 일변경 +3분 지연 아카이브·today파일 정각+2분 offset 저장(수요 15분 flash 버스트 분리)·6개월 보존·부팅 stale-day 복구
+  2) 이벤트 Dur 필드 65535ms 클램프 — long interruption 등 65s 초과분 wrap/초인코딩 제거(pushEvent)
+
 ────────────────────────────────────────────────────────────
 [릴리스 노트/요약] 26/08/25 FW V00.03 — THD 정확화 & 파형 원인규명
 ────────────────────────────────────────────────────────────
