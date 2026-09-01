@@ -757,19 +757,31 @@ static void enEmit(HttpConnection *c, int first, int pass, float v0, float v1, f
 /* ITIC 목록(itic=전압 sag/swell/intr, itic2=과도) 현재 페이지 직렬화 */
 static void iticEmit(HttpConnection *c, ITIC_EVT_LIST *L)
 {
-	char b[128];
-	int k, m = 0, first = 1;
+	char b[160];
+	int k, m = 0, first = 1, ph, useMin;
 	for (k = 0; k < N_ITIC_LIST && m < N_ITIC_LIST; k++) {
 		ITIC_LOG *e = &L->elog[k];
-		float lv;
+		float lv, mag, pct;
 		if (e->type == 0) continue;
 		lv = e->level[0];
 		if (e->level[1] > lv) lv = e->level[1];
 		if (e->level[2] > lv) lv = e->level[2];
+		/* ITIC 크기%: sag/intr=잔류(min), 그 외(swell/oc/rvc)=peak(max), mask 참여 상만.
+		 * Y축(공칭 %)에 찍기 위해 정격(norm=PT1/CT1)으로 정규화 (norm=0이면 raw) */
+		useMin = (e->type == E_SAG || e->type == E_sINTR || e->type == E_lINTR);
+		mag = -1.0f;
+		for (ph = 0; ph < 3; ph++) {
+			if (e->mask && !(e->mask & (1 << ph))) continue;
+			if (mag < 0.0f) mag = e->level[ph];
+			else if (useMin) { if (e->level[ph] < mag) mag = e->level[ph]; }
+			else if (e->level[ph] > mag) mag = e->level[ph];
+		}
+		if (mag < 0.0f) mag = lv;
+		pct = (e->norm > 0.0f) ? (mag / e->norm * 100.0f) : mag;
 		snprintf(b, sizeof(b),
-			"%s{\"type\":%u,\"ts\":%u,\"dur\":%u,\"mask\":%u,\"level\":%.2f}",
+			"%s{\"type\":%u,\"ts\":%u,\"dur\":%u,\"mask\":%u,\"level\":%.2f,\"pct\":%.1f}",
 			first ? "" : ",", (unsigned)e->type, (unsigned)e->startTs,
-			(unsigned)e->duration, (unsigned)e->mask, lv);
+			(unsigned)e->duration, (unsigned)e->mask, lv, pct);
 		w(c, b); first = 0; m++;
 	}
 }
@@ -1839,15 +1851,16 @@ static const char INDEX_HTML[] =
 " var h=`<div class='cmeta'>${ts2(x.start)} ~ ${ts2(x.end)} · <span class='enb ${okAll?'pass':'fail'}'>${okAll?'Compliant':'Non-compliant'}</span></div><table class='ctbl hsm'><tr><th>Parameter</th><th>L1</th><th>L2</th><th>L3</th><th>Comp</th><th>Requirement</th></tr>`;\n"
 " x.rows.forEach(function(r,ri){var p=passOf(r.v,EN_ROWS[ri][2]);h+=`<tr><td class='rk'>${EN_ROWS[ri][0]}</td><td>${enNv(r.v[0])}</td><td>${enNv(r.v[1])}</td><td>${enNv(r.v[2])}</td><td><span class='enb ${p?'pass':'fail'}'>${p?'Pass':'Fail'}</span></td><td class='ph2'>${EN_ROWS[ri][1]}</td></tr>`;});\n"
 " x.info.forEach(function(v,k){h+=`<tr><td class='rk'>${EN_INFO[k]}</td><td>${n(v,k<3?0:1)}</td><td>-</td><td>-</td><td><span class='enb info'>Info</span></td><td class='ph2'>Info Only</td></tr>`;});\n"
-" return h+`</table><div class='hsub'>ITIC (CBEMA) Curve</div><canvas id='it${x.n}' class='itcv'></canvas>`;}\n"
+" return h+`</table><div class='hsub'>ITIC (CBEMA) Curve</div><canvas id='it${x.n}' class='itcv'></canvas><div style='display:flex;gap:16px;margin-top:6px;font-size:11px;color:#8b9bb0'><span style='display:inline-flex;align-items:center;gap:5px'><i style='width:8px;height:8px;border-radius:50%;background:#f59e0b;display:inline-block'></i>Sag/Interruption</span><span style='display:inline-flex;align-items:center;gap:5px'><i style='width:8px;height:8px;border-radius:50%;background:#ef4444;display:inline-block'></i>Swell</span></div>`;}\n"
 "var ITIC_UP=[[0.0001,500],[0.001,200],[0.003,140],[0.003,120],[10,120],[10,110],[100,110]],ITIC_LO=[[0.0001,0],[0.02,0],[0.02,70],[0.5,70],[0.5,80],[10,80],[10,90],[100,90]];\n"
-"function drawITIC(id){var cv=$(id);if(!cv)return;var w=cv.clientWidth||400;cv.width=w;cv.height=240;var g=cv.getContext('2d'),pl=40,pr=10,pt=12,pb=22,h=240;\n"
+"function drawITIC(id,events){var cv=$(id);if(!cv)return;var w=cv.clientWidth||400;cv.width=w;cv.height=240;var g=cv.getContext('2d'),pl=40,pr=10,pt=12,pb=22,h=240;\n"
 " var X=function(t){return pl+(Math.log(t)/Math.LN10+4)/6*(w-pl-pr);},Y=function(p){return h-pb-(p/500)*(h-pt-pb);};\n"
 " g.clearRect(0,0,w,h);g.strokeStyle='rgba(128,140,155,.22)';g.fillStyle='#8b9bb0';g.font='8px sans-serif';\n"
 " for(var e=-4;e<=2;e++){var x=X(Math.pow(10,e));g.beginPath();g.moveTo(x,pt);g.lineTo(x,h-pb);g.stroke();g.fillText('1e'+e,x-7,h-pb+9);}\n"
 " for(var p=0;p<=500;p+=100){var y=Y(p);g.beginPath();g.moveTo(pl,y);g.lineTo(w-pr,y);g.stroke();g.fillText(p,2,y+3);}\n"
 " function poly(pp,col){g.strokeStyle=col;g.lineWidth=2;g.beginPath();pp.forEach(function(q,i){var x=X(q[0]),y=Y(q[1]);if(i===0)g.moveTo(x,y);else g.lineTo(x,y);});g.stroke();}\n"
-" poly(ITIC_UP,'#3b82f6');poly(ITIC_LO,'#ef4444');}\n"
+" poly(ITIC_UP,'#3b82f6');poly(ITIC_LO,'#ef4444');\n"
+" (events||[]).forEach(function(ev){var ds=(ev.dur||0)/1000;if(ds<1e-4)ds=1e-4;if(ds>1e2)ds=1e2;var pc=ev.pct;if(pc==null||isNaN(pc))return;if(pc<0)pc=0;if(pc>500)pc=500;var col=(ev.type===2)?'#ef4444':'#f59e0b';g.beginPath();g.arc(X(ds),Y(pc),4,0,6.2832);g.fillStyle=col;g.fill();g.lineWidth=1;g.strokeStyle='#e8eef5';g.stroke();});}\n"
 "function mGroup(nm){if(/^(U\\d|U THD|U Unbal)/.test(nm))return 'V';if(/^(I\\d|In|I THD|I TDD|K-factor|I Unbal)/.test(nm))return 'I';if(/^temperature/i.test(nm))return 'T';return 'P';}\n"
 "function munit(nm){if(/thd|tdd|unbal/i.test(nm))return '%';if(/^temperature/i.test(nm))return '\\u2103';if(/^U/.test(nm))return 'V';if(/^(I|In)/.test(nm))return 'A';if(nm==='P')return 'kW';if(nm==='Q')return 'kVar';if(nm==='S')return 'kVA';return '';}\n"
 "function bMonthly(x){var G={V:[],I:[],P:[],T:[]},k;for(k in x.s){G[mGroup(k)].push([k,x.s[k]]);}\n"
@@ -1910,7 +1923,7 @@ static const char INDEX_HTML[] =
 " if(t==='waveform')return j('/api/waveform').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);\n"
 "  $('chbody').innerHTML=chCards(r.d.channels,function(x){return \"<div class='hsub'>Voltage</div><canvas id='wv\"+x.n+\"' class='wcv'></canvas><div class='hsub'>Current</div><canvas id='wi\"+x.n+\"' class='wcv'></canvas>\";});\n"
 "  r.d.channels.forEach(function(x){drawLines('wv'+x.n,x.v);drawLines('wi'+x.n,x.i);});}).catch(chFail);\n"
-" if(t==='report')return j('/api/en50160').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);var x=r.d.ch[0];if(!x)return;$('chbody').innerHTML=\"<div class='chcard'><div class='chh'>CH\"+x.n+\" · EN50160</div>\"+bReport(x)+bItic(r.d.itic2,'ITIC List (Voltage)','pgItic2')+'</div>';drawITIC('it'+x.n);}).catch(chFail);\n"
+" if(t==='report')return j('/api/en50160').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);var x=r.d.ch[0];if(!x)return;$('chbody').innerHTML=\"<div class='chcard'><div class='chh'>CH\"+x.n+\" · EN50160</div>\"+bReport(x)+bItic(r.d.itic2,'ITIC List (Voltage)','pgItic2')+'</div>';drawITIC('it'+x.n,r.d.itic2);}).catch(chFail);\n"
 " if(t==='vq')return j('/api/vq').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=bVq(r.d.rows);}).catch(chFail);\n"
 " if(t==='monthly')return j('/api/monthly').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=chCards(r.d.ch,bMonthly);}).catch(chFail);\n"
 " if(t==='alarm'||t==='event')return j('/api/sv300/events').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=chCards(CHN,function(x){return (t==='alarm'?bAlarm:bEvent)(x,r.d);});}).catch(chFail);\n"
