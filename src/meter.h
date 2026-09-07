@@ -1466,23 +1466,29 @@ typedef struct {
 } CNTL_DATA; 
 
 
+/* METER_CAL(EEPROM cal) 의 배열 차원은 채널 수와 무관하게 CAL_CH_MAX 로 고정한다.
+ * 2CH/3CH 빌드가 같은 크기(836B)·같은 오프셋을 갖게 하려는 것 — 부트로더는 단일
+ * 바이너리로 두 기종을 모두 다루므로 레이아웃이 갈리면 mac/sn 을 못 읽는다.
+ * 실제로 쓰는 것은 여전히 앞의 METER_CH_COUNT 개뿐이다. */
+#define CAL_CH_MAX	3
+
 typedef struct {
 	/* [chip][phase][결선Z][PT2] — Z: 1P2W L1/L2/L3=0/1/2, 그 외=phase / PT2: [0]=x1(PT2>=150), [1]=x2(PT2<150) */
-	int32_t		vgain[METER_CH_COUNT][3][3][2];		// phase-to-neutral (3P4W/1P2W 등)
-	int32_t		vppgain[METER_CH_COUNT][3][3][2];	// phase-to-phase (3P3W)
-	int32_t 	igain[METER_CH_COUNT][3];
-	int32_t 	R_igain[METER_CH_COUNT][3];		// Rogowski(CT2==CT_RCT) i gain
-	int32_t		Ingain[METER_CH_COUNT][3];
+	int32_t		vgain[CAL_CH_MAX][3][3][2];		// phase-to-neutral (3P4W/1P2W 등)
+	int32_t		vppgain[CAL_CH_MAX][3][3][2];	// phase-to-phase (3P3W)
+	int32_t 	igain[CAL_CH_MAX][3];
+	int32_t 	R_igain[CAL_CH_MAX][3];		// Rogowski(CT2==CT_RCT) i gain
+	int32_t		Ingain[CAL_CH_MAX][3];
 
-	int32_t		wgain[METER_CH_COUNT][3];
-	int32_t		phcal[METER_CH_COUNT][3];
-	int32_t		R_phcal[METER_CH_COUNT][3];		// Rogowski phase cal
+	int32_t		wgain[CAL_CH_MAX][3];
+	int32_t		phcal[CAL_CH_MAX][3];
+	int32_t		R_phcal[CAL_CH_MAX][3];		// Rogowski phase cal
 	float		v_thd_offset;
 	float		i_thd_offset;
-	float		In_offset[METER_CH_COUNT][3];		// offset
-	float		In_Slope[METER_CH_COUNT][3];		// 기울기
-	float		tempOfs[METER_CH_COUNT];			// Temp 교정 오프셋: 측정온도를 기준(TEMP_CAL_REF)에 맞춤
-	int32_t		vdcos[METER_CH_COUNT][3], idcos[METER_CH_COUNT][3];	// waveform에서 DC offset 제거위해 사용한다
+	float		In_offset[CAL_CH_MAX][3];		// offset
+	float		In_Slope[CAL_CH_MAX][3];		// 기울기
+	float		tempOfs[CAL_CH_MAX];			// Temp 교정 오프셋: 측정온도를 기준(TEMP_CAL_REF)에 맞춤
+	int32_t		vdcos[CAL_CH_MAX][3], idcos[CAL_CH_MAX][3];	// waveform에서 DC offset 제거위해 사용한다
 
 	uint16_t 	hwModel;	// 0=3CH, 1=2CH (추후 HV/Rogowski 등 확장). 콘솔 'HWMODEL <n>' 로 설정, 여기(FRAM) 저장
 	uint16_t 	hwVer;	// hw version (U32->U16)
@@ -1492,6 +1498,10 @@ typedef struct {
 	uint32_t 	sn[2];
 	uint16_t 	magic, crc;
 } METER_CAL;
+
+/* 2CH/3CH 빌드가 같은 크기여야 하고, 부트로더(SV300_boot/meter.h)도 같은 836B 를
+ * 전제로 mac/sn 을 읽는다. 어긋나면 조용히 엉뚱한 자리를 읽으므로 빌드 때 잡는다. */
+typedef char meter_cal_size_check[(sizeof(METER_CAL) == 836) ? 1 : -1];
 
 
 // 4400
