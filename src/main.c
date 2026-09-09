@@ -753,6 +753,12 @@ void init(void)
    }
 #endif	// _FTP_SERVER
 
+   /* mDNS 이름 광고 — 웹서버(아래 g_meterReady 대기)보다 먼저 기동한다.
+    * 계측 준비까지 기다리면 리셋 후 ~68초간 이름 조회가 실패하고, PC가 그 실패를 캐시해
+    * 장비가 돌아온 뒤에도 몇 분간 ERR_NAME_NOT_RESOLVED가 지속된다(웹은 살아있는데 접속 불가).
+    * 이름을 먼저 살려두면 그 구간이 '연결 거부'(캐시되지 않음)가 되어 웹 기동과 동시에 복구된다. */
+   webMdnsStart(&netInterface[0]);
+
    //Set task parameters
    taskParams = OS_TASK_DEFAULT_PARAMS;
    taskParams.stackSize = 200;

@@ -24,6 +24,8 @@
 #include "core/net.h"
 #include "http/http_server.h"
 #include "mdns/mdns_responder.h"
+#include "hash/sha1.h"
+#include "mac/hmac.h"
 
 #include "web.h"
 #include "meter.h"
@@ -39,26 +41,31 @@ static HttpConnection    webConns[HTTP_SERVER_MAX_CONNECTIONS];
 static MdnsResponderContext webMdns;
 
 /*============================ 세션/인증 =====================================*/
-#define WEB_MAX_SESS   8
-#define WEB_TOK_LEN    24
-#define WEB_SESS_TTL   (8u * 3600u * 1000u)   /* 8시간(ms, systime) */
+/*  ★무상태(stateless) 서명 쿠키 — 서버에 세션 테이블을 두지 않는다.
+ *    토큰 = role(2hex) + exp(8hex, 만료 epoch초) + sig(16hex) = 26자
+ *    sig  = HMAC-SHA1(장치키, 앞 10자리) 앞 8바이트
+ *  장치키는 부팅 시 파일에서 1회 로드(없으면 생성·저장)하고, 만료는 RTC 벽시계
+ *  (sysTick1s, 이벤트 타임스탬프와 동일 기준)로 판정한다.
+ *  → 재부팅해도 브라우저의 기존 쿠키가 그대로 유효(재로그인 불필요).
+ *  제약 1: 개별 세션 즉시 무효화 불가 — 로그아웃은 브라우저 쿠키 삭제만(LAN 전용·평문 HTTP 전제).
+ *  제약 2: RTC 시각이 크게 점프하면(SNTP 최초 동기 등) 기존 토큰이 조기 만료될 수 있다.
+ *          이 경우 SPA가 401을 받아 로그인 화면으로 복귀한다(web.c INDEX_HTML의 j() 참조).
+ */
+#define WEB_TOK_LEN    26                     /* role 2 + exp 8 + sig 16 */
+#define WEB_SESS_TTL   (8u * 3600u)           /* 8시간(초, sysTick1s 기준) */
+#define WEB_KEY_LEN    16
+#define WEB_KEY_FILE   CONCAT(SYS_DIR, "\\websec.d")
 
 #define ROLE_NONE   0
 #define ROLE_VIEWER 1
 #define ROLE_ADMIN  2
 
-typedef struct {
-	char     tok[WEB_TOK_LEN + 1];
-	uint8_t  role;
-	uint32_t exp;                 /* 만료 systime(ms) */
-} WebSess;
-
-static WebSess  webSess[WEB_MAX_SESS];
+static uint8_t  webKey[WEB_KEY_LEN];          /* 장치 서명키(부팅 시 1회 로드) */
 static uint32_t webRandState = 0x12345678u;
 
-static uint32_t webNow(void) { return (uint32_t)osGetSystemTime(); }
+static uint32_t webNow(void) { return sysTick1s; }
 
-/* xorshift32 — 세션 토큰용(LAN 설정도구 수준, 암호강도 목적 아님) */
+/* xorshift32 — 장치키 생성용(LAN 설정도구 수준, 암호강도 목적 아님) */
 static uint32_t webRand(void)
 {
 	uint32_t x = webRandState;
@@ -70,45 +77,104 @@ static uint32_t webRand(void)
 static void webRandSeed(NetInterface *it)
 {
 	MacAddr m = it->macAddr;
-	webRandState = (uint32_t)osGetSystemTime() ^ 0x9e3779b9u
+	webRandState = (uint32_t)osGetSystemTime() ^ sysTick1s ^ 0x9e3779b9u
+		^ pcal->sn[0] ^ (pcal->sn[1] << 7)
 		^ ((uint32_t)m.b[3] << 16) ^ ((uint32_t)m.b[4] << 8) ^ m.b[5];
 	if (webRandState == 0) webRandState = 0xdeadbeefu;
 }
 
-static void webMakeToken(char *out)
+/* 장치 서명키 로드 — 없으면 생성 후 저장. 부팅 시 1회만 호출(요청 처리 경로엔 FS 접근 없음) */
+static void webKeyLoad(void)
 {
-	static const char hex[] = "0123456789abcdef";
+	FILE *fp;
+	size_t n = 0;
+	const char *news = "loaded";
+	uint16_t kfp = 0;
 	int i;
-	for (i = 0; i < WEB_TOK_LEN; i++) out[i] = hex[webRand() & 0xf];
-	out[WEB_TOK_LEN] = 0;
+
+	fsFileLock();
+	fp = fopen(WEB_KEY_FILE, "rb");
+	if (fp != NULL) {
+		n = fread(webKey, 1, WEB_KEY_LEN, fp);
+		fclose(fp);
+	}
+	if (n != WEB_KEY_LEN) {
+		size_t wr = 0;
+		for (i = 0; i < WEB_KEY_LEN; i++) webKey[i] = (uint8_t)(webRand() >> 13);
+		fp = fopen(WEB_KEY_FILE, "wb");
+		if (fp != NULL) {
+			wr = fwrite(webKey, 1, WEB_KEY_LEN, fp);
+			fclose(fp);
+		}
+		/* 저장 실패 = 키가 부팅마다 바뀜 → 재부팅 시 재로그인(A안이 자동 처리) */
+		if (wr != WEB_KEY_LEN)
+			printf("[WEB] session key SAVE FAILED (%s, wr=%u)\n", WEB_KEY_FILE, (unsigned)wr);
+		news = "created";
+	}
+	/* 키 지문(fp) — 재부팅 전후 값이 다르면 키가 보존되지 않는 것(= 세션 유지 안 됨) */
+	for (i = 0; i < WEB_KEY_LEN; i++) kfp = (uint16_t)(kfp * 31u + webKey[i]);
+	printf("[WEB] session key %s (fp=%04x)\n", news, kfp);
+	fsFileUnlock();
 }
 
-static WebSess *sessFind(const char *tok)
+/* head 10자리에 대한 서명 16자리 hex 생성 — sigOut은 17바이트 이상 */
+static void webSign(const char *head, char *sigOut)
 {
+	static const char hx[] = "0123456789abcdef";
+	HmacContext ctx;
+	uint8_t d[SHA1_DIGEST_SIZE];
 	int i;
-	uint32_t now = webNow();
-	if (tok == NULL || tok[0] == 0) return NULL;
-	for (i = 0; i < WEB_MAX_SESS; i++) {
-		if (webSess[i].role && (int32_t)(webSess[i].exp - now) > 0 &&
-		    !strcmp(webSess[i].tok, tok))
-			return &webSess[i];
+
+	hmacInit(&ctx, SHA1_HASH_ALGO, webKey, WEB_KEY_LEN);
+	hmacUpdate(&ctx, head, 10);
+	hmacFinal(&ctx, d);
+	for (i = 0; i < 8; i++) {
+		sigOut[i * 2]     = hx[d[i] >> 4];
+		sigOut[i * 2 + 1] = hx[d[i] & 0xf];
 	}
-	return NULL;
+	sigOut[16] = 0;
 }
 
-static WebSess *sessNew(uint8_t role)
+/* out은 WEB_TOK_LEN+1 바이트 이상 */
+static void webMakeToken(uint8_t role, char *out)
 {
-	int i, slot = -1;
-	uint32_t now = webNow();
-	/* 빈/만료 슬롯 우선, 없으면 0번 재사용 */
-	for (i = 0; i < WEB_MAX_SESS; i++) {
-		if (webSess[i].role == 0 || (int32_t)(webSess[i].exp - now) <= 0) { slot = i; break; }
+	sprintf(out, "%02x%08x", (unsigned)role, (unsigned)(webNow() + WEB_SESS_TTL));
+	webSign(out, out + 10);
+}
+
+/* hex n자리 파싱 — 비 hex 문자가 섞이면 -1 */
+static int hexParse(const char *s, int n, uint32_t *out)
+{
+	uint32_t v = 0;
+	int i, c;
+	for (i = 0; i < n; i++) {
+		c = s[i];
+		if      (c >= '0' && c <= '9') c -= '0';
+		else if (c >= 'a' && c <= 'f') c -= 'a' - 10;
+		else if (c >= 'A' && c <= 'F') c -= 'A' - 10;
+		else return -1;
+		v = (v << 4) | (uint32_t)c;
 	}
-	if (slot < 0) slot = 0;
-	webMakeToken(webSess[slot].tok);
-	webSess[slot].role = role;
-	webSess[slot].exp  = now + WEB_SESS_TTL;
-	return &webSess[slot];
+	*out = v;
+	return 0;
+}
+
+/* 토큰 검증 — 형식·서명·만료 확인 후 role 반환 */
+static uint8_t webVerifyToken(const char *tok)
+{
+	char head[11], sig[17];
+	uint32_t role, exp;
+
+	if (strlen(tok) != WEB_TOK_LEN) return ROLE_NONE;
+	if (hexParse(tok, 2, &role) || hexParse(tok + 2, 8, &exp)) return ROLE_NONE;
+	if (role != ROLE_VIEWER && role != ROLE_ADMIN) return ROLE_NONE;
+
+	memcpy(head, tok, 10);
+	head[10] = 0;
+	webSign(head, sig);
+	if (memcmp(sig, tok + 10, 16)) return ROLE_NONE;
+	if ((int32_t)(exp - webNow()) <= 0) return ROLE_NONE;
+	return (uint8_t)role;
 }
 
 /* 요청 쿠키에서 sid=<token> 추출 */
@@ -131,10 +197,8 @@ static void cookieToken(HttpConnection *c, char *out, int max)
 static uint8_t webRole(HttpConnection *c)
 {
 	char tok[WEB_TOK_LEN + 1];
-	WebSess *s;
 	cookieToken(c, tok, sizeof(tok));
-	s = sessFind(tok);
-	return s ? s->role : ROLE_NONE;
+	return webVerifyToken(tok);
 }
 
 /*============================ 응답 헬퍼 =====================================*/
@@ -233,9 +297,8 @@ static const char *roleName(uint8_t r) { return r == ROLE_ADMIN ? "admin" : (r =
 /* POST /api/login  (username, password) */
 static error_t apiLogin(HttpConnection *c)
 {
-	char body[192], user[40], pass[40];
+	char body[192], user[40], pass[40], tok[WEB_TOK_LEN + 1];
 	uint8_t role = ROLE_NONE;
-	WebSess *s;
 
 	if (strcmp(c->request.method, "POST"))
 		return webJsonStatus(c, 405, "{\"ok\":false,\"error\":\"method\"}");
@@ -250,7 +313,7 @@ static error_t apiLogin(HttpConnection *c)
 	if (role == ROLE_NONE)
 		return webJsonStatus(c, 401, "{\"ok\":false,\"error\":\"invalid\"}");
 
-	s = sessNew(role);
+	webMakeToken(role, tok);
 
 	httpInitResponseHeader(c);
 	c->response.contentType     = "application/json";
@@ -258,7 +321,7 @@ static error_t apiLogin(HttpConnection *c)
 	c->response.noCache         = TRUE;
 	c->response.keepAlive       = FALSE;
 	snprintf(c->response.setCookie, sizeof(c->response.setCookie),
-		"sid=%s; Path=/; Max-Age=28800; HttpOnly", s->tok);
+		"sid=%s; Path=/; Max-Age=28800; HttpOnly", tok);
 	if (httpWriteHeader(c)) return ERROR_WRITE_FAILED;
 
 	{
@@ -270,15 +333,10 @@ static error_t apiLogin(HttpConnection *c)
 	return httpCloseStream(c);
 }
 
-/* GET /api/logout */
+/* GET /api/logout — 무상태 토큰이라 서버측 즉시 무효화는 없다(브라우저 쿠키만 삭제).
+ * 유출된 토큰은 만료(WEB_SESS_TTL)까지 유효 — LAN 전용·평문 HTTP 운용 전제. */
 static error_t apiLogout(HttpConnection *c)
 {
-	char tok[WEB_TOK_LEN + 1];
-	WebSess *s;
-	cookieToken(c, tok, sizeof(tok));
-	s = sessFind(tok);
-	if (s) s->role = ROLE_NONE;
-
 	httpInitResponseHeader(c);
 	c->response.contentType     = "application/json";
 	c->response.chunkedEncoding = TRUE;
@@ -1085,7 +1143,7 @@ static int qparam(const char *qs, const char *key)
 static uint16_t rdReg(uint16_t a) { uint16_t v = 0; readMemCb(a, &v); return v; }
 
 /* 설정 필드 테이블(General 탭) — 주소는 펌웨어 ground truth(CH1 base) */
-enum { WT_U16, WT_U32, WT_I16, WT_BOOL, WT_IP, WT_STR, WT_SERIAL, WT_MAC, WT_FWDATE };
+enum { WT_U16, WT_U32, WT_I16, WT_BOOL, WT_IP, WT_STR, WT_SERIAL, WT_MAC, WT_FWDATE, WT_FWVER };
 static const char *wtName(uint8_t t)
 {
 	switch (t) {
@@ -1093,7 +1151,8 @@ static const char *wtName(uint8_t t)
 	case WT_I16:  return "i16";
 	case WT_BOOL: return "bool";
 	case WT_IP:   return "ip";
-	case WT_STR:  case WT_SERIAL: case WT_MAC: case WT_FWDATE: return "str";  /* 읽기전용 표시 */
+	case WT_STR:  case WT_SERIAL: case WT_MAC: case WT_FWDATE:
+	case WT_FWVER: return "str";  /* 읽기전용 표시 */
 	default:      return "u16";
 	}
 }
@@ -1108,20 +1167,22 @@ typedef struct {
 static const GField GEN[] = {
 	{ "serial",          "Serial Number",        7070, WT_SERIAL, 0, 1, 0 },
 	{ "mac",             "MAC Address",          7076, WT_MAC,    0, 1, 0 },
-	{ "hw_version",      "HW Version",           7086, WT_U16,    0, 1, 0 },
-	{ "fw_version",      "FW Version",           7087, WT_U16,    0, 1, 0 },
-	{ "fw_build",        "FW Build Date",        7088, WT_FWDATE, 0, 1, 0 },
+	/* 7086~7101은 METER_INFO(base 7070) 오버레이. hwModel(7086) 추가(260812)로 뒤가 한 칸씩
+	 * 밀렸으므로 meter.h METER_INFO 정의를 ground truth로 삼는다(TOT_sts=7101, feeder_cnt=7102). */
+	{ "hw_version",      "HW Version",           7087, WT_U16,    0, 1, 0 },
+	{ "fw_version",      "FW Version",           7088, WT_FWVER,  0, 1, 0 },
+	{ "fw_build",        "FW Build Date",        7089, WT_FWDATE, 0, 1, 0 },
 	{ "timezone",        "Timezone",             7401, WT_I16,    0, 0, 0 },
-	{ "heartbit",        "Heart Bit",            7091, WT_U16,  3, 1, 0 },
-	{ "mbus_rx",         "Modbus RX",            7092, WT_U16,  3, 1, 0 },
-	{ "alarm_sts",       "Alarm STS",            7093, WT_U16,  3, 1, 0 },
-	{ "event_sts",       "Event STS",            7094, WT_U16,  3, 1, 0 },
-	{ "rstp_sts0",       "RSTP STS #0",          7095, WT_U16,  3, 1, 0 },
-	{ "rstp_sts1",       "RSTP STS #1",          7096, WT_U16,  3, 1, 0 },
-	{ "sntp_sts",        "SNTP STS",             7097, WT_U16,  3, 1, 0 },
-	{ "dev_sts",         "DEV STS",              7098, WT_U16,  3, 1, 0 },
-	{ "net_sts",         "NET STS",              7099, WT_U16,  3, 1, 0 },
-	{ "tot_sts",         "TOT STS",              7100, WT_U16,  3, 1, 0 },
+	{ "heartbit",        "Heart Bit",            7092, WT_U16,  3, 1, 0 },
+	{ "mbus_rx",         "Modbus RX",            7093, WT_U16,  3, 1, 0 },
+	{ "alarm_sts",       "Alarm STS",            7094, WT_U16,  3, 1, 0 },
+	{ "event_sts",       "Event STS",            7095, WT_U16,  3, 1, 0 },
+	{ "rstp_sts0",       "RSTP STS #0",          7096, WT_U16,  3, 1, 0 },
+	{ "rstp_sts1",       "RSTP STS #1",          7097, WT_U16,  3, 1, 0 },
+	{ "sntp_sts",        "SNTP STS",             7098, WT_U16,  3, 1, 0 },
+	{ "dev_sts",         "DEV STS",              7099, WT_U16,  3, 1, 0 },
+	{ "net_sts",         "NET STS",              7100, WT_U16,  3, 1, 0 },
+	{ "tot_sts",         "TOT STS",              7101, WT_U16,  3, 1, 0 },
 	{ "device_id",       "Device ID",            7110, WT_U16,  1, 0, 0 },
 	{ "tcp_port",        "TCP Port",             7111, WT_U16,  1, 0, 0 },
 	{ "dhcp",            "DHCP",                 7154, WT_BOOL, 1, 0, 0 },
@@ -1168,6 +1229,10 @@ static error_t apiGeneral(HttpConnection *c)
 			METER_INFO *inf = &meter[0].info;
 			snprintf(val, sizeof(val), "\"%04u-%02u-%02u\"",
 				(unsigned)inf->fwBuildYear, (unsigned)inf->fwBuildMon, (unsigned)inf->fwBuildDay);
+		} else if (f->type == WT_FWVER) {
+			/* 시리얼 콘솔 배너와 동일 표기 — meter.c: "V%02X.%02X" (FW_VER 상·하위 바이트) */
+			uint16_t v = rdReg(f->addr);
+			snprintf(val, sizeof(val), "\"V%02X.%02X\"", (v >> 8) & 0xff, v & 0xff);
 		} else if (f->type == WT_IP) {
 			snprintf(val, sizeof(val), "\"%u.%u.%u.%u\"",
 				rdReg(f->addr), rdReg(f->addr + 1), rdReg(f->addr + 2), rdReg(f->addr + 3));
@@ -1601,12 +1666,16 @@ static const char INDEX_HTML[] =
 /* ---------- script ---------- */
 "<script>\n"
 "var $=function(i){return document.getElementById(i)};\n"
-"var IS_ADMIN=false, cur='dash', NCH=3;\n"
+"var IS_ADMIN=false, cur='dash', NCH=3, AUTHGEN=0;\n"
 "var AC=['Disabled','Temp','Freq','U1','U2','U3','U~','U12','U23','U31','Upp~','V.Unbal Uo','V.Unbal Uu','I1','I2','I3','I~','Itotal','In','P1','P2','P3','Ptotal','Q1','Q2','Q3','Qtot','D1','D2','D3','D','S1','S2','S3','Stot','PF1','PF2','PF3','PFtot','THD U1','THD U2','THD U3','THD U12','THD U23','THD U31','THD I1','THD I2','THD I3','DDmd P+','DDmd P-','DDmd Q+','DDmd Q-','DDmd S','DDmd I1','DDmd I2','DDmd I3','MDmd P+','MDmd P-','MDmd Q+','MDmd Q-','MDmd S','MDmd I1','MDmd I2','MDmd I3','UnderDev U1','UnderDev U2','UnderDev U3','OverDev U1','OverDev U2','OverDev U3','CF U1','CF U2','CF U3','CF U12','CF U23','CF U31','CF I1','CF I2','CF I3','KF I1','KF I2','KF I3','PSt1','PSt2','PSt3','Plt1','Plt2','Plt3','Sig.V1','Sig.V2','Sig.V3'];\n"
 "var ET={1:['Sag','sag'],2:['Swell','swell'],3:['S.Intr','intr'],4:['L.Intr','intr'],5:['OC','oc'],6:['RVC','tr'],7:['Trans V','tr'],8:['Trans I','tr'],9:['SOE','oc']};\n"
 "function acn(i){return AC[i]||('#'+i)}\n"
-"function j(u,o){o=o||{};var ac=('AbortController'in window)?new AbortController():null,tm=null;if(ac){o.signal=ac.signal;tm=setTimeout(function(){ac.abort()},6000);}\n"
-" return fetch(u,o).then(function(r){return r.text().then(function(t){if(tm)clearTimeout(tm);return{s:r.status,d:JSON.parse((t||'{}').replace(/-?\\b(inf|nan)\\b/gi,'0'))}})}).catch(function(e){if(tm)clearTimeout(tm);throw e;})}\n"
+/* 401(세션 만료/무효) 감지 시 로그인 화면 복귀 — 없으면 폴링이 계속 401을 받으며 read error로 고착됨.
+   AUTHGEN: 로그인 직전에 떠난 요청의 늦은 401이 방금 성공한 로그인을 되돌리는 경합 방지 */
+"function j(u,o){o=o||{};var ac=('AbortController'in window)?new AbortController():null,tm=null,g=AUTHGEN;if(ac){o.signal=ac.signal;tm=setTimeout(function(){ac.abort()},6000);}\n"
+" return fetch(u,o).then(function(r){return r.text().then(function(t){if(tm)clearTimeout(tm);\n"
+"  if(r.status===401&&g===AUTHGEN&&u.indexOf('/api/login')<0){IS_ADMIN=false;showLogin();}\n"
+"  return{s:r.status,d:JSON.parse((t||'{}').replace(/-?\\b(inf|nan)\\b/gi,'0'))}})}).catch(function(e){if(tm)clearTimeout(tm);throw e;})}\n"
 "function jp(u,o){return j(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(o)});}\n"
 "function sn(a){$('setNote').textContent=IS_ADMIN?a:'Viewer: read-only.';}\n"
 "function n(v,d){return(v==null||isNaN(v))?'----':Number(v).toFixed(d)}\n"
@@ -1623,7 +1692,7 @@ static const char INDEX_HTML[] =
 "function showLogin(){$('v-login').style.display='';$('v-app').style.display='none'}\n"
 "function showApp(){$('v-login').style.display='none';$('v-app').style.display=''}\n"
 "function me(){return j('/api/me').then(function(r){\n"
-" if(r.d.auth){IS_ADMIN=(r.d.role==='admin');if(r.d.nch)NCH=r.d.nch;\n"
+" if(r.d.auth){AUTHGEN++;IS_ADMIN=(r.d.role==='admin');if(r.d.nch)NCH=r.d.nch;\n"
 "  $('role').textContent=r.d.user+' ('+(IS_ADMIN?'Admin':'Viewer')+')';$('role').className='role '+(IS_ADMIN?'admin':'viewer');\n"
 "  ['b-clral','b-clrev'].forEach(function(id){$(id).disabled=!IS_ADMIN});\n"
 "  showApp();go('dash');pollLoop();return true;}\n"
@@ -1972,6 +2041,9 @@ static error_t serveIndex(HttpConnection *c)
 	c->response.contentType   = "text/html";
 	c->response.contentLength = sizeof(INDEX_HTML) - 1;
 	c->response.keepAlive     = FALSE;
+	/* SPA는 펌웨어에 내장 — 캐시 지시자가 없으면 브라우저가 예전 페이지를 계속 써서
+	 * 펌웨어를 갱신해도 새 화면/로직이 반영되지 않는다(Chrome 휴리스틱 캐시). */
+	c->response.noCache       = TRUE;
 	e = httpWriteHeader(c);
 	if (e) return e;
 	e = httpWriteStream(c, INDEX_HTML, sizeof(INDEX_HTML) - 1);
@@ -2035,7 +2107,7 @@ static error_t webRequestCallback(HttpConnection *c, const char_t *uri)
 /*----------------------------------------------------------------------------
  * mDNS responder — http://sv300-<SN 하위3바이트>.local/
  *----------------------------------------------------------------------------*/
-static void webMdnsStart(NetInterface *interface)
+void webMdnsStart(NetInterface *interface)
 {
 	MdnsResponderSettings s;
 	char host[24];
@@ -2046,8 +2118,14 @@ static void webMdnsStart(NetInterface *interface)
 	e = mdnsResponderInit(&webMdns, &s);
 	if (e) { printf("[WEB] mDNS init failed (%d)\n", (int)e); return; }
 
-	/* SN(Serial Number, pcal->sn) 하위 4바이트 기반 호스트명 (3바이트는 타제품과 중복 우려) */
-	snprintf(host, sizeof(host), "sv300-%08x", (unsigned)pcal->sn[1]);
+	/* SN(Serial Number, pcal->sn) 하위 4바이트 기반 호스트명 (3바이트는 타제품과 중복 우려).
+	 * sn[1] 바이트는 hex 가 아니라 10진수 의미값이다 (년/월/일/일련번호) —
+	 * FS.c cmd_macset 이 10진수로 입력받아 그대로 바이트에 넣는다.
+	 * 예) 25년 1월 2일 3번 -> "sv300-250102003". 일련번호는 0~255 라 3자리.
+	 * 부트로더(SV300_boot/boot.c)와 반드시 같은 포맷을 유지할 것. */
+	snprintf(host, sizeof(host), "sv300-%02u%02u%02u%03u",
+	         (unsigned)((pcal->sn[1] >> 24) & 0xff), (unsigned)((pcal->sn[1] >> 16) & 0xff),
+	         (unsigned)((pcal->sn[1] >>  8) & 0xff), (unsigned)( pcal->sn[1]        & 0xff));
 	mdnsResponderSetHostname(&webMdns, host);
 
 	e = mdnsResponderStart(&webMdns);
@@ -2065,6 +2143,7 @@ void webServerStart(NetInterface *interface)
 	uint_t i;
 
 	webRandSeed(interface);
+	webKeyLoad();
 
 	httpServerGetDefaultSettings(&s);
 	s.interface      = interface;
@@ -2084,6 +2163,6 @@ void webServerStart(NetInterface *interface)
 	e = httpServerStart(&webCtx);
 	if (e) { printf("[WEB] start failed (%d)\n", (int)e); return; }
 	printf("[WEB] HTTP on :80 (login: ntek/0300, sv300/0000)\n");
-
-	webMdnsStart(interface);
+	/* mDNS는 여기서 띄우지 않는다 — 이 함수는 g_meterReady 뒤(리셋 후 ~68초)에 호출되므로
+	 * 그때까지 이름 조회가 전부 실패해 PC에 캐시된다. main.c 네트워크 기동부에서 먼저 호출. */
 }

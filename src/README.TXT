@@ -73,6 +73,10 @@
   1) 내장웹 ITIC(CBEMA) 커브에 이벤트 점 표시 — itic2 리스트를 정격(PT1/CT1) 정규화 %(Sag/sIntr/lIntr=잔류 min·Swell 등=peak max·mask 참여상)로 플롯+범례(web.c·confWebApp 동일 로직, 기존 raw level을 %축에 직접 찍어 공칭≠100V·sag에서 오배치되던 문제 해소). 대시보드 정리: 신규 블링킹 이식 후 웹서버 불필요로 철회·ACK Alarm/Event 버튼 삭제·Event Log 요약을 이벤트로그 타입별 집계 5종(Sag/Swell/Short·Long Intr/Over Current)으로 confWebApp 일치
   2) [진단] 랜케이블 착탈 시 리셋(꽂을 때·100%)·ULINK SWD 통신깨짐 = 펌웨어 무관 확정 — 하트비트 계측(스케줄러 정상·외부WDT en=0·소프트리셋 경로 전무)로 규명. 원인=RJ45 실드 종단 R214(NC)/CB221(NC·2kV 1000pF) 미실장로 인한 착탈 ESD/그라운드바운스(현장은 커넥터 기울어짐 접촉불량). 펌웨어 무변경, HW 조치=실드 스너버 실장·실드 접지
 
+26/09/09 FW V00.03
+  1) ★재부팅 후 재접속 불가(read error 고착) 근본수정 — 세션을 RAM 테이블에서 무상태 HMAC-SHA1 서명 쿠키로 전환(role+exp+sig 26자, 장치키 \system\websec.d 보존, 만료는 부팅경과 ms→RTX 벽시계 sysTick1s 기준)해 재부팅해도 재로그인 불필요. SPA는 401 수신 시 로그인 화면 자동복귀(AUTHGEN 경합가드) — 기존엔 401을 무시해 영구 read error. serveIndex noCache=TRUE로 펌웨어 갱신 시 새 SPA 즉시 반영. mDNS는 g_meterReady 대기 앞(main.c)으로 이동 — 리셋 후 68초간 이름조회 실패가 PC에 캐시되어 .local 접속이 수분간 막히던 문제 해소
+  2) 내장웹 General 레지스터 off-by-one 보정 — hwModel(7086) 삽입(260812) 이후 밀린 14개 필드를 METER_INFO 정의 기준으로 정정(hwVer 7087·fwVer 7088·Status 7092~7101, confWebApp과 동일)해 FW Version이 항상 0으로 보이던 문제 해소. FW Version 표기를 콘솔 배너와 같은 V00.03으로 통일(WT_FWVER, confWebApp /api/general 동일 적용)
+
 ────────────────────────────────────────────────────────────
 [릴리스 노트/요약] 26/08/25 FW V00.03 — THD 정확화 & 파형 원인규명
 ────────────────────────────────────────────────────────────
