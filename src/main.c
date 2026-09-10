@@ -83,7 +83,7 @@
 #include "proxy.h"
 #include "web.h"
 
-extern volatile uint8_t g_meterReady;   /* 계측 준비완료(웹/Modbus 통신 허용) — meter.c 정의 */
+extern volatile uint8_t g_meterReady;   /* 계측 준비완료(Modbus 통신 허용) — meter.c 정의. 웹은 게이트 없음 */
 
 
 #if 1	// IP Scan Listener(cskang)
@@ -165,6 +165,7 @@ extern void Sntp_Set(int v);
       uint16_t value, bool_t commit);
    
    extern int readMemCb(int address, uint16_t *value);
+   extern int readMemCbMb(uint16_t address, uint16_t *value);   /* 계측 게이트 적용 Modbus/TCP 읽기 */
    extern int writeMemCb(int address, uint16_t value);
 #endif
 	 
@@ -753,10 +754,7 @@ void init(void)
    }
 #endif	// _FTP_SERVER
 
-   /* mDNS 이름 광고 — 웹서버(아래 g_meterReady 대기)보다 먼저 기동한다.
-    * 계측 준비까지 기다리면 리셋 후 ~68초간 이름 조회가 실패하고, PC가 그 실패를 캐시해
-    * 장비가 돌아온 뒤에도 몇 분간 ERR_NAME_NOT_RESOLVED가 지속된다(웹은 살아있는데 접속 불가).
-    * 이름을 먼저 살려두면 그 구간이 '연결 거부'(캐시되지 않음)가 되어 웹 기동과 동시에 복구된다. */
+   /* mDNS 이름 광고 — 웹서버와 함께 네트워크 기동 직후에 띄운다(계측 준비 대기 없음). */
    webMdnsStart(&netInterface[0]);
 
    //Set task parameters
@@ -766,9 +764,10 @@ void init(void)
 
    app_init(0);   // 계측/RMSLog 등 태스크 생성(먼저)
 
-   //Start the web dashboard (CycloneTCP HTTP :80) — 계측 M0~M(ACTIVE-1) Buffer Ready 후 기동
-   //(미초기화=제품불량 시 g_meterReady=0 유지 → 웹 기동 안 함, 통신 차단)
-   while (!g_meterReady) osDelayTask(100);
+   /* 웹 대시보드(CycloneTCP HTTP :80) — 계측 준비(g_meterReady)와 무관하게 즉시 기동한다.
+    * 웹은 계측 유효성 판정이 아니라 '데이터 확인용'이므로 빨리 접속되는 편이 유리하고,
+    * 계측 미준비 구간엔 0/무효값이 그대로 보인다(진단에도 그 편이 낫다).
+    * Modbus(RTU·TCP)는 종전대로 Buffer Ready 후에만 응답 — modbus.c 게이트 유지. */
    webServerStart(&netInterface[0]);
    
 #ifdef __FREERTOS   
@@ -1125,7 +1124,9 @@ error_t modbusServerReadRegCallback(const char_t *role, uint16_t address,
    
    //Check register address
    //printf("modbusServerReadRegCallback, address=%d\n", address);
-   if (readMemCb(address, value) < 0)
+   /* readMemCbMb = 계측 미준비(g_meterReady=0) 시 -1 → Modbus exception. 웹(web.c)은 게이트 없는
+      readMemCb를 직접 쓰므로, 계측 준비 여부와 무관하게 조회 가능하다. */
+   if (readMemCbMb(address, value) < 0)
       error = ERROR_INVALID_ADDRESS;
 
    //Return status code

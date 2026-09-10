@@ -2163,6 +2163,5 @@ void webServerStart(NetInterface *interface)
 	e = httpServerStart(&webCtx);
 	if (e) { printf("[WEB] start failed (%d)\n", (int)e); return; }
 	printf("[WEB] HTTP on :80 (login: ntek/0300, sv300/0000)\n");
-	/* mDNS는 여기서 띄우지 않는다 — 이 함수는 g_meterReady 뒤(리셋 후 ~68초)에 호출되므로
-	 * 그때까지 이름 조회가 전부 실패해 PC에 캐시된다. main.c 네트워크 기동부에서 먼저 호출. */
+	/* mDNS는 여기서 띄우지 않는다 — main.c 네트워크 기동부에서 별도 호출(webMdnsStart). */
 }

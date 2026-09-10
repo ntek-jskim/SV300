@@ -1125,17 +1125,13 @@ int	writeMultiMem(uint16_t start, uint16_t count, uint8_t *pcmd)
 	return 0;
 }
 
-int   readMemCb(uint16_t address, uint16_t *value) 
+int   readMemCb(uint16_t address, uint16_t *value)
 {
 	int id;
 	uint16_t offset;
 	uint16_t *psmb;
 
 	pInfo->mBusRxCnt++;		/* Modbus RX 카운트 — TCP 읽기 경로(RTU는 modbusSlvProcFrame에서 별도 증가) */
-
-	/* 계측 초기화(Buffer Ready M0~M(ACTIVE-1)) 전엔 무응답 — CycloneTCP Modbus경로도 RTU(modbusSlvProcFrame:323)와 동일 게이트 */
-	if (!g_meterReady)
-		return -1;
 
 	if (decodeMeterAddress(address, &id, &offset) == 0) {
 		// Wave 데이터를 load 한다 (CH별 offset == MBAD_WV_REG)
@@ -1185,13 +1181,27 @@ int   readMemCb(uint16_t address, uint16_t *value)
 	}
 }
 
+/* Modbus/TCP 읽기 진입점 — 계측 게이트(g_meterReady) 적용. RTU(modbusSlvProcFrame:355)와 동일하게
+   Buffer Ready 전엔 무응답. 게이트를 readMemCb 안이 아니라 여기 두는 이유: 웹(web.c rdReg)은
+   계측 유효성과 무관하게 데이터 확인용으로 읽어야 해서 readMemCb를 게이트 없이 직접 호출한다.
+   (쓰기 writeMemCb는 계측 초기화 중 설정기록 위험 때문에 웹/Modbus 공통으로 게이트 유지) */
+int   readMemCbMb(uint16_t address, uint16_t *value)
+{
+	if (!g_meterReady) {
+		pInfo->mBusRxCnt++;	/* 무응답이어도 수신 카운트는 증가(readMemCb 진입 시와 동일) */
+		return -1;
+	}
+	return readMemCb(address, value);
+}
+
 int writeMemCb(uint16_t address, uint16_t value) {
-   	static uint32_t _utc;   
+   	static uint32_t _utc;
    	uint16_t *uptr = (uint16_t *)&_utc;
    	int id;
    	uint16_t offset;
 
-	/* 계측 초기화(Buffer Ready) 전엔 쓰기 차단 — RTU(modbusSlvProcFrame)와 동일 게이트 */
+	/* 계측 초기화(Buffer Ready) 전엔 쓰기 차단 — 웹/Modbus 공통(RTU modbusSlvProcFrame과 동일 게이트).
+	   웹은 접속·조회는 게이트 없이 가능하지만, 설정/명령 기록은 계측 준비 후에만 허용한다. */
 	if (!g_meterReady)
 		return -1;
 
