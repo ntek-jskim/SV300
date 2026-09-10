@@ -197,18 +197,42 @@ void Board_DMA_Init() {
 }
 
 /* [파형 A수정] readWFB_Data가 8페이지 루프 전체를 감싸 M1↔M2 readWFB를 순차 버스트로 직렬화.
-   bus==1(SSP1: M1/M2)만. 페이지단위 ssp1_mutex(dma_read32n)와 별개 락이라 교착 없음
-   (순서: wfb락 취득 → 내부에서 ssp1_mutex 취득; 상대 미터는 wfb락에서 대기하므로 순환대기 없음). */
+   bus==1(SSP1: M1/M2)만.
+
+   [스파이크 수정] 종전엔 wfb락이 '상대 미터의 readWFB'만 배제하고, 버스는 dma_read32n이
+   페이지 단위로 잡았다 놓았다 → 페이지와 페이지 사이로 상대 미터의 폴링 레지스터 읽기
+   (read_reg16/32·write_reg*, STATUS0/1·RMS·Power…)가 그대로 끼어들어 버스트 한복판에서
+   SSP1 클럭·상대 CS가 토글됐다. 이 활동이 ADE9000 동시변환을 교란해 '버스트당 ~1샘플'
+   손상(단일 스파이크)으로 나타났고, 고조파는 mag[h]/mag[1] 정규화라 큰 임펄스가 하나만
+   섞여도 전 차수가 같은 크기가 되어 THD/고조파가 100% 부근으로 뭉갠다.
+   → 이제 버스트 전체가 ssp1_mutex도 함께 보유해 SSP1을 독점한다. 상대 미터의 레지스터
+   읽기는 버스트(~2.4ms)가 끝날 때까지 대기하는데, page-full 주기 16ms 안이라 여유 있다.
+
+   교착 없음: ssp1_mutex를 잡은 뒤 wfb락을 잡는 경로가 없어 락 순서 역전이 생기지 않는다.
+   재귀 취득 회피: 버스트 중임을 ssp1_burst로 표시해 dma_read32n이 안쪽에서 다시 잡지 않게 한다
+   (이 플래그는 ssp1_mutex 보유자만 갱신하고, 상대 미터는 wfb락에 막혀 readWFB에 못 들어온다). */
+#ifdef HWV1
+static volatile uint8_t ssp1_burst;	/* 1 = readWFB 버스트가 ssp1_mutex를 이미 보유 */
+#endif
+
 void ssp1WfbLock(uint8_t bus)
 {
 #ifdef HWV1
-	if (bus == 1) osAcquireMutex(&ssp1_wfb_mutex);
+	if (bus == 1) {
+		osAcquireMutex(&ssp1_wfb_mutex);	/* 상대 미터의 readWFB 배제 */
+		osAcquireMutex(&ssp1_mutex);		/* 버스트 동안 SSP1 독점 */
+		ssp1_burst = 1;
+	}
 #endif
 }
 void ssp1WfbUnlock(uint8_t bus)
 {
 #ifdef HWV1
-	if (bus == 1) osReleaseMutex(&ssp1_wfb_mutex);
+	if (bus == 1) {
+		ssp1_burst = 0;
+		osReleaseMutex(&ssp1_mutex);
+		osReleaseMutex(&ssp1_wfb_mutex);
+	}
 #endif
 }
 
@@ -492,9 +516,10 @@ int dma_read32n(uint8_t mid, uint16_t cmd, uint32_t *buf, int n)
 #ifdef HWV1
 	/* CH3: SSP1(bus=1) 공유 — mutex 취득 후 해당 미터 CS를 Assert(LOW).
 	 * 폴링 SPI(read_reg16/32 등)도 동일 mutex를 쓰므로 MISO 버스 충돌이 방지된다.
-	 * mutex 범위: CS LOW → DMA 완료 → CS HIGH, 한 페이지 단위로 취득/반환한다. */
+	 * mutex 범위: CS LOW → DMA 완료 → CS HIGH, 한 페이지 단위로 취득/반환한다.
+	 * 단 readWFB 버스트 중이면 ssp1WfbLock이 이미 보유 중이라 다시 잡지 않는다(재귀 회피). */
 	if (bus == 1) {
-		osAcquireMutex(&ssp1_mutex);
+		if (!ssp1_burst) osAcquireMutex(&ssp1_mutex);
 		selectMeter(mid);
 	}
 #endif
@@ -506,7 +531,7 @@ int dma_read32n(uint8_t mid, uint16_t cmd, uint32_t *buf, int n)
 #ifdef HWV1
 	if (bus == 1) {
 		deSelectMeter(mid);
-		osReleaseMutex(&ssp1_mutex);
+		if (!ssp1_burst) osReleaseMutex(&ssp1_mutex);
 	}
 #endif
 
