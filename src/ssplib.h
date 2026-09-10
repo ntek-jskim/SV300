@@ -22,14 +22,5 @@ void ssp1WfbUnlock(uint8_t bus);
 
 void Board_DMA_Init();
 
-// wiznet
-void  wizchip_select(void);
-void  wizchip_deselect(void);
-uint8_t wizchip_read(void);
-void  wizchip_write(uint8_t wb);
-void wizchip_burstread(uint8_t* pBuf, uint16_t len);
-void  wizchip_burstwrite(uint8_t* pBuf, uint16_t len);
-void W5500_SPI_Init(void);
-
 
 #endif

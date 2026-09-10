@@ -43,7 +43,6 @@ extern void IOM_Task(void *);
 extern void TempScan_Task(void *);
 extern void FTPC_Task(void *);
 extern void Shell_Task(void *);
-extern void W5500_TcpServer(void *);
 extern void ledTask(void *);
 #ifdef	FLOW_RATE
    extern void FlowScan_Task(void *);
@@ -70,7 +69,6 @@ extern void init_udp_session(void);
 extern void init_telnet_session(int);
 extern int  loadEnergyLogFs();
 extern void loadEnergyLog15Fs();
-extern void W5500_TcpServer();
 extern void timeStampChanged();
 
 extern void selWire(int);
@@ -355,7 +353,6 @@ extern void loadDemand();
 extern void ExtRTC_Init();
 
 
-extern void W5500_TcpServer();
 extern void init_smb();
 //void init_card(); 
 void FS_Init();
@@ -754,15 +751,6 @@ void app_init(void *params) {
 	// 		}
 	// 	}
 	// }
-
-//    // Wiznet
-//    taskParams.priority = OS_TASK_PRIORITY_NORMAL;
-//    tid_w5500 = osCreateTask("w5500", W5500_TcpServer, NULL, &taskParams);
-//    if(tid_w5500 == OS_INVALID_TASK_ID)
-//    {
-//       //Debug message
-//       TRACE_ERROR("Failed to create task!\r\n");
-//    }
 
    // WDT Enable
    pcntl->wdtEn = 0;

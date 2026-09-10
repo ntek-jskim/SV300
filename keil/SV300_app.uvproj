@@ -1926,31 +1926,6 @@
           </Files>
         </Group>
         <Group>
-          <GroupName>Wiznet</GroupName>
-          <Files>
-            <File>
-              <FileName>w5500_init.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\wiznet\w5500_init.c</FilePath>
-            </File>
-            <File>
-              <FileName>wizchip_conf.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\wiznet\wizchip_conf.c</FilePath>
-            </File>
-            <File>
-              <FileName>wiznet_socket.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\wiznet\wiznet_socket.c</FilePath>
-            </File>
-            <File>
-              <FileName>w5500.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\wiznet\W5500\w5500.c</FilePath>
-            </File>
-          </Files>
-        </Group>
-        <Group>
           <GroupName>Application</GroupName>
           <Files>
             <File>
@@ -2058,11 +2033,6 @@
                   </Cads>
                 </FileArmAds>
               </FileOption>
-            </File>
-            <File>
-              <FileName>wiznet_thread.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\src\wiznet_thread.c</FilePath>
             </File>
             <File>
               <FileName>ETC.c</FileName>
@@ -4018,31 +3988,6 @@
           </Files>
         </Group>
         <Group>
-          <GroupName>Wiznet</GroupName>
-          <Files>
-            <File>
-              <FileName>w5500_init.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\wiznet\w5500_init.c</FilePath>
-            </File>
-            <File>
-              <FileName>wizchip_conf.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\wiznet\wizchip_conf.c</FilePath>
-            </File>
-            <File>
-              <FileName>wiznet_socket.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\wiznet\wiznet_socket.c</FilePath>
-            </File>
-            <File>
-              <FileName>w5500.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\wiznet\W5500\w5500.c</FilePath>
-            </File>
-          </Files>
-        </Group>
-        <Group>
           <GroupName>Application</GroupName>
           <Files>
             <File>
@@ -4150,11 +4095,6 @@
                   </Cads>
                 </FileArmAds>
               </FileOption>
-            </File>
-            <File>
-              <FileName>wiznet_thread.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\src\wiznet_thread.c</FilePath>
             </File>
             <File>
               <FileName>ETC.c</FileName>
@@ -6110,31 +6050,6 @@
           </Files>
         </Group>
         <Group>
-          <GroupName>Wiznet</GroupName>
-          <Files>
-            <File>
-              <FileName>w5500_init.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\wiznet\w5500_init.c</FilePath>
-            </File>
-            <File>
-              <FileName>wizchip_conf.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\wiznet\wizchip_conf.c</FilePath>
-            </File>
-            <File>
-              <FileName>wiznet_socket.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\wiznet\wiznet_socket.c</FilePath>
-            </File>
-            <File>
-              <FileName>w5500.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\wiznet\W5500\w5500.c</FilePath>
-            </File>
-          </Files>
-        </Group>
-        <Group>
           <GroupName>Application</GroupName>
           <Files>
             <File>
@@ -6242,11 +6157,6 @@
                   </Cads>
                 </FileArmAds>
               </FileOption>
-            </File>
-            <File>
-              <FileName>wiznet_thread.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\src\wiznet_thread.c</FilePath>
             </File>
             <File>
               <FileName>ETC.c</FileName>

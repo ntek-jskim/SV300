@@ -690,72 +690,8 @@ int write_reg32(uint8_t mid, uint16_t cmd, uint32_t *pdata)
 	return 1;
 }
 
-// const GPIO_ID SSEL_GPIO[] = {
-// 	{7, 16},
-// 	{7, 19},
-// };
-void  wizchip_select(void)
-{	
-//	GPIO_PinWrite(1, 27, 0);	// SSEL(CS)
-	selectMeter(1);
-}
-
-void  wizchip_deselect(void)
-{
-//	GPIO_PinWrite(1, 27, 1);	// SSEL(CS)
-	deSelectMeter(1);
-}
-
-uint8_t wizchip_read()
-{
-	uint8_t rb;
-#ifdef LPC1788
-	//Chip_SSP_ReadFrames_Blocking(LPC_SSP0, &rb, 1);
-	while ((LPC_SSP1->SR & SSP_SR_TNF) == 0) ;	// Not Full
-	SSP_SendData(LPC_SSP1, 0xff);
-	while ((LPC_SSP1->SR & SSP_SR_RNE) == 0) ; 	// Not Empty		
-	rb = SSP_ReceiveData(LPC_SSP1);	
-#else	
-	uint8_t tb = 0xff;
-	spiIO8_Polling(LPC_SSP1, 0, 0, &rb, 1);
-#endif
-	return rb;
-}
-
-void  wizchip_write(uint8_t wb)
-{
-#ifdef LPC1788
-	//Chip_SSP_WriteFrames_Blocking(LPC_SSP0, &wb, 1);
-	while ((LPC_SSP1->SR & SSP_SR_TNF) == 0) ;	// Not Full
-	SSP_SendData(LPC_SSP1, wb);
-
-	while ((LPC_SSP1->SR & SSP_SR_RNE) == 0) ; 	// Not Empty		
-	SSP_ReceiveData(LPC_SSP1);
-#else
-	uint8_t rb;
-	spiIO8_Polling(LPC_SSP1, &wb, 1, 0, 0);
-#endif
-}
-
-void wizchip_burstread(uint8_t* pBuf, uint16_t len)
-{
-#ifdef LPC1788
-	spi(LPC_SSP1, 0, 0, pBuf, len);
-#else
-	spiIO8_Polling(LPC_SSP1, 0, 0, pBuf, len);
-#endif
-}
-
-void  wizchip_burstwrite(uint8_t* pBuf, uint16_t len)
-{
-#ifdef LPC1788
-	spi(LPC_SSP1, pBuf,len, 0, 0);
-#else
-	spiIO8_Polling(LPC_SSP1, pBuf,len, 0, 0);
-#endif
-}
-
-void W5500_SPI_Init()
-{
-	Board_SSP_Init(LPC_SSP1, 8, 0, 16000000);	// 0:8bit, 0:Manual/1:Auto
-}
+/* [WIZnet 제거 2026/09/10] W5500 SPI 콜백(wizchip_select/deselect/read/write/burstread/
+   burstwrite)과 W5500_SPI_Init 삭제 — 유일한 사용처였던 wiznet_thread.c를 프로젝트에서
+   제외해 고아가 됐다. 특히 wizchip_select()는 selectMeter(1)로 CH3 보드의 M1_CS를
+   내리는 2CH 시절 배선 코드라, 되살릴 경우 M1 ADE9000을 선택하게 되는 위험이 있었다.
+   W5500 하드웨어를 다시 쓸 일이 생기면 git 이력(이 커밋 이전)에서 복구할 것. */
