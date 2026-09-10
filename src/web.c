@@ -1198,7 +1198,7 @@ static const GField GEN[] = {
 	{ "pf_sign",         "PF Sign",              7389, WT_U16,  2, 0, 0 },
 	{ "demand_interval", "Demand Interval (min)",7390, WT_U16,  2, 0, 0 },
 	{ "target_demand",   "Target Demand (W)",    7392, WT_U32,  2, 0, 0 },
-	{ "auto_rotation",   "Auto Rotation",        7400, WT_BOOL, 2, 0, 0 },
+	/* Auto Rotation(7400)은 미사용이라 UI에서 제거 — 레지스터 자체는 그대로 둔다 */
 	{ "test_mode",       "Test Mode",            7403, WT_BOOL, 2, 0, 0 },
 	{ "update_interval", "Update Interval (sec)",7404, WT_U16,  2, 0, 0 },
 	{ "minmax_reset",    "Max/Min Reset",        7402, WT_U16,  2, 0, 0 },
@@ -1510,6 +1510,16 @@ static const char INDEX_HTML[] =
 ".srow .sv{font-family:'Consolas',monospace}\n"
 ".srow input,.srow select{width:160px;margin:0;padding:6px 8px;font-size:13px}\n"
 ".srow input[type=checkbox]{width:auto}\n"
+"/* 0/1 항목 토글 버튼(gems3500_keil5 web/app.js fieldTog 참조) */\n"
+".srow button.tog{display:flex;align-items:center;gap:9px;width:160px;padding:5px 9px;margin:0;box-sizing:border-box;border:1px solid var(--line);border-radius:5px;background:var(--panel2);color:var(--muted);font-family:'Consolas',monospace;font-size:11.5px;font-weight:700;letter-spacing:.5px;cursor:pointer;text-align:left}\n"
+".srow button.tog .knob{width:28px;height:15px;border-radius:8px;flex:0 0 auto;background:#4b5a6b;position:relative;transition:background .15s}\n"
+".srow button.tog .knob::after{content:'';position:absolute;top:2px;left:2px;width:11px;height:11px;border-radius:50%;background:#fff;transition:transform .15s}\n"
+".srow button.tog:hover{border-color:var(--accent)}\n"
+".srow button.tog.on{background:rgba(34,197,94,.12);color:var(--ok);border-color:var(--ok)}\n"
+".srow button.tog.on .knob{background:var(--ok)}.srow button.tog.on .knob::after{transform:translateX(13px)}\n"
+".srow button.tog:disabled{opacity:.5;cursor:not-allowed}.srow button.tog:disabled:hover{border-color:var(--line)}\n"
+".srow input:disabled,.srow select:disabled{opacity:.5;cursor:not-allowed}\n"
+".srow button.tog.chg{border-color:var(--warn)}\n"
 "/* PT/CT 설정 표: 행=번호, 열=필드 */\n"
 ".settbl-wrap{width:100%;overflow-x:auto}\n"
 ".settbl{width:100%;border-collapse:collapse;font-size:13px}\n"
@@ -1776,23 +1786,52 @@ static const char INDEX_HTML[] =
 "function reloadSet(){var t=setCur;if(t==='general')loadGeneral();else if(t==='pt')loadGroup('pt');else if(t==='ct')loadGroup('ct');else if(t==='command')loadCommand();else if(t==='alarm')loadAlarm();else loadCSect(t);}\n"
 "var CSECT={pqevent:[[6700,'Level','Over Current'],[6701,'Cycle','Over Current'],[6702,'Trigger Action','Over Current'],[6703,'holdOff Cycle','Over Current'],[6706,'Level(%)','Sag',1],[6707,'Cycle','Sag',1],[6708,'Trigger Action','Sag',1],[6709,'holdOff Cycle','Sag',1],[6712,'Level(%)','Swell',1],[6713,'Cycle','Swell',1],[6714,'Trigger Action','Swell',1],[6715,'holdOff Cycle','Swell',1],[6718,'Level(%)','Interruption',1],[6719,'Time(s)','Interruption',1],[6720,'Trigger Action','Interruption',1],[6721,'holdOff Cycle','Interruption',1]],transient:[[6724,'HoldOff(ms)','Voltage',1],[6725,'Abs Peak(%)','Voltage',1],[6726,'Fast Change','Voltage',1],[6727,'Trigger Action','Voltage',1],[6728,'HoldOff','Current'],[6729,'Abs Peak','Current'],[6730,'Fast Change','Current'],[6731,'Trigger Action','Current']],waveform:[[6746,'Pre trigger (cycle)'],[6747,'Post trigger (cycle)']],disturb:[[6748,'Resolution(HalfCyc)'],[6749,'Param(U/I)'],[6750,'Pre trig(smp)'],[6751,'Post trig(smp)']],pqreport:[[6844,'Active'],[6845,'Start Day']],almdef:[[6854,'compare Time Delay(s)']]};\n"
 "(function(){var t=[];[[1,6764,6766,6767],[2,6783,6785,6786],[3,6802,0,6805],[4,6821,0,6824]].forEach(function(g){var gn='Group '+g[0];t.push([g[1],'Active',gn]);t.push([g[1]+1,'Interval',gn]);if(g[2])t.push([g[2],'Version',gn]);for(var k=0;k<16;k++)t.push([g[3]+k,'Ch'+(k+1),gn]);});CSECT.trend=t;})();\n"
+/* CSECT 탭 중 Active 행을 토글 버튼으로 낼 것들. hide=1 이면 OFF 시 같은 그룹의 나머지 행을 숨긴다. */
+"var CSTOG={trend:{k:'Active',hide:1},pqreport:{k:'Active',hide:0}};\n"
 "function loadCSect(key){var f=CSECT[key];if(!f){$('setBody').innerHTML=\"<p class='stub'>-</p>\";return;}var lo=f[0][0],hi=f[0][0];f.forEach(function(p){if(p[0]<lo)lo=p[0];if(p[0]>hi)hi=p[0];});var nn=hi-lo+1;\n"
 " var _chs=[];for(var _k=1;_k<=NCH;_k++)_chs.push(_k);\n"
 " Promise.all(_chs.map(function(ch){return j('/api/regs?addr='+(lo+(ch-1)*10000)+'&n='+nn).then(function(r){return (r.d&&r.d.ok)?r.d.words:null;}).catch(function(){return null;});})).then(function(bl){if(setCur!==key)return;\n"
 "  var h=\"<div class='setgrid'>\";for(var ch=1;ch<=NCH;ch++){var wds=bl[ch-1];h+=\"<div class='setcard'><h3>CH\"+ch+'</h3>';\n"
-"   if(!wds){h+=\"<p class='stub'>no data</p>\";}else{var pg=null;f.forEach(function(p){if(ch>1&&p[3])return;var g=p[2]||'';if(g&&g!==pg){h+=\"<div class='sgrp'>\"+esc(g)+\"</div>\";}pg=g;var addr=p[0]+(ch-1)*10000,v=wds[p[0]-lo]||0,ctl;if(p[1]==='Trigger Action'){ctl=\"<select data-addr='\"+addr+\"' data-type='u16' data-orig='\"+v+\"' \"+(IS_ADMIN?'':'disabled')+\" onchange='setMark(this)'><option value='0'\"+(v==0?' selected':'')+\">NONE</option><option value='1'\"+(v==1?' selected':'')+\">EVENT</option><option value='2'\"+(v==2?' selected':'')+\">WAVE CAPTURE</option></select>\";}else{ctl=\"<input type='number' data-addr='\"+addr+\"' data-type='u16' data-orig='\"+v+\"' value='\"+v+\"' \"+(IS_ADMIN?'':'disabled')+\" oninput='setMark(this)'>\";}h+=\"<div class='srow'><span class='sk'>\"+esc(p[1])+\"</span>\"+ctl+\"</div>\";});}\n"
-"   h+='</div>';}h+='</div>';$('setBody').innerHTML=h;sn('Save & Apply.');});}\n"
+"   if(!wds){h+=\"<p class='stub'>no data</p>\";}else{var pg=null,gi=0,tg=CSTOG[key],dis=IS_ADMIN?'':'disabled';\n"
+"    f.forEach(function(p){if(ch>1&&p[3])return;var g=p[2]||'';if(g&&g!==pg){gi++;h+=\"<div class='sgrp'>\"+esc(g)+\"</div>\";}pg=g;\n"
+"     var addr=p[0]+(ch-1)*10000,v=wds[p[0]-lo]||0,gk=(tg&&tg.hide)?('g'+ch+'_'+gi):'',d=\"data-addr='\"+addr+\"' data-type='u16' data-orig='\"+v+\"'\",ctl;\n"
+"     if(tg&&p[1]===tg.k){ctl=togBtn(d,v==1,dis,gk,0,tg.hide);}\n"
+"     else if(p[1]==='Trigger Action'){ctl=\"<select \"+d+' '+dis+\" onchange='setMark(this)'><option value='0'\"+(v==0?' selected':'')+\">NONE</option><option value='1'\"+(v==1?' selected':'')+\">EVENT</option><option value='2'\"+(v==2?' selected':'')+\">WAVE CAPTURE</option></select>\";}\n"
+"     else{ctl=\"<input type='number' \"+d+(gk?(\" data-k='\"+gk+\"'\"):'')+\" value='\"+v+\"' \"+dis+\" oninput='setMark(this)'>\";}\n"
+"     h+=\"<div class='srow'><span class='sk'>\"+esc(p[1])+\"</span>\"+ctl+\"</div>\";});}\n"
+"   h+='</div>';}h+='</div>';$('setBody').innerHTML=h;togDeps($('setBody'));sn('Save & Apply.');});}\n"
 "function fmtV(f){return (f.type==='bool')?(f.val?'On':'Off'):esc(f.val)}\n"
-"function ctlOf(f){var d=\"data-addr='\"+f.addr+\"' data-type='\"+f.type+\"' data-orig='\"+esc(f.val)+\"'\",dis=IS_ADMIN?'':'disabled';\n"
-" if(f.ro)return \"<span class='sv'>\"+fmtV(f)+\"</span><span class='rtag'>R</span>\";\n"
+/* 0/1 항목은 체크박스 대신 토글 버튼(gems3500_keil5 참조). 값은 value 속성에 실리므로
+   setMark/saveSet 는 기존 경로 그대로 동작한다(<button>.value = '0'|'1'). */
+"function togBtn(d,on,dis,dep,inv,hid){return \"<button type='button' class='tog\"+(on?' on':'')+\"' \"+d+\" value='\"+(on?1:0)+\"' \"+dis+(dep?(\" data-dep='\"+dep+\"'\"):'')+(inv?\" data-inv='1'\":'')+(hid?\" data-hide='1'\":'')+\" onclick='togClick(this)'><span class='knob'></span><span class='txt'>\"+(on?'ENABLE':'DISABLE')+\"</span></button>\";}\n"
+"function togClick(b){if(b.disabled)return;var on=(b.value!=='1');b.value=on?'1':'0';b.classList.toggle('on',on);var t=b.querySelector('.txt');if(t)t.textContent=on?'ENABLE':'DISABLE';setMark(b);togDeps($('setBody'));}\n"
+/* data-dep = 종속 필드 key 목록(콤마 구분).
+   data-inv=1 : 켜졌을 때 잠근다 — DHCP 처럼 자동할당이라 수동입력이 무의미한 경우.
+   data-hide=1: 비활성 대신 행 자체를 숨긴다(Trend 그룹).
+   잠기거나 숨겨진 필드도 값은 DOM 에 남아 saveSet 수집에서 빠지지 않는다. */
+"function togDeps(root){if(!root)return;root.querySelectorAll('button.tog[data-dep]').forEach(function(b){\n"
+" var on=(b.value==='1'),inv=b.getAttribute('data-inv')==='1',hid=b.getAttribute('data-hide')==='1',lock=b.disabled||(inv?on:!on);\n"
+" b.getAttribute('data-dep').split(',').forEach(function(k){root.querySelectorAll(\"[data-k='\"+k.trim()+\"']\").forEach(function(el){\n"
+"  if(hid){var r=el.closest('.srow');if(r)r.style.display=lock?'none':'';}else el.disabled=lock;});});});}\n"
+"var GDEP={dhcp:['ip,subnet,gateway,dns',1],sntp:['sntp_ip,sntp_interval',0]};\n"
+"function ctlOf(f){var d=\"data-addr='\"+f.addr+\"' data-type='\"+f.type+\"' data-orig='\"+esc(f.val)+\"' data-k='\"+f.k+\"'\",dis=IS_ADMIN?'':'disabled';\n"
+" if(f.ro)return \"<span class='sv' data-k='\"+f.k+\"'>\"+fmtV(f)+\"</span><span class='rtag'>R</span>\";\n"
 " if(OPT[f.k]){var o=OPT[f.k],s=\"<select \"+d+' '+dis+\" onchange='setMark(this)'>\";for(var k in o)s+=\"<option value='\"+k+\"'\"+((''+k)===(''+f.val)?' selected':'')+'>'+esc(o[k])+'</option>';return s+'</select>';}\n"
-" if(f.type==='bool')return \"<input type='checkbox' \"+d+' '+dis+' '+(f.val?'checked':'')+\" onchange='setMark(this)'>\";\n"
+" if(f.type==='bool'){var g=GDEP[f.k];return togBtn(d,!!f.val,dis,g?g[0]:'',g?g[1]:0,0);}\n"
 " var tp=(f.type==='ip'||f.type==='str')?'text':'number';\n"
 " return \"<input type='\"+tp+\"' \"+d+\" value='\"+esc(f.val)+\"' \"+dis+\" oninput='setMark(this)'>\";}\n"
+/* Status 카드(Heart Bit·Modbus RX 등)는 실시간 값 — 카드 전체를 다시 그리면 편집 중인
+   다른 카드가 날아가므로, 해당 워드블록만 1초마다 읽어 값 span 만 교체한다. */
+"var STF=[],STLO=0,STN=0;\n"
 "function loadGeneral(){return j('/api/general').then(function(r){if(!r.d.ok){$('setBody').innerHTML=\"<p class='stub'>load error</p>\";return;}\n"
 " var cs=[[],[],[],[]];r.d.fields.forEach(function(f){cs[f.card].push(f)});var h=\"<div class='setgrid'>\";\n"
+" STF=cs[3];STLO=0;STN=0;STF.forEach(function(f){if(!STLO||f.addr<STLO)STLO=f.addr;});\n"
+" STF.forEach(function(f){if(f.addr-STLO+1>STN)STN=f.addr-STLO+1;});\n"
 " cs.forEach(function(fs,ci){h+=\"<div class='setcard'><h3>\"+CARDN[ci]+'</h3>';fs.forEach(function(f){h+=\"<div class='srow'><span class='sk'>\"+esc(f.label)+'</span>'+ctlOf(f)+'</div>';});h+='</div>';});\n"
-" h+='</div>';$('setBody').innerHTML=h;sn('Save & Apply.');});}\n"
+" h+='</div>';$('setBody').innerHTML=h;togDeps($('setBody'));sn('Save & Apply.');});}\n"
+"function loadStatus(){if(!STN||setCur!=='general')return Promise.resolve();\n"
+" return j('/api/regs?addr='+STLO+'&n='+STN).then(function(r){if(!r.d||!r.d.ok)return;\n"
+"  STF.forEach(function(f){var e=document.querySelector(\"#setBody .sv[data-k='\"+f.k+\"']\");if(e)e.textContent=r.d.words[f.addr-STLO];});});}\n"
 "function setMark(el){var v=(el.type==='checkbox')?(el.checked?'1':'0'):el.value;if((''+v)!==el.getAttribute('data-orig'))el.classList.add('chg');else el.classList.remove('chg');}\n"
 "function setRes(m){$('setRes').textContent=m}\n"
 "function saveSet(){var els=document.querySelectorAll('#setBody [data-addr]'),chg=[];\n"
@@ -2029,6 +2068,7 @@ static const char INDEX_HTML[] =
 " else if(cur==='feeder'){_busy=true;loadFeeder().catch(function(){}).then(pollFin);}\n"
 " else if(cur==='channel'){_busy=true;loadChannelTab().catch(function(){}).then(pollFin);}\n"
 " else if(cur==='io'){_busy=true;loadIom().catch(function(){}).then(pollFin);}\n"
+" else if(cur==='setup'&&setMode==='main'&&setCur==='general'){_busy=true;loadStatus().catch(function(){}).then(pollFin);}\n"
 "}\n"
 "tbtn();clk();setInterval(clk,1000);setInterval(pollLoop,1000);me();\n"
 "</script></body></html>\n";
