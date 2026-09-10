@@ -15,7 +15,7 @@
 #define	FW_VER	0003
 #define	FW_BUILD_YEAR 26
 #define	FW_BUILD_MON  9
-#define	FW_BUILD_DAY  9
+#define	FW_BUILD_DAY  10
 
 #define	SQRT_2	 1.414213562 
 
@@ -4032,25 +4032,33 @@ int storeMaxMin() {
 	return 0;	
 }
 
+/* 나이 로테이션 기준시각의 유효범위 — 벗어나면 RTC 오독으로 보고 트림을 비활성한다.
+ *  하한: RTC 미설정 상태(1970/2000/2001)에서의 언더플로·오삭제 방지.
+ *  상한: ★RTC I2C 오독으로 0xFFFFFFFF 계열이 들어오면 2106-02(uint32 epoch 한계)로 해석되어
+ *        cutoff가 미래가 되고, 현재 로그 전부가 '보존기간 경과'로 판정돼 일괄 삭제된다.
+ *        (실제 흔적: 이 장비 FS에 qw_21060202_m0.d / ql_21060202_m0.d 잔존) */
+#define LOG_TS_MIN	1600000000UL	/* 2020-09-13 */
+#define LOG_TS_MAX	2500000000UL	/* 2049-03-22 */
+
 /* [나이 로테이션] sysTick1s(현재 epoch) 기준 days일 전 날짜키(YYYYMMDD).
- *  RTC 미설정(2020 이전, epoch<1.6e9)이면 0 반환 → 나이 트림 비활성(언더플로/오삭제 방지). */
+ *  기준시각이 유효범위 밖이면 0 반환 → 나이 트림 비활성. */
 uint32_t logCutoffKeyDays(int days) {
 	struct tm ltm;
 	uint32_t t;
 
-	if (sysTick1s < 1600000000UL)
+	if (sysTick1s < LOG_TS_MIN || sysTick1s > LOG_TS_MAX)
 		return 0;
 	t = sysTick1s - (uint32_t)days * 24u * 3600u;
 	uLocalTime(&t, &ltm);	/* uLocalTime: tm_year=전체연도, tm_mon=1~12 */
 	return (uint32_t)ltm.tm_year * 10000u + (uint32_t)ltm.tm_mon * 100u + (uint32_t)ltm.tm_mday;
 }
 
-/* [나이 로테이션-월] months개월 전 월키(YYYYMM). RTC 미설정 시 0. 에너지 월단위 아카이브용. */
+/* [나이 로테이션-월] months개월 전 월키(YYYYMM). 기준시각 유효범위 밖이면 0. 에너지 월아카이브용. */
 uint32_t logCutoffKeyMonths(int months) {
 	struct tm ltm;
 	int y, m;
 
-	if (sysTick1s < 1600000000UL)
+	if (sysTick1s < LOG_TS_MIN || sysTick1s > LOG_TS_MAX)
 		return 0;
 	uLocalTime(&sysTick1s, &ltm);	/* tm_year=전체연도, tm_mon=1~12 */
 	y = ltm.tm_year;
@@ -4065,13 +4073,20 @@ uint32_t logCutoffKeyMonths(int months) {
 static unsigned long egyArchNameKey(const char *name) {
 	unsigned long key = 0;
 	int i;
-	/* 아카이브만 인식: "egy" 다음 YYYYMM(6자리). egy_log*(egy 다음 '_')·기타 접두어는 0 반환→트림 제외 */
+	/* 아카이브만 인식: "egy" + YYYYMM(6자리) + "_" 형식만. 같은 접두어의 다른 파일
+	 * (egy_log*, egy15_<sel>_m<id>.d 등)은 0 반환 → 트림·예산집계에서 제외.
+	 * ※평면 EFS라 \system\egy15_* 도 \log_egy\egy*.d glob에 걸린다. 6자리를 정확히
+	 *   요구하지 않으면 "egy15_0_m1.d"가 key=15로 파싱돼 최古 아카이브로 오인·삭제된다
+	 *   (15분 에너지 로그 유실). Quality.c parseDateKey8 이 8자리를 정확히 요구하는 것과 동일 원칙. */
 	if (name[0] != 'e' || name[1] != 'g' || name[2] != 'y')
 		return 0;
-	for (i = 3; i <= 8 && name[i] >= '0' && name[i] <= '9'; i++)
+	for (i = 3; i <= 8; i++) {
+		if (name[i] < '0' || name[i] > '9')
+			return 0;		/* YYYYMM 6자리 미만 → 아카이브 아님 */
 		key = key * 10 + (unsigned long)(name[i] - '0');
-	if (i == 3)
-		return 0;		/* egy 다음이 숫자 아님 → 아카이브 아님 */
+	}
+	if (name[9] != '_')
+		return 0;			/* egy<YYYYMM>_m<id>.d 형식만 */
 	return key;
 }
 
