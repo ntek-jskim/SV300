@@ -582,15 +582,16 @@ static void cmd_datetime(char *par) {
 
 	dt[0] = get_entry(par, &next);
 	if (par == NULL || *par == 0 || dt[0] == NULL || dt[0][0] == 0) {
+		/* uLocalTime: tm_year=전체연도, tm_mon=1~12 */
 		uLocalTime(&sysTick1s, &ltm);
 		printf("Current (app): %04d-%02d-%02d %02d:%02d:%02d  unix=%lu\n",
-		       ltm.tm_year + 1900, ltm.tm_mon + 1, ltm.tm_mday,
+		       ltm.tm_year, ltm.tm_mon, ltm.tm_mday,
 		       ltm.tm_hour, ltm.tm_min, ltm.tm_sec,
 		       (unsigned long)sysTick1s);
 		rtcUtc = RTC_GetTimeUTC();
 		uLocalTime(&rtcUtc, &ltm);
 		printf("Current (RTC): %04d-%02d-%02d %02d:%02d:%02d  unix=%lu\n",
-		       ltm.tm_year + 1900, ltm.tm_mon + 1, ltm.tm_mday,
+		       ltm.tm_year, ltm.tm_mon, ltm.tm_mday,
 		       ltm.tm_hour, ltm.tm_min, ltm.tm_sec,
 		       (unsigned long)rtcUtc);
 		return;

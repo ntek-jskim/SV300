@@ -2001,8 +2001,16 @@ void RTC_SetTimeUTC(uint32_t utc) {
 
 uint32_t RTC_GetTimeUTC(void) {
 	uint32_t utc;
-	
-	RTC_To_UTC(&_rtc_get, &utc);	
+
+#ifdef EXT_RTC
+	uint8_t regs[8];
+
+	if (I2C_RtcRead(regs) != I2C_STATUS_DONE)
+		return 0;
+	ExtRTC_To_UTC(regs, &utc);
+#else
+	RTC_To_UTC(&_rtc_get, &utc);
+#endif
 	return utc;
 }
 

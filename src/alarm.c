@@ -1205,6 +1205,20 @@ void buildTrendSetting() {
 
 
 uint16_t trdTime[] = {1,2,3,5,10,15,20,30,60};
+#define TRD_TIME_N	(int)(sizeof(trdTime) / sizeof(trdTime[0]))
+
+/* [트렌드 자동 OFF] 고속 간격은 flash 소모가 커서 무기한 기록을 허용하지 않는다.
+ *  레코드 72B × (미터 3 × 그룹 4 = 최대 12조합) → 1분 간격이면 1.19MB/일(월 35MB)로
+ *  트렌드 예산(3MB)은 물론 flash 전체(16MB)도 넘긴다. 게다가 findOldestTrendLog가
+ *  금월·전월 파일을 보호하므로, 금월 파일만으로 예산을 넘기면 트리머가 지울 대상을
+ *  찾지 못해 상한 없이 계속 증가한다.
+ *  → 고속 기록은 지정 시간까지만 하고 active를 0으로 써서 멈춘다(웹/Modbus에도 꺼진
+ *    상태가 그대로 보이므로 "설정은 켰는데 기록이 없다"는 혼란이 없다).
+ *  10분 이상 간격은 조합당 10KB/일 이하라 대상에서 제외 — 장기 트렌드 용도는 살린다. */
+#define TREND_FAST_ITV_MIN	10	/* 이 값 미만 간격을 '고속'으로 본다(분) */
+#define TREND_AUTO_OFF_MIN	60	/* 고속 기록 허용 시간(분) */
+
+static uint16_t trdOnMin[METER_CH_COUNT][4];	/* 고속 기록 경과시간(분) */
 
 static int parseTrendMonthKey(const char *name) {
 	int i;
@@ -1448,13 +1462,31 @@ void Trend_Task(void *arg)
 		
 		// trend data 생성 (meter CH × trend group)
 		for (mid = 0; mid < ACTIVE_METER_CH_COUNT; mid++) {
-			for (i=0; i<4; i++) {			
+			for (i=0; i<4; i++) {
 				if (meter[mid].trend[i].active == 0) {
+					trdOnMin[mid][i] = 0;	/* 꺼져 있으면 리셋 → 다시 켤 때 허용시간 전액 재부여 */
 					continue;
 				}
-					
-				itv = (meter[mid].trend[i].interval >= 8) ? 10 : trdTime[meter[mid].trend[i].interval];
-				if ((pcntl->tod.tm_min % itv) == 0) {				
+
+				/* 경계는 배열 크기(TRD_TIME_N)여야 한다. 기존 '>= 8'은 trdTime[8]=60(60분)을
+				 * 배제해 60분 선택 시 실제로는 10분으로 기록됐다(쓰기량 6배).
+				 * 범위 밖 값의 폴백도 가장 느린 60분이 안전하다. */
+				itv = (meter[mid].trend[i].interval >= TRD_TIME_N) ? 60 : trdTime[meter[mid].trend[i].interval];
+
+				if (itv < TREND_FAST_ITV_MIN) {
+					if (++trdOnMin[mid][i] > TREND_AUTO_OFF_MIN) {
+						meter[mid].trend[i].active = 0;
+						trdOnMin[mid][i] = 0;
+						printf("Trend auto-off: m=%d g=%d itv=%dmin (limit %dmin)\n",
+						       mid, i, itv, TREND_AUTO_OFF_MIN);
+						continue;
+					}
+				}
+				else {
+					trdOnMin[mid][i] = 0;
+				}
+
+				if ((pcntl->tod.tm_min % itv) == 0) {
 					getTrendData(mid, i, meter[mid].trend[i].chan);
 				}
 			}
