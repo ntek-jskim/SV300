@@ -15,7 +15,7 @@
 #define	FW_VER	0003
 #define	FW_BUILD_YEAR 26
 #define	FW_BUILD_MON  9
-#define	FW_BUILD_DAY  15
+#define	FW_BUILD_DAY  21
 
 #define	SQRT_2	 1.414213562 
 
@@ -446,12 +446,12 @@ int initSettings(int id)
 #endif
 		db.comm.sm0[0] = 255;
 		db.comm.sm0[1] = 255;
-		db.comm.sm0[2] = 255;
+		db.comm.sm0[2] = 0;
 		db.comm.sm0[3] = 0;
 
 		db.comm.gw0[0] = 192;
 		db.comm.gw0[1] = 168;
-		db.comm.gw0[2] = 9;
+		db.comm.gw0[2] = 1;
 		db.comm.gw0[3] = 1;
 
 		db.comm.dns0[0] = 168;
