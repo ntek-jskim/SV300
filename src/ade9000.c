@@ -57,9 +57,10 @@ static uint32_t wvCyc(void) { return WVD_CYCCNT; }	/* 현재 사이클 카운트
 /* 칩별 진단 누적 */
 static uint32_t wvBurstEnter[3];	/* 마지막 버스트 진입 사이클 */
 static uint32_t wvBurstUs[3];		/* 마지막 버스트 소요(us) */
-static uint32_t wvSpikeCnt[3];		/* 스파이크(임계초과) 누적 */
+static uint32_t wvSpikeCnt[3];		/* 스파이크(임계초과) 구간 누적(500버스트마다 리셋) */
+static uint32_t wvSpikeMax[3];		/* 구간 내 최대 median 편차(오검출/임펄스 판별) */
 static uint32_t wvScanCnt[3];		/* 버스트 횟수 */
-static uint32_t wvOverlap;			/* 3칩 버스트 시간겹침 관측 횟수 */
+static uint32_t wvOverlapCnt[3];	/* 이 칩 진입 시 타칩 busy였던 횟수(구간 누적, 500버스트마다 리셋) */
 static uint8_t  wvBusy[3];			/* 현재 버스트 중 플래그 */
 #endif /* WV_DIAG */
 
@@ -2066,9 +2067,9 @@ void readWFB_Data(int id)
 	t1 = sysTick64;
 
 #ifdef WV_DIAG
-	/* [진단 A] 버스트 진입 시각 기록 + 3칩 버스트 시간겹침 관측(다른 칩이 busy면 overlap++) */
+	/* [진단 A] 버스트 진입 시각 기록 + 시간겹침 관측(진입 시 타칩 busy면 이 칩 카운터++) */
 	if (id >= 0 && id < 3) {
-		if (wvBusy[(id+1)%3] || wvBusy[(id+2)%3]) wvOverlap++;
+		if (wvBusy[(id+1)%3] || wvBusy[(id+2)%3]) wvOverlapCnt[id]++;
 		wvBusy[id] = 1;
 		wvBurstEnter[id] = wvCyc();
 	}
@@ -2126,7 +2127,7 @@ void readWFB_Data(int id)
 	 *   median 편차가 임계 초과하는 샘플을 세어 칩별 누적. 전압(홀수ch) 50K / 전류(짝수ch) 80K.
 	 * [진단 A] 버스트 종료: 소요 us 기록, busy 해제, 주기적(각 칩 500회마다) 요약 로그. */
 	if (id >= 0 && id < 3) {
-		int dbase = wQ[id].fr - 8, dc, dk, dring, dthr, dspk = 0;
+		int dbase = wQ[id].fr - 8, dc, dk, dring, dthr, dspk = 0, dmax = 0;
 		int dseq[128];
 		if (dbase < 0) dbase += PG_BUF_CNT;
 		for (dc = 0; dc < 6; dc++) {
@@ -2140,21 +2141,28 @@ void readWFB_Data(int id)
 				int lo = a<d?a:d, hi = a<d?d:a, med = b<lo?lo:(b>hi?hi:b), dev = b-med;
 				if (dev < 0) dev = -dev;
 				if (dev > dthr) dspk++;
+				if (dev > dmax) dmax = dev;		/* 이번 버스트 최대 median 편차 */
 			}
 		}
+		/* 구간(500버스트) 누적: 개수 합 + 최대 편차 max. 출력 시 리셋 → "직전 500버스트" 값. */
 		wvSpikeCnt[id] += (uint32_t)dspk;
+		if ((uint32_t)dmax > wvSpikeMax[id]) wvSpikeMax[id] = (uint32_t)dmax;
 		wvScanCnt[id]++;
 		wvBurstUs[id] = WV_CYC_US(wvCyc() - wvBurstEnter[id]);
 		wvBusy[id] = 0;
 		if ((wvScanCnt[id] % 500u) == 0u) {
-			/* CF(Crest Factor=peak/rms): 정상 정현파 ≈1.41. >1.5면 파형에 스파이크(진짜 손상).
-			 * spikes(median편차)가 오검출이면 CF는 ~1.41 유지 → 판별 지표. FFT_Task가 갱신. */
+			/* spk/500=직전 500버스트 스파이크 합, max=그 구간 최대편차.
+			 *   정현파 피크 곡률 오검출이면 max ~5만~10만(임계 근처). 진짜 임펄스면 max 수백만~e9.
+			 * CF(peak/rms): 정상 정현파 ≈1.41, >1.5면 파형 스파이크. spikes 오검출이면 CF ~1.41 유지. */
 			METERING *pm = &meter[id].meter;
-			printf("[WVDIAG M%d] scans=%u burst=%uus spikes=%u overlap=%u "
+			printf("[WVDIAG M%d] burst=%uus spk/500=%u max=%u ovlp/500=%u "
 			       "CF_U=%.2f/%.2f/%.2f CF_I=%.2f/%.2f/%.2f\n",
-			       id, wvScanCnt[id], wvBurstUs[id], wvSpikeCnt[id], wvOverlap,
+			       id, wvBurstUs[id], wvSpikeCnt[id], wvSpikeMax[id], wvOverlapCnt[id],
 			       pm->CF_U[0], pm->CF_U[1], pm->CF_U[2],
 			       pm->CF_I[0], pm->CF_I[1], pm->CF_I[2]);
+			wvSpikeCnt[id] = 0;		/* 구간 리셋 */
+			wvSpikeMax[id] = 0;
+			wvOverlapCnt[id] = 0;
 		}
 	}
 #endif /* WV_DIAG */
