@@ -2136,11 +2136,14 @@ void readWFB_Data(int id)
 		int dseq[128];	/* 채널 1개분(스택 절약: 6채널 통째 보관 안 함) */
 		if (dbase < 0) dbase += PG_BUF_CNT;
 		for (dc = 0; dc < 6; dc++) {
+			/* [전압 전용] 전압만 3칩 공유(크로스토크→스파이크), 전류는 개별(무부하 포화만 무관).
+			 * 홀수 ch(1=VA,3=VB,5=VC)만 스캔, 짝수 ch(0=IA,2=IB,4=IC 전류)는 건너뜀. */
+			if ((dc & 1) == 0) continue;
 			for (dk = 0; dk < 128; dk++) {
 				dring = dbase + (dk >> 4); if (dring >= PG_BUF_CNT) dring -= PG_BUF_CNT;
 				dseq[dk] = wQ[id].wb[dring].buf[6 * (dk & 15) + dc];
 			}
-			dthr = (dc & 1) ? 50000 : 80000;
+			dthr = 50000;	/* 전압 채널 median 편차 임계 */
 			for (dk = 1; dk < 127; dk++) {
 				int a = dseq[dk-1], b = dseq[dk], d = dseq[dk+1];
 				int lo = a<d?a:d, hi = a<d?d:a, med = b<lo?lo:(b>hi?hi:b), dev = b-med;
@@ -2172,12 +2175,11 @@ void readWFB_Data(int id)
 			/* maxCh: 짝수=전류(IA/IB/IC), 홀수=전압(VA/VB/VC). 무부하면 전류ch 노이즈로 max 클 수 있음.
 			 * a/b/d: max 시점 3점. b만 튀고 a·d 정상이면 단일 임펄스(진짜 스파이크), 셋 다 크면 정상 봉우리. */
 			METERING *pm = &meter[id].meter;
-			printf("[WVDIAG M%d] burst=%uus spk/500=%u max=%u ch%d(%d,%d,%d) ovlp/500=%u "
-			       "CF_U=%.2f/%.2f/%.2f CF_I=%.2f/%.2f/%.2f\n",
+			printf("[WVDIAG-V M%d] burst=%uus spk/500=%u max=%u ch%d(%d,%d,%d) ovlp/500=%u "
+			       "CF_U=%.2f/%.2f/%.2f\n",
 			       id, wvBurstUs[id], wvSpikeCnt[id], wvSpikeMax[id],
 			       wvMaxCh[id], wvMaxA[id], wvMaxB[id], wvMaxD[id], wvOverlapCnt[id],
-			       pm->CF_U[0], pm->CF_U[1], pm->CF_U[2],
-			       pm->CF_I[0], pm->CF_I[1], pm->CF_I[2]);
+			       pm->CF_U[0], pm->CF_U[1], pm->CF_U[2]);
 			/* max 스파이크가 난 채널의 128샘플 전체 덤프(16개×8줄, pos=스파이크 위치).
 			 * 한 버스트=반주기(60Hz 8k→약 66샘플/반주기)라 128샘플이면 약 1주기.
 			 * 판독: 스파이크가 정현파 위 한 점만 튀는지, 여러 점인지, 위치가 매번 같은지 등. */
