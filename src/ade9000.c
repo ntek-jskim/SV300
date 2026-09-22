@@ -61,6 +61,8 @@ static uint32_t wvSpikeCnt[3];		/* 스파이크(임계초과) 구간 누적(500�
 static uint32_t wvSpikeMax[3];		/* 구간 내 최대 median 편차(오검출/임펄스 판별) */
 static int      wvMaxCh[3];			/* max 편차가 난 채널(0=IA 1=VA 2=IB 3=VB 4=IC 5=VC, 짝=전류/홀=전압) */
 static int      wvMaxA[3], wvMaxB[3], wvMaxD[3];	/* max 시점 3점 샘플값(a,b,d): 임펄스면 b만 튐 */
+static int      wvMaxPos[3];		/* max 스파이크의 128샘플 내 위치 k */
+static int      wvMaxSeq[3][128];	/* max 스파이크가 난 채널의 128샘플 전체(1버스트=반주기, 파형 육안판독) */
 static uint32_t wvScanCnt[3];		/* 버스트 횟수 */
 static uint32_t wvOverlapCnt[3];	/* 이 칩 진입 시 타칩 busy였던 횟수(구간 누적, 500버스트마다 리셋) */
 static uint8_t  wvBusy[3];			/* 현재 버스트 중 플래그 */
@@ -2130,8 +2132,8 @@ void readWFB_Data(int id)
 	 * [진단 A] 버스트 종료: 소요 us 기록, busy 해제, 주기적(각 칩 500회마다) 요약 로그. */
 	if (id >= 0 && id < 3) {
 		int dbase = wQ[id].fr - 8, dc, dk, dring, dthr, dspk = 0, dmax = 0;
-		int dmaxCh = -1, dmaxA = 0, dmaxB = 0, dmaxD = 0;
-		int dseq[128];
+		int dmaxCh = -1, dmaxA = 0, dmaxB = 0, dmaxD = 0, dmaxK = 0;
+		int dseq[128];	/* 채널 1개분(스택 절약: 6채널 통째 보관 안 함) */
 		if (dbase < 0) dbase += PG_BUF_CNT;
 		for (dc = 0; dc < 6; dc++) {
 			for (dk = 0; dk < 128; dk++) {
@@ -2144,14 +2146,21 @@ void readWFB_Data(int id)
 				int lo = a<d?a:d, hi = a<d?d:a, med = b<lo?lo:(b>hi?hi:b), dev = b-med;
 				if (dev < 0) dev = -dev;
 				if (dev > dthr) dspk++;
-				if (dev > dmax) { dmax = dev; dmaxCh = dc; dmaxA = a; dmaxB = b; dmaxD = d; }	/* 최대 편차의 채널·3점 기록 */
+				if (dev > dmax) { dmax = dev; dmaxCh = dc; dmaxA = a; dmaxB = b; dmaxD = d; dmaxK = dk; }
 			}
 		}
 		/* 구간(500버스트) 누적: 개수 합 + 최대 편차 max(+채널·3점). 출력 시 리셋. */
 		wvSpikeCnt[id] += (uint32_t)dspk;
-		if ((uint32_t)dmax > wvSpikeMax[id]) {
+		if ((uint32_t)dmax > wvSpikeMax[id] && dmaxCh >= 0) {
+			int w;
 			wvSpikeMax[id] = (uint32_t)dmax;
 			wvMaxCh[id] = dmaxCh; wvMaxA[id] = dmaxA; wvMaxB[id] = dmaxB; wvMaxD[id] = dmaxD;
+			wvMaxPos[id] = dmaxK;
+			/* max 채널 128샘플을 wb 링에서 다시 읽어 통째 보관(스택 재사용, dchSeq 불요) */
+			for (w = 0; w < 128; w++) {
+				int r = dbase + (w >> 4); if (r >= PG_BUF_CNT) r -= PG_BUF_CNT;
+				wvMaxSeq[id][w] = wQ[id].wb[r].buf[6 * (w & 15) + dmaxCh];
+			}
 		}
 		wvScanCnt[id]++;
 		wvBurstUs[id] = WV_CYC_US(wvCyc() - wvBurstEnter[id]);
@@ -2169,6 +2178,18 @@ void readWFB_Data(int id)
 			       wvMaxCh[id], wvMaxA[id], wvMaxB[id], wvMaxD[id], wvOverlapCnt[id],
 			       pm->CF_U[0], pm->CF_U[1], pm->CF_U[2],
 			       pm->CF_I[0], pm->CF_I[1], pm->CF_I[2]);
+			/* max 스파이크가 난 채널의 128샘플 전체 덤프(16개×8줄, pos=스파이크 위치).
+			 * 한 버스트=반주기(60Hz 8k→약 66샘플/반주기)라 128샘플이면 약 1주기.
+			 * 판독: 스파이크가 정현파 위 한 점만 튀는지, 여러 점인지, 위치가 매번 같은지 등. */
+			{
+				int w;
+				printf("  seq M%d ch%d max%u pos%d (128sample):\n",
+				       id, wvMaxCh[id], wvSpikeMax[id], wvMaxPos[id]);
+				for (w = 0; w < 128; w++) {
+					printf(" %d", wvMaxSeq[id][w]);
+					if ((w & 15) == 15) printf("\n");	/* 16개마다 줄바꿈 */
+				}
+			}
 			wvSpikeCnt[id] = 0;		/* 구간 리셋 */
 			wvSpikeMax[id] = 0;
 			wvOverlapCnt[id] = 0;
