@@ -42,16 +42,16 @@ extern OsTaskId tid_rmslog, tid_post, tid_energy;
 #define WV_DIAG		/* ← 진단 활성(로그 수집용). 정식운전 시 이 줄 주석 처리 */
 
 #ifdef WV_DIAG
-#ifndef DWT
-  #define DWT     ((volatile uint32_t *)0xE0001000UL)	/* [0]=CTRL, [1]=CYCCNT */
-  #define DEMCR   (*(volatile uint32_t *)0xE000EDFCUL)
-#endif
+/* CMSIS DWT/DEMCR 심볼과 충돌 없는 고유 매크로로 코어 디버그 레지스터 직접 접근(armcc/C90) */
+#define WVD_DEMCR   (*(volatile uint32_t *)0xE000EDFCUL)	/* Debug Exception & Monitor Ctrl */
+#define WVD_DWTCTRL (*(volatile uint32_t *)0xE0001000UL)	/* DWT_CTRL */
+#define WVD_CYCCNT  (*(volatile uint32_t *)0xE0001004UL)	/* DWT_CYCCNT */
 static void wvDiagInit(void) {
-	DEMCR |= (1UL << 24);		/* TRCENA */
-	DWT[1] = 0;					/* CYCCNT = 0 */
-	DWT[0] |= 1UL;				/* CYCCNTENA */
+	WVD_DEMCR   |= (1UL << 24);	/* TRCENA */
+	WVD_CYCCNT   = 0;
+	WVD_DWTCTRL |= 1UL;			/* CYCCNTENA */
 }
-static inline uint32_t wvCyc(void) { return DWT[1]; }	/* 현재 사이클 카운트 */
+static uint32_t wvCyc(void) { return WVD_CYCCNT; }	/* 현재 사이클 카운트 (inline 미사용: armcc C90) */
 #define WV_CYC_US(c)  ((c) / 204u)	/* 사이클 → us (204MHz) */
 
 /* 칩별 진단 누적 */
@@ -2147,8 +2147,14 @@ void readWFB_Data(int id)
 		wvBurstUs[id] = WV_CYC_US(wvCyc() - wvBurstEnter[id]);
 		wvBusy[id] = 0;
 		if ((wvScanCnt[id] % 500u) == 0u) {
-			printf("[WVDIAG M%d] scans=%u burst=%uus spikes=%u overlap=%u\n",
-			       id, wvScanCnt[id], wvBurstUs[id], wvSpikeCnt[id], wvOverlap);
+			/* CF(Crest Factor=peak/rms): 정상 정현파 ≈1.41. >1.5면 파형에 스파이크(진짜 손상).
+			 * spikes(median편차)가 오검출이면 CF는 ~1.41 유지 → 판별 지표. FFT_Task가 갱신. */
+			METERING *pm = &meter[id].meter;
+			printf("[WVDIAG M%d] scans=%u burst=%uus spikes=%u overlap=%u "
+			       "CF_U=%.2f/%.2f/%.2f CF_I=%.2f/%.2f/%.2f\n",
+			       id, wvScanCnt[id], wvBurstUs[id], wvSpikeCnt[id], wvOverlap,
+			       pm->CF_U[0], pm->CF_U[1], pm->CF_U[2],
+			       pm->CF_I[0], pm->CF_I[1], pm->CF_I[2]);
 		}
 	}
 #endif /* WV_DIAG */
