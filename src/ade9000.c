@@ -33,6 +33,36 @@ extern OsTaskId tid_wave[];
 extern OsTaskId tid_meter[];
 extern OsTaskId tid_rmslog, tid_post, tid_energy;
 
+/* ───────────────────────────────────────────────────────────────────────────
+ * [WV_DIAG] 파형 취득 진단 (임시, 로그 수집용). 정식운전 시 WV_DIAG 미정의로 무효.
+ *   목적: (A) 3칩 WFB 버스트 타이밍/겹침, (B) 칩별 스파이크(파형 손상) 발생량 실측.
+ *   DWT->CYCCNT(204MHz 사이클, ~4.9ns) 사용. 1사이클=1/204us.
+ *   활성화: 이 파일 위 또는 프로젝트 define에 WV_DIAG 추가 후 재빌드.
+ * ─────────────────────────────────────────────────────────────────────────── */
+#define WV_DIAG		/* ← 진단 활성(로그 수집용). 정식운전 시 이 줄 주석 처리 */
+
+#ifdef WV_DIAG
+#ifndef DWT
+  #define DWT     ((volatile uint32_t *)0xE0001000UL)	/* [0]=CTRL, [1]=CYCCNT */
+  #define DEMCR   (*(volatile uint32_t *)0xE000EDFCUL)
+#endif
+static void wvDiagInit(void) {
+	DEMCR |= (1UL << 24);		/* TRCENA */
+	DWT[1] = 0;					/* CYCCNT = 0 */
+	DWT[0] |= 1UL;				/* CYCCNTENA */
+}
+static inline uint32_t wvCyc(void) { return DWT[1]; }	/* 현재 사이클 카운트 */
+#define WV_CYC_US(c)  ((c) / 204u)	/* 사이클 → us (204MHz) */
+
+/* 칩별 진단 누적 */
+static uint32_t wvBurstEnter[3];	/* 마지막 버스트 진입 사이클 */
+static uint32_t wvBurstUs[3];		/* 마지막 버스트 소요(us) */
+static uint32_t wvSpikeCnt[3];		/* 스파이크(임계초과) 누적 */
+static uint32_t wvScanCnt[3];		/* 버스트 횟수 */
+static uint32_t wvOverlap;			/* 3칩 버스트 시간겹침 관측 횟수 */
+static uint8_t  wvBusy[3];			/* 현재 버스트 중 플래그 */
+#endif /* WV_DIAG */
+
 extern int maxMinRmsFreq(int id);
 extern int maxMinPower(int id);
 extern int maxMinTHD(int id);
@@ -2035,6 +2065,15 @@ void readWFB_Data(int id)
 		
 	t1 = sysTick64;
 
+#ifdef WV_DIAG
+	/* [진단 A] 버스트 진입 시각 기록 + 3칩 버스트 시간겹침 관측(다른 칩이 busy면 overlap++) */
+	if (id >= 0 && id < 3) {
+		if (wvBusy[(id+1)%3] || wvBusy[(id+2)%3]) wvOverlap++;
+		wvBusy[id] = 1;
+		wvBurstEnter[id] = wvCyc();
+	}
+#endif
+
 	//Board_LED_On(1);	// 2.4ms
 	/* W2(26/09/22): SSP1을 Meter12 단일 스레드가 전담하므로 M1↔M2 인터리브가 없다 → ssp1WfbLock 제거. */
 	SSP_SSEL_Mode(id, 1);
@@ -2081,6 +2120,38 @@ void readWFB_Data(int id)
 		}
 	}
 	SSP_SSEL_Mode(id, 0);
+
+#ifdef WV_DIAG
+	/* [진단 B] 스파이크 검출(despike와 독립, 복구 안 함): 방금 채운 8페이지(128샘플/채널)에서
+	 *   median 편차가 임계 초과하는 샘플을 세어 칩별 누적. 전압(홀수ch) 50K / 전류(짝수ch) 80K.
+	 * [진단 A] 버스트 종료: 소요 us 기록, busy 해제, 주기적(각 칩 500회마다) 요약 로그. */
+	if (id >= 0 && id < 3) {
+		int dbase = wQ[id].fr - 8, dc, dk, dring, dthr, dspk = 0;
+		int dseq[128];
+		if (dbase < 0) dbase += PG_BUF_CNT;
+		for (dc = 0; dc < 6; dc++) {
+			for (dk = 0; dk < 128; dk++) {
+				dring = dbase + (dk >> 4); if (dring >= PG_BUF_CNT) dring -= PG_BUF_CNT;
+				dseq[dk] = wQ[id].wb[dring].buf[6 * (dk & 15) + dc];
+			}
+			dthr = (dc & 1) ? 50000 : 80000;
+			for (dk = 1; dk < 127; dk++) {
+				int a = dseq[dk-1], b = dseq[dk], d = dseq[dk+1];
+				int lo = a<d?a:d, hi = a<d?d:a, med = b<lo?lo:(b>hi?hi:b), dev = b-med;
+				if (dev < 0) dev = -dev;
+				if (dev > dthr) dspk++;
+			}
+		}
+		wvSpikeCnt[id] += (uint32_t)dspk;
+		wvScanCnt[id]++;
+		wvBurstUs[id] = WV_CYC_US(wvCyc() - wvBurstEnter[id]);
+		wvBusy[id] = 0;
+		if ((wvScanCnt[id] % 500u) == 0u) {
+			printf("[WVDIAG M%d] scans=%u burst=%uus spikes=%u overlap=%u\n",
+			       id, wvScanCnt[id], wvBurstUs[id], wvSpikeCnt[id], wvOverlap);
+		}
+	}
+#endif /* WV_DIAG */
 
 #if !defined(WV_STAGED) && !defined(WV_NO_DESPIKE)	/* despike. WV_STAGED(진단) 또는 WV_NO_DESPIKE(보정 OFF 방침) 시 우회 */
 	/* [2층 마감] ①위 96워드 읽기 = 근본수정(0xC00 spill 원천 제거). ②아래 despike = 잔여 정리:
@@ -2238,6 +2309,10 @@ void initADE9000(uint8_t id)
 
 	if (id >= METER_CH_COUNT)
 		return;
+
+#ifdef WV_DIAG
+	if (id == 0) wvDiagInit();	/* [진단] DWT 사이클카운터 1회 초기화 */
+#endif
 
 	/* 재시도 카운터: 첫 호출은 0 유지, 이후 initADE9000 재시도마다 증가 */
 	if (ade_status[id].failCount > 0 || ade_status[id].retryCount > 0)
