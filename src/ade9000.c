@@ -40,6 +40,7 @@ extern OsTaskId tid_rmslog, tid_post, tid_energy;
  *   활성화: 이 파일 위 또는 프로젝트 define에 WV_DIAG 추가 후 재빌드.
  * ─────────────────────────────────────────────────────────────────────────── */
 #define WV_DIAG		/* ← 진단 활성(로그 수집용). 정식운전 시 이 줄 주석 처리 */
+#define WV_M0_ONLY	/* [진단] M0만 RUN, M1·M2 ADC 정지(킥백 제거) → M0 스파이크 변화 관찰. 정식운전 시 주석 */
 
 #ifdef WV_DIAG
 /* CMSIS DWT/DEMCR 심볼과 충돌 없는 고유 매크로로 코어 디버그 레지스터 직접 접근(armcc/C90) */
@@ -2462,9 +2463,16 @@ void initADE9000(uint8_t id)
 	wtemp = (1<<3) | (1<<2) | (2);
 	write_reg16(id, 0x4b6, &wtemp);
 	
-	runCmd = 1;			
-	write_reg16(id, AD9X_RUN, &runCmd);					
-	printf("RUN DSP ...\n");
+	runCmd = 1;
+#ifdef WV_M0_ONLY
+	/* [진단] M0(id=0)만 RUN=1, M1·M2는 RUN=0(ADC 정지→킥백 제거).
+	 * 목적: M1/M2 stop 시 M0 스파이크 변화 관찰(크로스토크 판별).
+	 * ※RUN=0이면 online 미확정→Meter 태스크 초기화 루프가 5s 재시도 반복할 수 있음.
+	 *   getAdeStatus online은 chipId 확인(RUN 무관)이라 통과, 계측만 정지. */
+	if (id != 0) runCmd = 0;
+#endif
+	write_reg16(id, AD9X_RUN, &runCmd);
+	printf("RUN DSP (id=%d, run=%d) ...\n", id, runCmd);
 	
 	writeGainU(id);
 	writeGainI(id);
