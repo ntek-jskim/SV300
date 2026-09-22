@@ -2754,159 +2754,13 @@ void checkPqEvent(int id) {
 // long  interruption : 5%(11V), > 60s
 uint64_t ts_irq[2], ts_delta[2];
 
-/* meter_scan_2(M1/M2): CH3 시 M1↔M2 RR + PQM 비트 17/19/21 슬라이스.
- * W1C는 stat0_snap 전체로 클리어 — 미처리 비트를 W1C에서 빼면 ZX/IRQ 연쇄 타임아웃. */
-#define AD9X_PQM_STAT0_SLICED  ((1u << 17) | (1u << 19) | (1u << 21))
-/* M1/M2 ZX notify 대기(ms): RR·슬라이스·SSP1 mutex 여유 (M0는 20ms 유지) */
+/* M1/M2 ZX notify 대기(ms): SSP1 mutex 경합 여유 (M0는 20ms 유지) */
 #define METER_SCAN2_ZX_TMO_MS  50
-static uint8_t m12_pq_slice[METER_CH_COUNT];
-#ifdef CH3
-static uint8_t m12_pq_rr_owner = 1;
-#endif
 
-void meter_scan_2(uint8_t id)
-{
-	uint32_t chipId, flag, zxtMask;
-	uint16_t version, runCmd=0, wtemp, fr;
-	uint32_t rms, stat0, stat0_snap, stat1, vlevel, dtemp, i, cnt=0, mask;
-	void *msg;
-	uint64_t tick64, zxTo;
-
-	if (id >= METER_CH_COUNT)
-		return;
-
-#ifdef __FREERTOS		
-	uint32_t ulNotificationValue;
-	if (xTaskNotifyWait(0, 0xFFFFFFFF, &ulNotificationValue, pdMS_TO_TICKS(METER_SCAN2_ZX_TMO_MS)) == 0)
-#else
-	if (os_evt_wait_and(0x1, METER_SCAN2_ZX_TMO_MS) == OS_R_TMO) 
-#endif	
-	{
-		printf(">>> ZX timeout [%d]...\n", id);
-		 // wave sampling를 다시시작한다
- //		if (id == 0)
- //			w8kQ.fr = w8kQ.re = 0;
- //		else
- //			w32kQ.fr = w32kQ.re = 0;
-		// online(정상 계측) 중엔 파형버퍼 유지 — SSP1 경합성 타임아웃으로 인한 불연속 방지
-		if (!meter[id].cntl.online)
-			wQ[id].fr = wQ[id].re = 0;
-	}	
-// 	ts_delta[id] = sysTick64 - ts_irq[id];
-//	ts_irq[id] = sysTick64;
- 
-	tick64 = sysTick64;
-	read_reg32(id, AD9X_STATUS0, &stat0);
-	read_reg32(id, AD9X_STATUS1, &stat1);
-	stat0_snap = stat0;
-
-	/* STATUS0 즉시 ack — 처리 후 클리어 시 스캔 중 새로 뜬 WFB page-full(bit17)까지
-	   지워져 그 절반을 건너뛰어 파형 seam 발생. 핸들러는 로컬 stat0 스냅샷으로 처리하므로 안전. */
-	write_reg32(id, AD9X_STATUS0, &stat0_snap);
-
-	// Energy READY, period = 1s
-	if (stat0 & (1<<0)) {
-		readEnergy(id);
-	}
-	/* WFB(파형)은 연속성이 필요하므로 RR/슬라이스와 무관하게 매 page-full(bit17)마다 읽는다(M0와 동일).
-	 * 이전에는 RR+슬라이스로 ~1/6만 읽어 M1/M2 파형이 깨졌음. */
-	if (stat0 & (1u << 17)) {
-#ifndef WV_NO_M12_WFB
-		readWFB_Data(id);
-#else
-		{ static uint32_t skc = 0; if ((skc++ % 300) == 0) printf("[WFB skip M%d]\n", id); }	/* [진단] M1/M2 파형캡처 skip(M0 커플링 격리) */
-#endif
-	}
-	/* 나머지 PQM(period/RMS/THD): CH3 M1↔M2 RR + 19/21 슬라이스로 SSP1 부하 분산 */
-#if defined(CH3) && (!defined(WV_STAGED) || defined(WV_EN_M2))	/* 단계검증: M2 있을 때만 RR */
-	if (id != m12_pq_rr_owner) {
-		/* 상대 미터 슬롯: PQM SPI 생략 */
-	} else
-#endif
-	{
-		unsigned sl = (unsigned)m12_pq_slice[id] % 2u;
-
-		if ((stat0 & (1u << 19)) && sl == 0u) {
-			readPeriod(id);
-			readPhaseFastRMS(id);
-			checkPqEvent(id);
-		}
-		if ((stat0 & (1u << 21)) && sl == 1u) {
-			readPhaseTHD(id);
-		}
-
-		m12_pq_slice[id] = (uint8_t)(((unsigned)m12_pq_slice[id] + 1u) % 2u);
-
-#if defined(CH3) && (!defined(WV_STAGED) || defined(WV_EN_M2))
-		m12_pq_rr_owner = (uint8_t)((id == 1) ? 2 : 1);
-#endif
-	}
-	
-	// RMS 10/12 cycle
-	if (stat0 & (1<<20)) {
-		readRmsAngle(id);
-	}
-	// PWR_READY (1s 단위로 읽는다 (PWR_TIME : 1s)
-	if (stat0 & (1<<18)) {
-		readPhasePower(id);
-	}	
-	
-	if (stat0 & (1<<25)) {
-		readTemp(id);
-	}
-	// STATUS0는 위에서 읽은 직후 이미 ack(조기 클리어)함 — 스캔 중 뜬 새 이벤트 보존
-	
-	//
-	//--------------------------------------------------------------------------------
-	// Wiring Mode별로 다르게 처리해야 한다, 현재 3P4W 만 처리 함.
-	// ZxToV(a,b,c)
-	if (stat1 & (1<<9)) {
-		if (meter[id].cntl.zxMonCnt == 0) {					
-				//printf("ZX DETECT ...\n");
-		}
-		meter[id].cntl.zxMonCnt++;
-	}
-		
-	if (stat1 & (1<<6)) {
-		if (meter[id].cntl.zxMonCnt != 0) {
-			//printf("ZXTOUT ...\n");
-		}
-		meter[id].cntl.zxMonCnt = 0;
-	}
-
-
-	if (meter[id].cntl.rstEvtList == 0x1234) {
-		meter[id].cntl.rstEvtList = 0;
-		clearEventList(id);		
-	}
-	if (meter[id].cntl.rstIticList == 0x1234) {
-		meter[id].cntl.rstIticList = 0;
-		clearIticListData(id);
-	}
-	
-	// clear status0 & status1	
-	write_reg32(id, AD9X_STATUS1, &stat1);	
-
-	if (meter[id].cntl.wCalF[0]) {		
-		if (meter[id].cntl.wCalF[1] == 1) {			
-			writeGainU(id);
-		}
-		else if (meter[id].cntl.wCalF[1] == 2) {
-			writeGainI(id);
-		}
-		else if (meter[id].cntl.wCalF[1] == 3) {
-			writeGainW(id);
-		}
-		else if (meter[id].cntl.wCalF[1] == 4) {			
-			writeGainPh(id);
-		}			
-		else if (meter[id].cntl.wCalF[1] == 5) {
-			writeGainIn(id);
-		}
-		meter[id].cntl.wCalF[0] = meter[id].cntl.wCalF[1] = 0;
-	}
-}
-
+/* meter_scan(id): M0/M1/M2 통합 스캔.
+ * - ZX 타임아웃: M0=20ms, M1/M2=METER_SCAN2_ZX_TMO_MS(50ms)
+ * - LED 토글: M0에서만(Energy READY 시)
+ * - PQM(period/RMS/THD)은 RR/슬라이스 없이 매 IRQ마다 조건 없이 처리(연속성 유지). */
 void meter_scan(uint8_t id)
 {
 	uint32_t chipId, flag, zxtMask;
@@ -2921,14 +2775,16 @@ void meter_scan(uint8_t id)
 	//PG_FULL intr: 기본 발생 주기
 	// 8K: (Max 8ms) -> Hi/Low 적용시 4ms
 	// 32: (Max 32ms) -> Hi/Low 적용시 16ms
-#ifdef __FREERTOS		
+	/* ZX notify 대기: M0=20ms, M1/M2=50ms(SSP1 공유 경합 여유) */
+	uint32_t zxTmoMs = (id == 0) ? 20u : METER_SCAN2_ZX_TMO_MS;
+#ifdef __FREERTOS
    uint32_t ulNotificationValue;
-	if (xTaskNotifyWait(0, 0xFFFFFFFF, &ulNotificationValue, pdMS_TO_TICKS(20)) == 0)
+	if (xTaskNotifyWait(0, 0xFFFFFFFF, &ulNotificationValue, pdMS_TO_TICKS(zxTmoMs)) == 0)
 #else
-	if (os_evt_wait_and(0x1, 20) == OS_R_TMO) 
-#endif	
+	if (os_evt_wait_and(0x1, zxTmoMs) == OS_R_TMO)
+#endif
 	{
-		printf(">>> ZX timeout ...\n");
+		printf(">>> ZX timeout [%d]...\n", id);
 		// wave sampling를 다시시작한다
 //		if (id == 0)
 //			w8kQ.fr = w8kQ.re = 0;
@@ -2937,15 +2793,15 @@ void meter_scan(uint8_t id)
 		// online(정상 계측) 중엔 파형버퍼 유지 — 경합성 타임아웃으로 인한 불연속 방지
 		if (!meter[id].cntl.online)
 			wQ[id].fr = wQ[id].re = 0;
-	}	
+	}
 //	ts_delta[id] = sysTick64 - ts_irq[id];
 //	ts_irq[id] = sysTick64;
- 
+
 	tick64 = sysTick64;
 //	printf("@@@ meter_scan tick, %d\n", tick64);
 
 	// read IRQ stat0 & stat1
-	read_reg32(id, AD9X_STATUS0, &stat0);	
+	read_reg32(id, AD9X_STATUS0, &stat0);
 //	read_reg32(id, 0x423, &dtemp);
 //	if (dtemp != stat0) {
 //		printf("@@@ Invalid Read Data(32), %x, %x\n", stat0, dtemp);
@@ -2964,16 +2820,26 @@ void meter_scan(uint8_t id)
 	// Energy READY, period = 1s
 	if (stat0 & (1<<0)) {
 		readEnergy(id);
-		Board_LED_Toggle(LED_STS);
+		if (id == 0)
+			Board_LED_Toggle(LED_STS);
 	}
 	// capture Wave Form
+	/* WFB(파형)은 연속성이 필요하므로 매 page-full(bit17)마다 읽는다(M0/M1/M2 동일). */
 	if (stat0 & (1<<17)) {
 		//(id ==0) ? readWFB_Data(id) : readWFB8k_Data(id);
+#ifndef WV_NO_M12_WFB
 		readWFB_Data(id);
+#else
+		/* [진단] M1/M2 파형캡처 skip(M0 커플링 격리) — 정식운전(미정의)엔 무관 */
+		if (id == 0)
+			readWFB_Data(id);
+		else
+			{ static uint32_t skc = 0; if ((skc++ % 300) == 0) printf("[WFB skip M%d]\n", id); }
+#endif
 	}
-	
+
 //	Board_LED_On(3);	// 실행시간: 15us
-	
+
 	// RMS 1/2 cycle
 	if (stat0 & (1<<19)) {
 		readPeriod(id);

@@ -5303,7 +5303,7 @@ void Meter1_Task(void *param) {
 //	
 	while (1) {
 		meter[0].cntl.wdtTbl[Tid_Meter2].count++;
-		meter_scan_2(id);
+		meter_scan(id);
 //		//os_dly_wait(1000);
 	}
 }
@@ -5336,7 +5336,7 @@ void Meter2_Task(void *param) {
 //	
 	while (1) {
 		meter[0].cntl.wdtTbl[Tid_Meter3].count++;
-		meter_scan_2(id);
+		meter_scan(id);
 	}
 }
 #endif
