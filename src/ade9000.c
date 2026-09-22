@@ -2036,9 +2036,7 @@ void readWFB_Data(int id)
 	t1 = sysTick64;
 
 	//Board_LED_On(1);	// 2.4ms
-	/* [파형 A수정] 8페이지 readWFB를 통째로 잠가 M1↔M2 인터리브 방지(순차 버스트).
-	   M0=bus0(락 무시), M1/M2=bus1(순차화). 상대 미터는 여기서 대기 → 각자 깨끗한 단일 버스트. */
-	ssp1WfbLock(id == 0 ? 0 : 1);
+	/* W2(26/09/22): SSP1을 Meter12 단일 스레드가 전담하므로 M1↔M2 인터리브가 없다 → ssp1WfbLock 제거. */
 	SSP_SSEL_Mode(id, 1);
 	for (i=0; i<8; i++, sp+=0x80) {
 		pwb = getWave32kBuf(&wQ[id]);
@@ -2083,7 +2081,6 @@ void readWFB_Data(int id)
 		}
 	}
 	SSP_SSEL_Mode(id, 0);
-	ssp1WfbUnlock(id == 0 ? 0 : 1);	/* [파형 A수정] 순차 버스트 락 해제 */
 
 #if !defined(WV_STAGED) && !defined(WV_NO_DESPIKE)	/* despike. WV_STAGED(진단) 또는 WV_NO_DESPIKE(보정 OFF 방침) 시 우회 */
 	/* [2층 마감] ①위 96워드 읽기 = 근본수정(0xC00 spill 원천 제거). ②아래 despike = 잔여 정리:
