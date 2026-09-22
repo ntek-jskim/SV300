@@ -2771,6 +2771,11 @@ void meter_scan(uint8_t id)
 	uint32_t rms, stat0, stat1, vlevel, dtemp, i, cnt=0, mask;
 	void *msg;
 	uint64_t tick64, zxTo;
+	/* ZX notify 대기: M0=20ms, M1/M2=50ms(SSP1 공유 경합 여유). C89: 선언은 블록 선두에 */
+	uint32_t zxTmoMs;
+#ifdef __FREERTOS
+	uint32_t ulNotificationValue;
+#endif
 
 	if (id >= METER_CH_COUNT)
 		return;
@@ -2778,10 +2783,8 @@ void meter_scan(uint8_t id)
 	//PG_FULL intr: 기본 발생 주기
 	// 8K: (Max 8ms) -> Hi/Low 적용시 4ms
 	// 32: (Max 32ms) -> Hi/Low 적용시 16ms
-	/* ZX notify 대기: M0=20ms, M1/M2=50ms(SSP1 공유 경합 여유) */
-	uint32_t zxTmoMs = (id == 0) ? 20u : METER_SCAN2_ZX_TMO_MS;
+	zxTmoMs = (id == 0) ? 20u : METER_SCAN2_ZX_TMO_MS;
 #ifdef __FREERTOS
-   uint32_t ulNotificationValue;
 	if (xTaskNotifyWait(0, 0xFFFFFFFF, &ulNotificationValue, pdMS_TO_TICKS(zxTmoMs)) == 0)
 #else
 	if (os_evt_wait_and(0x1, zxTmoMs) == OS_R_TMO)
