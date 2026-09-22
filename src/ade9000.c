@@ -2410,17 +2410,23 @@ void initADE9000(uint8_t id)
 }
 
 void meterIrqSvc(int id) {
-   
-	if (tid_meter[id] != 0) {
-#ifdef __FREERTOS		
+	/* [W3 버스별 스레드] SSP1 공유 칩(M1·M2)은 단일 Meter12_Task(tid_meter[1])가
+	 * 전담한다. 따라서 M1·M2 IRQ(id==1 또는 id==2)는 모두 tid_meter[1]에 단일
+	 * 플래그(0x1)로 통보한다(0x1/0x2 분리 안 함). M0(id==0)는 tid_meter[0] 유지.
+	 * PIN_INT1/2_IRQHandler는 그대로 meterIrqSvc(1)/(2)를 호출하고, 라우팅은 여기서
+	 * 수행한다. */
+	OsTaskId tid = (id == 0) ? tid_meter[0] : tid_meter[1];
+
+	if (tid != 0) {
+#ifdef __FREERTOS
 		BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-      	xTaskNotifyFromISR(tid_meter[id], 0x1, eSetBits, &xHigherPriorityTaskWoken);      
+      	xTaskNotifyFromISR(tid, 0x1, eSetBits, &xHigherPriorityTaskWoken);
       	// Perform a context switch if necessary
       	portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 #else
-		isr_evt_set(0x1, tid_meter[id]);
-#endif		
-	}	
+		isr_evt_set(0x1, tid);
+#endif
+	}
 }
 
 

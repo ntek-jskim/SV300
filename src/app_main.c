@@ -25,8 +25,8 @@ extern void GUI_Task(void *);
 extern void KEY_Task(void *);
 extern void FFT_Task(void *);
 extern void Meter0_Task(void *);
-extern void Meter1_Task(void *);
-extern void Meter2_Task(void *);
+/* [W3 버스별 스레드] M1·M2(SSP1 공유)는 단일 Meter12_Task로 통합 */
+extern void Meter12_Task(void *);
 extern void Wave_Task(void *);
 extern void FS_task(void *);
 extern void Test_task(void *);
@@ -636,27 +636,19 @@ void app_init(void *params) {
 			TRACE_ERROR("Failed to create task(Meter)!\r\n");
 		}
 #ifndef CH1
-#if !defined(WV_STAGED) || defined(WV_EN_M1)	/* [단계검증] M1 (4단계) */
-		/* M1/M2: 채널 수는 CH3 빌드 매크로로 결정(getHwCh 무관) */
-		taskParams.priority = OS_TASK_PRIORITY_HIGH;
+#if !defined(WV_STAGED) || defined(WV_EN_M1)	/* [단계검증] M12 (4단계) */
+		/* [W3 버스별 스레드] M1·M2(SSP1 공유)를 단일 Meter12_Task로 통합.
+		 * M2 채널 유무는 Meter12_Task 내부의 #ifdef CH3로 결정(getHwCh 무관).
+		 * 우선순위 REALTIME(Meter0와 동급) — 한 스레드만 SSP1 접근하여 W2 락 제거 대비.
+		 * 스택 512(실제 OS_STKSIZE 640 고정). tid_meter[2]는 이제 미사용. */
+		taskParams.priority = OS_TASK_PRIORITY_REALTIME;
 		taskParams.stackSize = 512;
-		tid_meter[1] = osCreateTask("meter1", Meter1_Task, NULL, &taskParams);
+		tid_meter[1] = osCreateTask("meter12", Meter12_Task, NULL, &taskParams);
 		if(tid_meter[1] == OS_INVALID_TASK_ID)
 		{
-			TRACE_ERROR("Failed to create task(Meter)!\r\n");
+			TRACE_ERROR("Failed to create task(Meter12)!\r\n");
 		}
 #endif	/* WV_EN_M1 */
-#ifdef CH3
-#if !defined(WV_STAGED) || defined(WV_EN_M2)	/* [단계검증] M2 (5단계) */
-		taskParams.priority = OS_TASK_PRIORITY_HIGH;
-		taskParams.stackSize = 512;
-		tid_meter[2] = osCreateTask("meter2", Meter2_Task, NULL, &taskParams);
-		if(tid_meter[2] == OS_INVALID_TASK_ID)
-		{
-			TRACE_ERROR("Failed to create task(Meter2)!\r\n");
-		}
-#endif	/* WV_EN_M2 */
-#endif
 #endif /* CH1 */
 #endif /* 0 */
 

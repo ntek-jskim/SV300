@@ -5277,69 +5277,82 @@ void Meter0_Task(void *param)
 	}
 }
 
-void Meter1_Task(void *param) {
-	int	id=1;
-//	
-	printf("[task Meter#1 started ...\n");
-//	
-	memset(&wQ[id], 0, sizeof(wQ[id]));
-		
-	wbFFT8k[id].fr = wbFFT8k[id].re = 0;
+/* ─────────────────────────────────────────────────────────────────────────
+ * Meter12_Task — SSP1 공유 칩(M1, M2)을 단일 스레드로 통합(W3, 버스별 스레드)
+ *
+ * [설계] M0=SSP0 전용(Meter0_Task 유지), M1·M2=SSP1 공유 → 한 스레드에서만
+ *        SSP1을 접근하게 하여 W2의 락 제거를 안전하게 만든다. 3칩/2버스.
+ *
+ * [스캔 방식] 옵션 A: 매 루프에서 meter_scan(1) 다음 meter_scan(2)를 순차 호출.
+ *
+ * [IRQ/wait 판단] meter_scan(id)는 함수 진입부에서 자체적으로 ZX notify(플래그
+ *   0x1)를 대기한다(ade9000.c meter_scan: os_evt_wait_and(0x1, 50ms) /
+ *   xTaskNotifyWait). meterIrqSvc는 M1·M2 IRQ 모두 tid_meter[1](=이 태스크)에
+ *   0x1 단일 플래그로 통보한다(0x1/0x2 분리 안 함).
+ *     · 정상 흐름: meter_scan(1)이 0x1 하나를 소비→M1 처리, 이어 meter_scan(2)가
+ *       다음 0x1을 대기→M2 처리. 두 칩 page-full이 각 ~16ms 주기이므로 두 wait가
+ *       자연히 각자 다음 IRQ에 걸려 순번대로 소비된다.
+ *     · 이벤트 플래그는 카운팅이 아니라 비트마스크다. 두 IRQ가 태스크 busy 구간에
+ *       거의 동시에 떠 0x1이 하나로 합쳐지면, meter_scan(1)이 그 하나를 소비하고
+ *       meter_scan(2)는 다음 IRQ(어느 칩이든) 혹은 50ms 타임아웃까지 대기한다.
+ *       이때 meter_scan(2)는 최신 STATUS0/1을 읽어 처리하므로 데이터 정합은 유지되고
+ *       (칩별 STATUS는 각자 하드웨어가 래치), 최대 지연은 타임아웃(50ms)으로 유계다.
+ *       online 중 파형버퍼는 유지(meter_scan 내부에서 timeout 시 online이면 버퍼
+ *       보존)되므로 seam도 생기지 않는다.
+ *   → 가장 안전한 형태는 meter_scan 내부 wait를 그대로 두고 이 루프는 단순히
+ *     meter_scan(1); meter_scan(2); 를 연속 호출하는 것. 별도 wait를 이 루프에
+ *     추가하면 이중 대기가 되어 오히려 지연/어긋남을 유발하므로 넣지 않는다.
+ *
+ * [태스크 모니터] 하나만 등록(Tid_Meter2 사용). Tid_Meter3는 이제 놀게 된다
+ *   (M2 전용 태스크가 사라졌으므로 WDT 슬롯 미사용).
+ * ───────────────────────────────────────────────────────────────────────── */
+void Meter12_Task(void *param) {
+	printf("[task Meter#12 started ...\n");
 
-	initADE9000(id);
-
+	/* ── M1(id=1) 초기화 ── */
+	memset(&wQ[1], 0, sizeof(wQ[1]));
+	wbFFT8k[1].fr = wbFFT8k[1].re = 0;
+	initADE9000(1);
 	/* SPI 실패 시 5초 간격으로 재시도 */
-	while (!getAdeStatus(id)->online) {
+	while (!getAdeStatus(1)->online) {
 		printf("[M%d] ADE9000 offline - retry %d in 5s (fail=%d, chipId=0x%08x)\n",
-		       id, getAdeStatus(id)->retryCount,
-		       getAdeStatus(id)->failCount, getAdeStatus(id)->chipId);
+		       1, getAdeStatus(1)->retryCount,
+		       getAdeStatus(1)->failCount, getAdeStatus(1)->chipId);
 		osDelayTask(5000);
-		initADE9000(id);
+		initADE9000(1);
 	}
-
-	ExtINTR_Init(id, 2, 0);	// PINT1, EINT2
-	ExtINTR_Enable(id);	// PINT1
-	_enableTaskMonitor(Tid_Meter2, 50);
-//	
-	while (1) {
-		meter[0].cntl.wdtTbl[Tid_Meter2].count++;
-		meter_scan(id);
-//		//os_dly_wait(1000);
-	}
-}
+	ExtINTR_Init(1, 2, 0);	// PINT1, EINT2
+	ExtINTR_Enable(1);		// PINT1
 
 #ifdef CH3
-void Meter2_Task(void *param) {
-	int	id=2;
-//	
-	printf("[task Meter#2 started ...\n");
-//	
-	memset(&wQ[id], 0, sizeof(wQ[id]));
-		
-	wbFFT8k[id].fr = wbFFT8k[id].re = 0;
-
-	initADE9000(id);
-
+	/* ── M2(id=2) 초기화 ── */
+	memset(&wQ[2], 0, sizeof(wQ[2]));
+	wbFFT8k[2].fr = wbFFT8k[2].re = 0;
+	initADE9000(2);
 	/* SPI 실패 시 5초 간격으로 재시도 */
-	while (!getAdeStatus(id)->online) {
+	while (!getAdeStatus(2)->online) {
 		printf("[M%d] ADE9000 offline - retry %d in 5s (fail=%d, chipId=0x%08x)\n",
-		       id, getAdeStatus(id)->retryCount,
-		       getAdeStatus(id)->failCount, getAdeStatus(id)->chipId);
+		       2, getAdeStatus(2)->retryCount,
+		       getAdeStatus(2)->failCount, getAdeStatus(2)->chipId);
 		osDelayTask(5000);
-		initADE9000(id);
+		initADE9000(2);
 	}
-
 	/* CH3: M2 IRQ0 -> EINT3, PINT2 채널 사용 */
-	ExtINTR_Init(id, 3, 0);	// PINT2, EINT3
-	ExtINTR_Enable(id);		// PINT2
-	_enableTaskMonitor(Tid_Meter3, 50);
-//	
+	ExtINTR_Init(2, 3, 0);	// PINT2, EINT3
+	ExtINTR_Enable(2);		// PINT2
+#endif
+
+	/* WDT 모니터는 하나만 등록. Tid_Meter3는 미사용(놀게 됨). */
+	_enableTaskMonitor(Tid_Meter2, 50);
+
 	while (1) {
-		meter[0].cntl.wdtTbl[Tid_Meter3].count++;
-		meter_scan(id);
+		meter[0].cntl.wdtTbl[Tid_Meter2].count++;
+		meter_scan(1);			/* M1: 내부에서 0x1 대기 → 처리 */
+#ifdef CH3
+		meter_scan(2);			/* M2: 내부에서 다음 0x1 대기 → 처리 */
+#endif
 	}
 }
-#endif
 
 
 int checkPassword(uint8_t *pwd) {
