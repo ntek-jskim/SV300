@@ -59,6 +59,8 @@ static uint32_t wvBurstEnter[3];	/* 마지막 버스트 진입 사이클 */
 static uint32_t wvBurstUs[3];		/* 마지막 버스트 소요(us) */
 static uint32_t wvSpikeCnt[3];		/* 스파이크(임계초과) 구간 누적(500버스트마다 리셋) */
 static uint32_t wvSpikeMax[3];		/* 구간 내 최대 median 편차(오검출/임펄스 판별) */
+static int      wvMaxCh[3];			/* max 편차가 난 채널(0=IA 1=VA 2=IB 3=VB 4=IC 5=VC, 짝=전류/홀=전압) */
+static int      wvMaxA[3], wvMaxB[3], wvMaxD[3];	/* max 시점 3점 샘플값(a,b,d): 임펄스면 b만 튐 */
 static uint32_t wvScanCnt[3];		/* 버스트 횟수 */
 static uint32_t wvOverlapCnt[3];	/* 이 칩 진입 시 타칩 busy였던 횟수(구간 누적, 500버스트마다 리셋) */
 static uint8_t  wvBusy[3];			/* 현재 버스트 중 플래그 */
@@ -2128,6 +2130,7 @@ void readWFB_Data(int id)
 	 * [진단 A] 버스트 종료: 소요 us 기록, busy 해제, 주기적(각 칩 500회마다) 요약 로그. */
 	if (id >= 0 && id < 3) {
 		int dbase = wQ[id].fr - 8, dc, dk, dring, dthr, dspk = 0, dmax = 0;
+		int dmaxCh = -1, dmaxA = 0, dmaxB = 0, dmaxD = 0;
 		int dseq[128];
 		if (dbase < 0) dbase += PG_BUF_CNT;
 		for (dc = 0; dc < 6; dc++) {
@@ -2141,12 +2144,15 @@ void readWFB_Data(int id)
 				int lo = a<d?a:d, hi = a<d?d:a, med = b<lo?lo:(b>hi?hi:b), dev = b-med;
 				if (dev < 0) dev = -dev;
 				if (dev > dthr) dspk++;
-				if (dev > dmax) dmax = dev;		/* 이번 버스트 최대 median 편차 */
+				if (dev > dmax) { dmax = dev; dmaxCh = dc; dmaxA = a; dmaxB = b; dmaxD = d; }	/* 최대 편차의 채널·3점 기록 */
 			}
 		}
-		/* 구간(500버스트) 누적: 개수 합 + 최대 편차 max. 출력 시 리셋 → "직전 500버스트" 값. */
+		/* 구간(500버스트) 누적: 개수 합 + 최대 편차 max(+채널·3점). 출력 시 리셋. */
 		wvSpikeCnt[id] += (uint32_t)dspk;
-		if ((uint32_t)dmax > wvSpikeMax[id]) wvSpikeMax[id] = (uint32_t)dmax;
+		if ((uint32_t)dmax > wvSpikeMax[id]) {
+			wvSpikeMax[id] = (uint32_t)dmax;
+			wvMaxCh[id] = dmaxCh; wvMaxA[id] = dmaxA; wvMaxB[id] = dmaxB; wvMaxD[id] = dmaxD;
+		}
 		wvScanCnt[id]++;
 		wvBurstUs[id] = WV_CYC_US(wvCyc() - wvBurstEnter[id]);
 		wvBusy[id] = 0;
@@ -2154,10 +2160,13 @@ void readWFB_Data(int id)
 			/* spk/500=직전 500버스트 스파이크 합, max=그 구간 최대편차.
 			 *   정현파 피크 곡률 오검출이면 max ~5만~10만(임계 근처). 진짜 임펄스면 max 수백만~e9.
 			 * CF(peak/rms): 정상 정현파 ≈1.41, >1.5면 파형 스파이크. spikes 오검출이면 CF ~1.41 유지. */
+			/* maxCh: 짝수=전류(IA/IB/IC), 홀수=전압(VA/VB/VC). 무부하면 전류ch 노이즈로 max 클 수 있음.
+			 * a/b/d: max 시점 3점. b만 튀고 a·d 정상이면 단일 임펄스(진짜 스파이크), 셋 다 크면 정상 봉우리. */
 			METERING *pm = &meter[id].meter;
-			printf("[WVDIAG M%d] burst=%uus spk/500=%u max=%u ovlp/500=%u "
+			printf("[WVDIAG M%d] burst=%uus spk/500=%u max=%u ch%d(%d,%d,%d) ovlp/500=%u "
 			       "CF_U=%.2f/%.2f/%.2f CF_I=%.2f/%.2f/%.2f\n",
-			       id, wvBurstUs[id], wvSpikeCnt[id], wvSpikeMax[id], wvOverlapCnt[id],
+			       id, wvBurstUs[id], wvSpikeCnt[id], wvSpikeMax[id],
+			       wvMaxCh[id], wvMaxA[id], wvMaxB[id], wvMaxD[id], wvOverlapCnt[id],
 			       pm->CF_U[0], pm->CF_U[1], pm->CF_U[2],
 			       pm->CF_I[0], pm->CF_I[1], pm->CF_I[2]);
 			wvSpikeCnt[id] = 0;		/* 구간 리셋 */
