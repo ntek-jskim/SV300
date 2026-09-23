@@ -2236,9 +2236,11 @@ typedef struct {
 #define Tid_Shell		1 
 #define	Tid_FFT			2 
 #define	Tid_Wave		3 
-#define	Tid_Rmslog		4
-#define	Tid_PostScan	5 
-#define Tid_Energy		6
+#define	Tid_Rmslog		4	/* [통합] RMSLog/PostScan/Energy → Metering_Task 통합 후 미사용(롤백대비 유지) */
+#define	Tid_PostScan	5
+#define Tid_Energy		6	/* [통합] Metering_Task 통합 후 미사용(롤백대비 유지) */
+/* [통합] 단일 Metering_Task(HIGH) wdt 인덱스 — PostScan(5) 슬롯 재사용(wdtTbl[32] 여유) */
+#define	Tid_Metering	Tid_PostScan
 #define	Tid_Meter		7
 #define	Tid_Meter2		8
 #ifdef CH3

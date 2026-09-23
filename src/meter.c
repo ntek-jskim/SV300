@@ -2940,7 +2940,11 @@ void FS_task(void *arg)
 #endif
 	
 	_enableTaskMonitor(Tid_Fs, 50);
-	
+
+	/* [태스크 통합] 옛 Trend_Task 시작부의 헤더검증을 FS_task 로 흡수(1회).
+	 *  기존 트렌드 파일의 header 와 현재 trend 설정을 비교해 다르면 rename 한다. */
+	checkTrendHeader();
+
 	t3 = sysTick32;
 	while (meter[id].cntl.runFlag) {
 #ifdef __FREERTOS		
@@ -3074,8 +3078,13 @@ void FS_task(void *arg)
 			pcntl->runFlag = meter[id].cntl.runFlag = 0;
 			printf("[[reboot: external WDT reset ...]]\n");
 		}
+
+		/* [태스크 통합] 옛 Trend_Task 루프 본문 흡수. tm_min 이 바뀐 뒤 최대 100ms(폴링주기)
+		 *  안에 1분 1회만 실제 동작하고, 같은 분이면 즉시 return 이라 매 루프 호출해도 무해.
+		 *  fsQ 처리와 같은 태스크라 flash write 가 순차 실행되어 경합이 없다. */
+		trendTick();
 	}
-	
+
 	// wait forever
 	printf("FS_task stopped ...\n");
 #ifdef __FREERTOS	
@@ -4820,11 +4829,12 @@ void clearIticListData(int id)
 //
 //
 
-void Energy_Task(void *arg) 
+#if 0	/* [통합] Energy_Task는 Metering_Task로 통합됨(롤백 대비 보존). */
+void Energy_Task(void *arg)
 {
    uint32_t notificationValue;
    int	id=0;
- 
+
 	// demand/energy time stamp 초기화 — 전 활성채널 (초기화가 id=0에만 적용되어 m1/m2가
 	//  조기 롤오버로 부분 아카이브를 만들던 버그 수정). 날짜/시각은 Task 시작 시 확실히
 	//  유효한 meter[0].cntl.tod 를 공유해 사용(전 채널 동일 클럭, app_main에서 m0→전채널 복사).
@@ -4895,11 +4905,240 @@ void Energy_Task(void *arg)
 	}
 	
 	printf("Energy_Task stopped ...\n");
-#ifdef __FREERTOS	
+#ifdef __FREERTOS
 	vTaskSuspend(NULL);
 #else
 	os_evt_wait_and(0xffff, 0xffff);
-#endif	
+#endif
+}
+#endif	/* #if 0 Energy_Task(통합됨) */
+
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * [통합] Metering_Task(HIGH) — 기존 RMSLog_Task + PostScan_Task + Energy_Task 통합.
+ *   RTX(CMSIS-RTOS v1) 경로만 살림(__FREERTOS 미정의). notify는 tid_metering 단일:
+ *     0x01 RMS capture, 0x02 energy scan, 0x04 post rms, 0x08 post pwr, 0x10 post thd.
+ *   os_evt_wait_or(0x1F, 100)로 5비트 OR + 100ms 타임아웃(폴링성 rmslog/post 유지).
+ *   처리는 수신 이벤트 비트가 아닌 기존 내부 플래그/조건으로 판별(torn-notify 안전).
+ *   한 루프 안 순서: (1)RMS 캡처+게이트 → (2)PostScan calc/alarm/maxmin/publish
+ *                    → (3)energy scan → (4)copySimpleMap(500ms). publish는 calc 후.
+ * ───────────────────────────────────────────────────────────────────────────── */
+/* [통합] Metering_Task가 아래(파일 뒤쪽)에 정의된 alarm/sag/swell 헬퍼를 호출하므로
+ *  암시적 선언(implicit decl) 충돌 방지를 위한 전방 선언. 정의는 기존 위치 그대로. */
+void resetAlarm(int id);
+int  checkSagCond(int id);
+int  checkSwellCond(int id);
+
+void Metering_Task(void *arg)
+{
+	int id = 0;
+	int bF[METER_CH_COUNT];		/* [RMSLog] CH별 Buffer Ready 래치 */
+	int smpDiv = 0;				/* [PostScan] SMP_MAP 500ms 분주 */
+
+	/* ── [Energy] 시작 초기화: demand/energy/egy15 타임스탬프 전 활성채널 + 부팅 롤오버 아카이브 ──
+	 *  (id=0에만 적용되어 m1/m2가 조기 롤오버로 부분 아카이브를 만들던 버그 수정 유지) */
+	for (id = 0; id < ACTIVE_METER_CH_COUNT; id++) {
+		// demand time stamp 초기화
+		meter[id].cntl.dmdTs = sysTickDemand;
+		meter[id].cntl.dmdTs15m = sysTick15m;
+		//meter[id].cntl.dmdTs1H = meter[id].cntl.tod.tm_hour;
+		meter[id].cntl.dmdStartTs = sysTick1s;
+		meter[id].cntl.dmdStartTs15m = sysTick1s;
+
+		// energy log
+		meter[id].cntl.egyTs1H = meter[0].cntl.tod.tm_hour;
+		meter[id].cntl.egyTs1D = meter[0].cntl.tod.tm_mday;
+		meter[id].cntl.egyStartTs1D = sysTick1s;
+
+		// 15분 슬롯 에너지(egy15) — 기준선/추적자 초기화(Ereg32는 loadEnergy에서 유효)
+		egy15[id].lastQ = meter[0].cntl.tod.tm_hour * 4 + meter[0].cntl.tod.tm_min / 15;
+		egy15[id].lastQstore = egy15[id].lastQ;	/* 부팅 직후 불필요 저장 방지(다음 슬롯 +2분에 첫 저장) */
+		egy15[id].dayMday = meter[0].cntl.tod.tm_mday;
+		egy15[id].dayStartTick = sysTick1s;
+		egy15[id].pendArch = 0;
+		egy15[id].buf[0] = EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KWH,   EGY_SIGN_IMPORT);
+		egy15[id].buf[1] = EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KVARH, EGY_SIGN_IMPORT);
+		egy15[id].buf[2] = EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KVARH, EGY_SIGN_EXPORT);
+		egy15[id].buf[3] = EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KVAH,  EGY_SIGN_IMPORT);
+		// 부팅 시 로드된 today가 지난 날짜면 → 아카이브 후 리셋(과거일이 오늘 슬롯과 섞이지 않게)
+		if (egy15[id].log[0].ts) {
+			struct tm lt0;
+			uint32_t t0 = egy15[id].log[0].ts;
+			uLocalTime(&t0, &lt0);
+			if (lt0.tm_mday != meter[0].cntl.tod.tm_mday || lt0.tm_mon != meter[0].cntl.tod.tm_mon) {
+				memcpy(&egy15[id].log[1], &egy15[id].log[0], sizeof(ENERGY_LOG15));
+#ifdef HWV2
+				archiveEnergyLog15Day(id, &egy15[id].log[1]);
+				storeEnergyLog15Fs(id, 1);
+#endif
+				memset(&egy15[id].log[0], 0, sizeof(ENERGY_LOG15));
+				egy15[id].log[0].magic = 0x1234abcd;
+				egy15[id].log[0].ts = sysTick1s;
+				storeEnergyLog15Fs(id, 0);
+			}
+		}
+	}
+	id = 0;
+
+	memset(bF, 0, sizeof(bF));
+	_enableTaskMonitor(Tid_Metering, 50);
+
+	while (pcntl->runFlag) {
+		int ledAlmCount = 0;
+
+#ifdef __FREERTOS
+		uint32_t notificationValue;
+		xTaskNotifyWait(0, 0xFFFFFFFF, &notificationValue, pdMS_TO_TICKS(100));
+#else
+		os_evt_wait_or(0x1F, 100);	/* 5비트 OR + 100ms 타임아웃(폴링 주기 보장) */
+#endif
+#ifdef WV_QCAP
+		while (g_wfbQuiet) osDelayTask(5);	/* 조용창: 파형 캡처 중엔 양보 */
+#endif
+		meter[0].cntl.wdtTbl[Tid_Metering].count++;
+
+		/* ── (1) [RMSLog 몫] fast-RMS 캡처 + Buffer Ready 판정 ── */
+		for (id = 0; id < ACTIVE_METER_CH_COUNT; id++) {
+			if (rmsWin[id].fr != rmsWin[id].re) {
+				if (bF[id]) {
+					RMSCapture(id, rmsWin[id].re);
+					if (++rmsWin[id].re >= N_FASTRMS_BUF)
+						rmsWin[id].re = 0;
+				}
+				else {
+					/* 10 프레임 이상 쌓이면 해당 CH 캡처 시작 */
+					if (rmsWin[id].fr > 10) {
+						bF[id] = 1;
+						printf("[Buffer Ready M%d]\n", id);
+					}
+				}
+			}
+		}
+		/* 통신 게이트: 활성 CH 전부 Buffer Ready([Buffer Ready M#], fr>10=bF) 시 허용.
+		   [A안] 부분고장(1칩 실패)도 web/Modbus로 진단 가능하도록 10초 타임아웃 폴백:
+		   전 칩 준비 or 10초 경과 시 통신 허용(실패 칩은 0/무효 보고). 정상=즉시, 부분고장=10초 후. */
+		if (!g_meterReady) {
+			static uint32_t rdyWait = 0;	/* 100ms 단위 대기 카운트 */
+			int _rdy = 1;
+			for (id = 0; id < ACTIVE_METER_CH_COUNT; id++)
+				if (!bF[id]) { _rdy = 0; break; }
+			if (_rdy || ++rdyWait >= 100) {	/* 전 칩 준비 or 100×100ms=10초 타임아웃 */
+				g_meterReady = 1;
+				if (_rdy) {
+					printf("[Meter Ready - web/modbus enabled]\n");
+				} else {
+					int msk = 0, k;
+					for (k = 0; k < ACTIVE_METER_CH_COUNT; k++) if (bF[k]) msk |= (1 << k);
+					printf("[Meter Ready - TIMEOUT 10s, partial bF mask=0x%x]\n", msk);
+				}
+			}
+		}
+
+		/* ── (2) [PostScan 몫] rms/pwr/thd calc + alarm + max/min + snapshot ── */
+		for (id = 0; id < ACTIVE_METER_CH_COUNT; id++) {
+			MAXMIN *pmmId = &meter[id].maxmin;
+
+			// 1초 단위로 호출 (5번의 10/12 cycle 마다 호출된다)
+			if (meter[id].cntl.rmsCalcF) {
+				meter[id].cntl.rmsCalcF = 0;
+				calcRmsAngle(id);
+
+	#ifdef _CHIP_SAG_SWELL
+				if (!meter[id].cntl.sagEn) {
+					if (checkSagCond(id)) {
+						printf("Enable Sag ...\n");
+						meter[id].cntl.sagEn = 1;
+					}
+				}
+				if (!meter[id].cntl.swellEn) {
+					if (checkSwellCond(id)) {
+						printf("Enable Swell ...\n");
+						meter[id].cntl.swellEn = 1;
+					}
+				}
+	#endif
+				meter[id].meter.utc = sysTick1s;
+			}
+
+			// 1s
+			if (meter[id].cntl.pwrCalcF) {
+				meter[id].cntl.pwrCalcF = 0;
+				calcPower(id);
+
+				if (meter[id].cntl.rstAlmList == 0x1234) {
+					meter[id].cntl.rstAlmList = 0;
+					resetAlarm(id);
+					storeAlarmStatus(id);
+					deleteAlarmLog(id);
+//					Board_LED_Off(1);				// alarm off
+				}
+#if 1
+				else if (alarmProc(id) > 0) {
+					meter[id].alarm.updateTs = sysTick32;
+					storeAlarmStatus(id);
+				}
+#endif
+				ledAlmCount += meter[id].alarm.almCount;
+			}
+
+			// 1s
+			if (meter[id].cntl.thdCalcF) {
+				meter[id].cntl.thdCalcF = 0;
+				calcTHD(id);
+			}
+
+			// demand 지운다
+			if (meter[id].cntl.rstMaxMin == 0x1234) {
+				meter[id].cntl.rstMaxMin = 0;
+
+				memset(pmmId, 0, sizeof(MAXMIN));
+				pmmId->rstTime = sysTick1s;
+				storeMaxMin();
+			}
+
+			if (pmmId->fr != pmmId->re) {
+				pmmId->ts = sysTick1s;
+				pmmId->re = pmmId->fr;
+				mmDirty = 1;			/* RAM 극값 갱신됨 → flash 저장 대기(즉시 재기록 금지) */
+			}
+			/* [FAT처닝수정] max/min flash 저장은 MM_SAVE_SEC(15분)마다만. 노이즈로 미세 새 극값이
+			   생길 때마다 storeMaxMin(fopen"wb"=파일 통째 재기록)하면 0x100000(FAT)/0x110000 상시
+			   소거 → M0 파형/THD 교란. RAM 추적은 계속, 리셋(rstMaxMin)은 위에서 즉시 저장 유지. */
+			if (mmDirty && (uint32_t)(sysTick1s - mmLastSave) >= MM_SAVE_SEC) {
+				mmDirty = 0;
+				mmLastSave = sysTick1s;
+				storeMaxMin();
+			}
+
+			/* 계측(METERING) 스냅샷 발행: 이 채널의 계산이 끝난 직후 원자적으로 교체.
+			   Modbus 읽기가 라이브 meter[].meter 대신 완결 스냅샷을 보게 하여
+			   품질 flash write 블로킹 중에도 torn read(garbage) 방지. */
+			publishMeterSnap(id);
+		}
+		Board_LED_Set(LED_STS, ledAlmCount);
+
+		/* ── (3) [Energy 몫] energy scan ── */
+		for (id = 0; id < ACTIVE_METER_CH_COUNT; id++) {
+			if (ade9000[id].efr != ade9000[id].ere) {
+				energy_scan(id, ade9000[id].energy[ade9000[id].ere], &egyNvr);
+				ade9000[id].ere ^= 1;
+			}
+		}
+
+		/* ── (4) SMP_MAP(#1,2,3 Simple) 갱신: 100ms 웨이크 × 5 = 500ms ── */
+		if (++smpDiv >= 5) {
+			smpDiv = 0;
+			copySimpleMap();
+		}
+	}
+
+	// reboot가 set되면
+	printf("Metering_Task stopped ...\n");
+#ifdef __FREERTOS
+	vTaskSuspend(NULL);
+#else
+	os_evt_wait_and(0xffff, 0xffff);
+#endif
 }
 
 
@@ -4924,6 +5163,7 @@ void Dummy_Task(void *arg)
 }
 #endif
 
+#if 0	/* [통합] RMSLog_Task는 Metering_Task로 통합됨(롤백 대비 보존). */
 void RMSLog_Task(void *arg)
 {
 	int id, bF[METER_CH_COUNT];
@@ -4981,6 +5221,7 @@ void RMSLog_Task(void *arg)
       osDelayTask(100);
 	}
 }
+#endif	/* #if 0 RMSLog_Task(통합됨) */
 
 
 // 전압이 sag 시작 조건(모든 전압이 sag limit 보다 커야한다)
@@ -5078,6 +5319,7 @@ int checkMaxMinItv(int id) {
 	}	
 }
 
+#if 0	/* [통합] PostScan_Task는 Metering_Task로 통합됨(롤백 대비 보존). */
 void PostScan_Task(void *arg)
 {
 	int id=0;
@@ -5188,14 +5430,15 @@ void PostScan_Task(void *arg)
 		}
 	}
 	
-	// reboot가 set되면 
+	// reboot가 set되면
 	printf("PostScan_Task stopped ...\n");
-#ifdef __FREERTOS	
+#ifdef __FREERTOS
 	vTaskSuspend(NULL);
 #else
 	os_evt_wait_and(0xffff, 0xffff);
-#endif	
+#endif
 }
+#endif	/* #if 0 PostScan_Task(통합됨) */
 
 
 #if 0		// 채널 분리 이전 ITIC FIFO 보조 함수 보관 블록(현재 경로에서 호출되지 않음)

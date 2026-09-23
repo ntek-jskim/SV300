@@ -676,6 +676,35 @@ static void cmd_macset(char *par) {
 }
 
 
+/* [CPU 부하율] 명령 실행 시 측정창(500ms) 동안 idle 증분을 직접 재어 그 순간 부하율 산출.
+ *  부하율 = 100 - (측정 idle/s ÷ 무부하최대 idle/s ×100). g_idleMax=관측 최대(0% 부하 기준).
+ *  태스크별 호출누적(wdtTbl[Tid].count)도 함께 출력(상대 활동량 파악용). */
+static void cmd_cpu(char *par) {
+	extern volatile uint32_t g_idleCnt;
+	extern uint32_t g_idleMax, g_idlePerSec;
+	static const char *tn[] = {			/* Tid_ 인덱스(meter.h)와 매핑 */
+		"-","Shell","FFT","Wave","Rmslog*","Metering","Energy*","Meter0",
+		"Meter1","FS","Trend*","IOM","SMB","CmdProc","LED","GW","Meter2" };
+	uint32_t i0, i1, meas, load, win = 500;	/* 측정창 ms */
+	int i;
+	WDT_DATA *wt = meter[0].cntl.wdtTbl;
+
+	i0 = g_idleCnt;
+	osDelayTask(win);					/* 측정창 동안 idle 누적 */
+	i1 = g_idleCnt;
+	meas = (i1 - i0) * (1000 / win);	/* idle/s 환산 */
+	load = (g_idleMax > 0 && meas <= g_idleMax) ? (100u - (meas * 100u / g_idleMax)) : 0u;
+
+	printf("[CPU] load=%u%% (measured idle/s=%u, calib max idle/s=%u, 1s-snap idle/s=%u)\n",
+	       (unsigned)load, (unsigned)meas, (unsigned)g_idleMax, (unsigned)g_idlePerSec);
+	printf("  task 호출누적(wdtTbl.count) — 상대 활동량:\n");
+	for (i = 1; i <= 16; i++) {
+		if (wt[i].enable || wt[i].count)
+			printf("   %2d %-9s cnt=%u en=%u err=%u\n",
+			       i, tn[i], (unsigned)wt[i].count, wt[i].enable, wt[i].errCnt);
+	}
+}
+
 static void cmd_thd(char *par) {			/* THD 진단: online·U(RMS)·THD·wbFFT8k(fr/re)로 어디서 끊기는지 확인 */
 	int i;
 	extern WAVE_8K_BUF wbFFT8k[];
@@ -1098,6 +1127,7 @@ static const SCMD cmd[] = {
 	"FFTTEST", cmd_fftTest,			/* Goertzel vs CZT 고조파/시간 대조(검증) */
 	"THD", cmd_thd,				/* THD/전압고조파 즉시출력(태스크 단계시험용) */
 	"WVF", cmd_wvf,				/* 스파이크 추적통계 보기 / WVF C: 클리어 */
+	"CPU", cmd_cpu,				/* CPU 부하율 측정(500ms 창) + 태스크별 호출누적 */
 	"HWVER", cmd_hwVersion,
 //	"GWENABLE", cmd_gwEnable,
 	"DEVINFO", cmd_devInfo,

@@ -6,7 +6,8 @@
 #include "i2c_18xx_43xx.h"
 
 OsTaskId tid_fft, tid_wave[METER_CH_COUNT], tid_meter[METER_CH_COUNT], tid_fs;
-OsTaskId tid_rmslog, tid_post, tid_energy, tid_trend, tid_cmd;
+OsTaskId tid_rmslog, tid_post, tid_energy, tid_trend, tid_cmd;	/* tid_trend: [태스크 통합] 미사용(Trend_Task → FS_task 흡수) */
+OsTaskId tid_metering;	/* [통합] RMSLog+PostScan+Energy 단일 태스크 */
 OsTaskId tid_iom;
 OsTaskId tid_rtu, tid_mmb;
 OsTaskId tid_shell;
@@ -34,11 +35,12 @@ extern void RMSLog_Task(void *);
 extern void PostScan_Task(void *);
 extern void CmdProc_Task(void *);
 extern void Energy_Task(void *);
+extern void Metering_Task(void *);	/* [통합] RMSLog+PostScan+Energy */
 extern void SMB_rtu_Task(void *);
 extern void SMB_rtu_Task2(void *);
 //extern void Gateway_Task(void *);
 //extern void Gateway_MCS_Task(void *);
-extern void Trend_Task(void *);
+//extern void Trend_Task(void *);	/* [태스크 통합] Trend_Task 제거 → FS_task 흡수 */
 extern void IOM_Task(void *);
 extern void TempScan_Task(void *);
 extern void FTPC_Task(void *);
@@ -493,8 +495,10 @@ void macAddrGet(uint8_t *mac) {
 	mac[2] = uid >> 24;
 	mac[3] = uid >> 16; 
 	mac[4] = uid >> 8; 
-	mac[5] = uid >> 0; 	
+	mac[5] = uid >> 0;
 }
+
+static void cpuCalibIdle(uint32_t winMs);	/* [CPU 부하율] 정의는 하단(tickHandler 근처). 전방선언. */
 
 void app_init(void *params) {
    int   wmode;
@@ -512,6 +516,10 @@ void app_init(void *params) {
    //Set task parameters
    taskParams = OS_TASK_DEFAULT_PARAMS;
    taskParams.stackSize = 256;      // 256 * 4byte = 1024
+
+   /* [CPU 부하율] 계측 태스크 생성 前(거의 무부하)에서 무부하 idle/s 기준을 미리 확정.
+    *  사용자 방침: 최대카운트를 쓰레드 생성 전 미리 계산. 이후 shell 'CPU'가 이 기준으로 부하율 산출. */
+   cpuCalibIdle(200);
 
    // SNTP Task
    if (pdb->comm.useSntp)
@@ -551,12 +559,12 @@ void app_init(void *params) {
 		{
 			TRACE_ERROR("Failed to create task(FS)!\r\n");
 		}
-		// PostScan
+		// [통합] Metering(=RMSLog+PostScan+Energy). testMode에선 계측 폴링만 필요.
 		taskParams.priority = OS_TASK_PRIORITY_HIGH;
-		tid_post    = osCreateTask("post", PostScan_Task, NULL, &taskParams);
-		if(tid_post == OS_INVALID_TASK_ID)
+		tid_metering = osCreateTask("metering", Metering_Task, NULL, &taskParams);
+		if(tid_metering == OS_INVALID_TASK_ID)
 		{
-			TRACE_ERROR("Failed to create task(PostScan)\r\n");
+			TRACE_ERROR("Failed to create task(Metering)\r\n");
 		}
 		taskParams.priority = OS_TASK_PRIORITY_NORMAL;
 		taskParams.stackSize = 256;
@@ -584,22 +592,15 @@ void app_init(void *params) {
 		{
 			TRACE_ERROR("Failed to create task(Wave)\r\n");
 		}
-#if !defined(WV_STAGED) || defined(WV_EN_RMSLOG)	/* [단계검증] RMSLog 단독 */
-		// RMSlog
+		/* [통합] RMSLog + PostScan + Energy → 단일 Metering_Task(HIGH).
+		 * WV_STAGED 단계검증 시 세 게이트(RMSLOG/POST/ENERGY) 중 하나라도 켜지면 생성(OR). */
+#if !defined(WV_STAGED) || defined(WV_EN_RMSLOG) || defined(WV_EN_POST) || defined(WV_EN_ENERGY)
+		// Metering (RMSLog+PostScan+Energy)
 		taskParams.priority = OS_TASK_PRIORITY_HIGH;
-		tid_rmslog    = osCreateTask("rmslog", RMSLog_Task, NULL, &taskParams);
-		if(tid_rmslog == OS_INVALID_TASK_ID)
+		tid_metering  = osCreateTask("metering", Metering_Task, NULL, &taskParams);
+		if(tid_metering == OS_INVALID_TASK_ID)
 		{
-			TRACE_ERROR("Failed to create task(Wave)\r\n");
-		}
-#endif
-#if !defined(WV_STAGED) || defined(WV_EN_POST)	/* [단계검증] PostScan 단독 */
-		// PostScan
-		taskParams.priority = OS_TASK_PRIORITY_HIGH;
-		tid_post    = osCreateTask("post", PostScan_Task, NULL, &taskParams);
-		if(tid_post == OS_INVALID_TASK_ID)
-		{
-			TRACE_ERROR("Failed to create task(PostScan)\r\n");
+			TRACE_ERROR("Failed to create task(Metering)\r\n");
 		}
 #endif
 #ifdef WV_EN_DUMMY	/* [단계검증] 순수 CPU 부하 더미(HIGH) — I/O 없이 부하만 */
@@ -616,15 +617,7 @@ void app_init(void *params) {
 			TRACE_ERROR("Failed to create task(CmdProc)\r\n");
 		}
 		
-#if !defined(WV_STAGED) || defined(WV_EN_ENERGY)	/* [단계검증] Energy */
-		// Energy
-		taskParams.priority = OS_TASK_PRIORITY_HIGH;
-		tid_energy    = osCreateTask("energy", Energy_Task, NULL, &taskParams);
-		if(tid_energy == OS_INVALID_TASK_ID)
-		{
-			TRACE_ERROR("Failed to create task(energy)\r\n");
-		}
-#endif
+		/* [통합] Energy_Task는 Metering_Task로 흡수됨(위에서 단일 생성). */
 
 #if 1
 		// Meter
@@ -661,6 +654,7 @@ void app_init(void *params) {
 			TRACE_ERROR("Failed to create task(FS)!\r\n");
 		}
 		
+#if 0	/* [태스크 통합] Trend_Task 제거 → FS_task(meter.c)가 흡수(checkTrendHeader 1회 + 루프마다 trendTick). 롤백 대비 보존. */
 #if !defined(WV_STAGED) || defined(WV_EN_TREND)	/* [단계검증] Trend */
 		// Trend
 		taskParams.priority = OS_TASK_PRIORITY_LOW;
@@ -670,6 +664,7 @@ void app_init(void *params) {
 			TRACE_ERROR("Failed to create task(Trend)!\r\n");
 		}
 #endif
+#endif	/* Trend_Task → FS_task 흡수 */
    	}
 
 #if defined(WV_STAGED) && !defined(WV_EN_RMSLOG)	/* RMSLog(=g_meterReady 세터)를 끈 단계시험에선 강제 세팅해 web/Modbus 살림. RMSLog 켜지면 기존 A안 폴백(10초 타임아웃) 정상 동작 */
@@ -901,7 +896,28 @@ OsTaskId getProxyTaskId() {
 	return tid_proxy;
 }
 
-void tickHandler() {	
+/* [CPU 부하율] idle demon 카운터(RTX_Conf_CM.c) 스냅샷으로 산출. shell 'CPU' 로 조회.
+ *  부하율 = 100 - (idle/s ÷ g_idleMax ×100). g_idleMax=무부하 최대 idle/s(쓰레드 생성 전 캘리브). */
+extern volatile U32 g_idleCnt;
+uint32_t g_cpuLoad = 0;			/* 현재 CPU 부하율 % (0~100) */
+uint32_t g_idlePerSec = 0;		/* 직전 1초 idle 증분 */
+uint32_t g_idleMax = 1;			/* 무부하 최대 idle/s (0% 부하 기준). 쓰레드 생성 전 cpuCalibIdle()로 확정 */
+
+/* [CPU 부하율] 무부하 기준 캘리브레이션 — 계측 태스크 생성 前(거의 무부하)에서 idle demon과
+ *  동일한 ++ 루프를 winMs 동안 직접 돌려 '무부하 idle/s'를 측정한다. 사용자 방침: 최대카운트를
+ *  쓰레드 생성 전 미리 계산(러닝최대 추정보다 정확). sysTick64(ms)로 시간 측정. */
+static void cpuCalibIdle(uint32_t winMs) {
+	volatile U32 cnt = 0;
+	uint64_t t0 = sysTick64, dt;
+	while ((sysTick64 - t0) < winMs) cnt++;	/* idle demon과 동일 연산(단순 증가) */
+	dt = sysTick64 - t0; if (dt == 0) dt = winMs;
+	g_idleMax = (uint32_t)((uint64_t)cnt * 1000u / dt);	/* idle/s 환산 */
+	if (g_idleMax == 0) g_idleMax = 1;
+	printf("[CPU] calib idle/s(무부하 기준) = %u (win=%ums, cnt=%u)\n",
+	       (unsigned)g_idleMax, (unsigned)winMs, (unsigned)cnt);
+}
+
+void tickHandler() {
 	WM_tick32++;
 	sysTick32++;
 	sysTick64++;
@@ -912,7 +928,15 @@ void tickHandler() {
 	if (++tick >= 1000) {
 //		Board_LED_Toggle(0);
 		sysTick1s++;
-		sysTick10s = sysTick1s/10;	// 10 sec, freq sampling 
+		/* [CPU 부하율] 직전 1초 idle 증분만 스냅샷(가벼운 뺄셈 1회). g_idleMax(무부하 기준)는
+		 *  쓰레드 생성 전 cpuCalibIdle()로 확정되어 여기선 갱신 안 함. 부하율은 shell 'CPU'에서 계산. */
+		{
+			static uint32_t prevIdle = 0;
+			uint32_t now = g_idleCnt;
+			g_idlePerSec = now - prevIdle;
+			prevIdle = now;
+		}
+		sysTick10s = sysTick1s/10;	// 10 sec, freq sampling
 #ifdef _QUAL_TEST
 		sysTick10m = sysTick1s/60;	// 1 minute, volt. averaging
 #else		

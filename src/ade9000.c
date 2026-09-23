@@ -31,7 +31,7 @@ os_mbx_declare(mbox, 16);
 extern uint64_t sysTick64;
 extern OsTaskId tid_wave[];
 extern OsTaskId tid_meter[];
-extern OsTaskId tid_rmslog, tid_post, tid_energy;
+extern OsTaskId tid_metering;	/* [통합] RMSLog/PostScan/Energy 단일 태스크 */
 
 /* ───────────────────────────────────────────────────────────────────────────
  * [WV_DIAG_METER] 파형 취득 진단 (임시, 로그 수집용). 정식운전 시 WV_DIAG_METER 미정의로 무효.
@@ -1147,11 +1147,11 @@ void readPhaseTHD(uint8_t id)
 	}
 	
 	meter[id].cntl.thdCalcF = 1;
-#ifdef __FREERTOS	
-	if (tid_post != 0) xTaskNotify(tid_post, 0x4, eSetBits);
+#ifdef __FREERTOS
+	if (tid_metering != 0) xTaskNotify(tid_metering, 0x10, eSetBits);	/* [통합] post thd */
 #else
-	if (tid_post != 0) os_evt_set(0x4, tid_post);
-#endif	
+	if (tid_metering != 0) os_evt_set(0x10, tid_metering);	/* [통합] post thd */
+#endif
 }
 
 
@@ -1229,11 +1229,11 @@ void readEnergy(uint8_t id)
 {	
 	readPhaseEnergy(id, ade9000[id].energy[ade9000[id].efr]);
 	ade9000[id].efr ^= 1;
-#ifdef __FREERTOS	
-	if (tid_energy != 0) xTaskNotify(tid_energy, 0x1, eSetBits);
+#ifdef __FREERTOS
+	if (tid_metering != 0) xTaskNotify(tid_metering, 0x2, eSetBits);	/* [통합] energy scan */
 #else
-	if (tid_energy != 0) os_evt_set(0x1, tid_energy);
-#endif	
+	if (tid_metering != 0) os_evt_set(0x2, tid_metering);	/* [통합] energy scan */
+#endif
 }
 
 float calcPhaseCurrent(int id, int sel)
@@ -1353,11 +1353,11 @@ void readPhasePower(uint8_t id) {
 	}
 	
 	meter[id].cntl.pwrCalcF = 1;
-#ifdef __FREERTOS	
-	if (tid_post != 0) xTaskNotify(tid_post, 0x2, eSetBits);
+#ifdef __FREERTOS
+	if (tid_metering != 0) xTaskNotify(tid_metering, 0x8, eSetBits);	/* [통합] post pwr */
 #else
-	if (tid_post != 0) os_evt_set(0x2, tid_post);
-#endif	
+	if (tid_metering != 0) os_evt_set(0x8, tid_metering);	/* [통합] post pwr */
+#endif
 }
 
 void calcPower(int id) {
@@ -1606,11 +1606,11 @@ void readPhaseFastRMS(uint8_t id) {
 	if (++ix >= meter[id].cntl.nFastRMS) {
 		ix =0;
 		if (++rmsWin[id].fr >= N_FASTRMS_BUF) rmsWin[id].fr = 0;
-#ifdef __FREERTOS		
-		if (tid_rmslog != 0) xTaskNotify(tid_rmslog, 0x1, eSetBits);
+#ifdef __FREERTOS
+		if (tid_metering != 0) xTaskNotify(tid_metering, 0x1, eSetBits);	/* [통합] RMS capture */
 #else
-		if (tid_rmslog != 0) os_evt_set(0x1, tid_rmslog);
-#endif		
+		if (tid_metering != 0) os_evt_set(0x1, tid_metering);	/* [통합] RMS capture */
+#endif
 	}
 	rmsWin[id].ix = ix;
 }
@@ -1677,11 +1677,11 @@ void readRmsAngle(uint8_t id)
 		ix = 0;
 		ade9000[id].fr ^= 1;
 		meter[id].cntl.rmsCalcF = 1;
-#ifdef __FREERTOS		
-		if (tid_post != 0) xTaskNotify(tid_post, 0x1, eSetBits);
+#ifdef __FREERTOS
+		if (tid_metering != 0) xTaskNotify(tid_metering, 0x4, eSetBits);	/* [통합] post rms */
 #else
-		if (tid_post != 0) os_evt_set(0x1, tid_post);
-#endif		
+		if (tid_metering != 0) os_evt_set(0x4, tid_metering);	/* [통합] post rms */
+#endif
 	}
 	if(++ix2 >= 10)
 		ix2 = 0;
