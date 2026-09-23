@@ -34,15 +34,14 @@ extern OsTaskId tid_meter[];
 extern OsTaskId tid_rmslog, tid_post, tid_energy;
 
 /* ───────────────────────────────────────────────────────────────────────────
- * [WV_DIAG] 파형 취득 진단 (임시, 로그 수집용). 정식운전 시 WV_DIAG 미정의로 무효.
+ * [WV_DIAG_METER] 파형 취득 진단 (임시, 로그 수집용). 정식운전 시 WV_DIAG_METER 미정의로 무효.
  *   목적: (A) 3칩 WFB 버스트 타이밍/겹침, (B) 칩별 스파이크(파형 손상) 발생량 실측.
  *   DWT->CYCCNT(204MHz 사이클, ~4.9ns) 사용. 1사이클=1/204us.
- *   활성화: 이 파일 위 또는 프로젝트 define에 WV_DIAG 추가 후 재빌드.
+ *   활성화: 이 파일 위 또는 프로젝트 define에 WV_DIAG_METER 추가 후 재빌드.
  * ─────────────────────────────────────────────────────────────────────────── */
-#define WV_DIAG		/* ← 진단 활성(로그 수집용). 정식운전 시 이 줄 주석 처리 */
-#define WV_M0_ONLY	/* [진단] M0만 RUN, M1·M2 ADC 정지(킥백 제거) → M0 스파이크 변화 관찰. 정식운전 시 주석 */
+//#define WV_M0_ONLY	/* [진단] 특정칩만 RUN(id 지정). 3칩 모두 run 시 이 줄 주석(현재: 3칩 모두 RUN). */
 
-#ifdef WV_DIAG
+#ifdef WV_DIAG_METER
 /* CMSIS DWT/DEMCR 심볼과 충돌 없는 고유 매크로로 코어 디버그 레지스터 직접 접근(armcc/C90) */
 #define WVD_DEMCR   (*(volatile uint32_t *)0xE000EDFCUL)	/* Debug Exception & Monitor Ctrl */
 #define WVD_DWTCTRL (*(volatile uint32_t *)0xE0001000UL)	/* DWT_CTRL */
@@ -67,6 +66,22 @@ static int      wvMaxSeq[3][128];	/* max 스파이크가 난 채널의 128샘플
 static uint32_t wvScanCnt[3];		/* 버스트 횟수 */
 static uint32_t wvOverlapCnt[3];	/* 이 칩 진입 시 타칩 busy였던 횟수(구간 누적, 500버스트마다 리셋) */
 static uint8_t  wvBusy[3];			/* 현재 버스트 중 플래그 */
+/* [전압·전류 동시성] 같은 샘플위치(dk)에 전압스파이크·전류스파이크가 함께 있는지 판별.
+ *  coinc=동시(공통원인:전원/GND/REF), vOnly=전압만(공유노드 크로스토크), iOnly=전류만(개별). 구간누적. */
+static uint32_t wvCoinc[3], wvVonly[3], wvIonly[3];
+#endif /* WV_DIAG_METER */
+
+#ifdef WV_DIAG
+/* [캡처 밀림 추적] WV_DIAG(meter.h)로 활성. readWFB_Data에서 갱신, fft_radix2_czt.c의 WVF STAT(shell)에서 조회.
+ *  page-lag: 읽는 순간 page가 정상점(7/15)에서 진행한 정도. ts-gap: readWFB 진입 간격(ms, 정상 16ms). */
+uint32_t wvfLagFrm[3];		/* readWFB 진입 횟수 */
+uint32_t wvfLagCnt[3];		/* lag>0(page 밀림) 횟수 */
+uint32_t wvfLagMax[3];		/* 최대 page-lag(페이지수, 1페이지=2ms) */
+uint8_t  wvfPageLast[3];	/* 마지막 읽은 page */
+uint32_t wvfTsPrev[3];		/* 이전 진입 시각(ms) */
+uint32_t wvfGapMax[3];		/* 최대 진입 간격(ms) = 최대 밀림 */
+uint32_t wvfGapLate[3];		/* 간격>24ms(밀림) 횟수 */
+uint32_t wvfGapSum[3];		/* 간격 합(평균 계산용) */
 #endif /* WV_DIAG */
 
 extern int maxMinRmsFreq(int id);
@@ -2068,10 +2083,34 @@ void readWFB_Data(int id)
 	// (page==7)?0:0x400 은 "쓰는 중인 절반"을 읽어 앞/뒤 샘플이 섞이는 torn을 유발한다.
 	// 항상 "현재 쓰는 중이 아닌 안정된 절반"을 읽는다: writing=(page+1)&15, writing이 1st half면 2nd half(0x400) 읽기.
 	sp = ((((page + 1) & 15) < 8) ? 0x80*8 : 0);
+
+#ifdef WV_DIAG
+	/* [추적] 캡처 밀림 계측 (사용자 가설: 웨이브 캡처가 밀려 torn→스파이크?).
+	 *  ① page-lag: IRQ는 정상 page 7/15에서. 처리가 밀리면 page 진행(lag>0)한 상태로 읽음.
+	 *     lag가 크면 '쓰는 중 절반' 침범 위험. (직접: 읽는 순간의 밀림 정도)
+	 *  ② ts-gap: readWFB 진입 간격(ms). 정상=페이지IRQ 16ms. 밀리면 gap>16 (M1 처리 대기 등).
+	 *     '얼마나 밀렸나(ms)'를 직접 측정. M2만 gap/lag 크면 SSP1 공유버스 밀림 가설 확증. */
+	if (id >= 0 && id < 3) {
+		int d7 = (page - 7) & 15, d15 = (page - 15) & 15;
+		int lag = d7 < d15 ? d7 : d15;		/* 정상점(7/15)에서 진행한 페이지수. 0=정상, 1페이지=2ms */
+		uint32_t now = (uint32_t)sysTick64, gap;
+		wvfLagFrm[id]++;
+		if (lag > 0) wvfLagCnt[id]++;
+		if ((uint32_t)lag > wvfLagMax[id]) wvfLagMax[id] = (uint32_t)lag;
+		wvfPageLast[id] = (uint8_t)page;
+		if (wvfTsPrev[id]) {			/* 첫 진입 제외 */
+			gap = now - wvfTsPrev[id];	/* 이번 진입 간격(ms) */
+			if (gap > wvfGapMax[id]) wvfGapMax[id] = gap;
+			if (gap > 24) wvfGapLate[id]++;	/* 정상 16ms + 여유 → 24ms 초과 = 밀림 */
+			wvfGapSum[id] += gap;
+		}
+		wvfTsPrev[id] = now;
+	}
+#endif
 		
 	t1 = sysTick64;
 
-#ifdef WV_DIAG
+#ifdef WV_DIAG_METER
 	/* [진단 A] 버스트 진입 시각 기록 + 시간겹침 관측(진입 시 타칩 busy면 이 칩 카운터++) */
 	if (id >= 0 && id < 3) {
 		if (wvBusy[(id+1)%3] || wvBusy[(id+2)%3]) wvOverlapCnt[id]++;
@@ -2127,7 +2166,7 @@ void readWFB_Data(int id)
 	}
 	SSP_SSEL_Mode(id, 0);
 
-#ifdef WV_DIAG
+#ifdef WV_DIAG_METER
 	/* [진단 B] 스파이크 검출(despike와 독립, 복구 안 함): 방금 채운 8페이지(128샘플/채널)에서
 	 *   median 편차가 임계 초과하는 샘플을 세어 칩별 누적. 전압(홀수ch) 50K / 전류(짝수ch) 80K.
 	 * [진단 A] 버스트 종료: 소요 us 기록, busy 해제, 주기적(각 칩 500회마다) 요약 로그. */
@@ -2137,17 +2176,18 @@ void readWFB_Data(int id)
 		int dseq[128];	/* 채널 1개분(스택 절약: 6채널 통째 보관 안 함) */
 		if (dbase < 0) dbase += PG_BUF_CNT;
 		for (dc = 0; dc < 6; dc++) {
-			/* [전압 전용] 전압만 3칩 공유(크로스토크→스파이크), 전류는 개별(무부하 포화만 무관).
-			 * 홀수 ch(1=VA,3=VB,5=VC)만 스캔, 짝수 ch(0=IA,2=IB,4=IC 전류)는 건너뜀. */
-			if ((dc & 1) == 0) continue;
+			/* [전압+전류 모두] ch 홀수=전압(1/3/5), 짝수=전류(0/2/4). 무부하 전류도 스파이크 관찰.
+			 * 단 미정의/포화값(|b|>1억, 예 -2^31)은 median편차 계산서 제외(로그 오염 방지). */
 			for (dk = 0; dk < 128; dk++) {
 				dring = dbase + (dk >> 4); if (dring >= PG_BUF_CNT) dring -= PG_BUF_CNT;
 				dseq[dk] = wQ[id].wb[dring].buf[6 * (dk & 15) + dc];
 			}
-			dthr = 50000;	/* 전압 채널 median 편차 임계 */
+			dthr = (dc & 1) ? 50000 : 80000;	/* 전압 50K / 전류 80K */
 			for (dk = 1; dk < 127; dk++) {
 				int a = dseq[dk-1], b = dseq[dk], d = dseq[dk+1];
-				int lo = a<d?a:d, hi = a<d?d:a, med = b<lo?lo:(b>hi?hi:b), dev = b-med;
+				int lo, hi, med, dev;
+				if (b > 100000000 || b < -100000000) continue;	/* 포화/미정의값 제외 */
+				lo = a<d?a:d; hi = a<d?d:a; med = b<lo?lo:(b>hi?hi:b); dev = b-med;
 				if (dev < 0) dev = -dev;
 				if (dev > dthr) dspk++;
 				if (dev > dmax) { dmax = dev; dmaxCh = dc; dmaxA = a; dmaxB = b; dmaxD = d; dmaxK = dk; }
@@ -2175,8 +2215,10 @@ void readWFB_Data(int id)
 			 * CF(peak/rms): 정상 정현파 ≈1.41, >1.5면 파형 스파이크. spikes 오검출이면 CF ~1.41 유지. */
 			/* maxCh: 짝수=전류(IA/IB/IC), 홀수=전압(VA/VB/VC). 무부하면 전류ch 노이즈로 max 클 수 있음.
 			 * a/b/d: max 시점 3점. b만 튀고 a·d 정상이면 단일 임펄스(진짜 스파이크), 셋 다 크면 정상 봉우리. */
+			/* ch 홀수=전압(1/3/5), 짝수=전류(0/2/4). 전압=3칩 공유, 전류=개별.
+			 * 개별인 전류에도 스파이크 나면 크로스토크 아닌 각 칩 자체(차동 불평형 등) 원인. */
 			METERING *pm = &meter[id].meter;
-			printf("[WVDIAG-V M%d] burst=%uus spk/500=%u max=%u ch%d(%d,%d,%d) ovlp/500=%u "
+			printf("[WVDIAG M%d] burst=%uus spk/500=%u max=%u ch%d(%d,%d,%d) ovlp/500=%u "
 			       "CF_U=%.2f/%.2f/%.2f\n",
 			       id, wvBurstUs[id], wvSpikeCnt[id], wvSpikeMax[id],
 			       wvMaxCh[id], wvMaxA[id], wvMaxB[id], wvMaxD[id], wvOverlapCnt[id],
@@ -2198,7 +2240,7 @@ void readWFB_Data(int id)
 			wvOverlapCnt[id] = 0;
 		}
 	}
-#endif /* WV_DIAG */
+#endif /* WV_DIAG_METER */
 
 #if !defined(WV_STAGED) && !defined(WV_NO_DESPIKE)	/* despike. WV_STAGED(진단) 또는 WV_NO_DESPIKE(보정 OFF 방침) 시 우회 */
 	/* [2층 마감] ①위 96워드 읽기 = 근본수정(0xC00 spill 원천 제거). ②아래 despike = 잔여 정리:
@@ -2357,7 +2399,7 @@ void initADE9000(uint8_t id)
 	if (id >= METER_CH_COUNT)
 		return;
 
-#ifdef WV_DIAG
+#ifdef WV_DIAG_METER
 	if (id == 0) wvDiagInit();	/* [진단] DWT 사이클카운터 1회 초기화 */
 #endif
 
@@ -2465,11 +2507,11 @@ void initADE9000(uint8_t id)
 	
 	runCmd = 1;
 #ifdef WV_M0_ONLY
-	/* [진단] M0(id=0)만 RUN=1, M1·M2는 RUN=0(ADC 정지→킥백 제거).
-	 * 목적: M1/M2 stop 시 M0 스파이크 변화 관찰(크로스토크 판별).
-	 * ※RUN=0이면 online 미확정→Meter 태스크 초기화 루프가 5s 재시도 반복할 수 있음.
-	 *   getAdeStatus online은 chipId 확인(RUN 무관)이라 통과, 계측만 정지. */
-	if (id != 0) runCmd = 0;
+	/* [진단] 지정 칩만 RUN=1, 나머지 RUN=0(ADC 정지→킥백 제거). 현재: M0만 run.
+	 * 목적: 타칩 stop 시 해당 칩 스파이크 변화 관찰(크로스토크 판별).
+	 *   M0만 run → M0 로그빈도 줄면 타칩 킥백 크로스토크, 안 줄면 M0 자체(비대칭+공유노드).
+	 * online은 chipId 확인(RUN 무관)이라 통과, 계측만 정지. */
+	if (id != 0) runCmd = 0;	/* ← run할 칩 id (M0만=0, M2만=2) */
 #endif
 	write_reg16(id, AD9X_RUN, &runCmd);
 	printf("RUN DSP (id=%d, run=%d) ...\n", id, runCmd);

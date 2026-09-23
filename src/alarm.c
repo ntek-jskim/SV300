@@ -33,7 +33,7 @@ static void getAlarmFifoFileName(int id, char *path) {
 	if (id == 0) {
 		strcpy(path, ALARM_FIFO_FILE);
 	} else {
-		sprintf(path, "%s\\alog%s_fifo_m%d.d", ALARM_DIR, ALOG_VER, id);
+		sprintf(path, "%s" DIRSEP "alog%s_fifo_m%d.d", ALARM_DIR, ALOG_VER, id);
 	}
 }
 
@@ -1256,7 +1256,7 @@ static int findOldestTrendLog(char *oldestName, uint32_t *oldestSize, uint32_t *
 #else
 	FINFO info;
 #endif
-	char mask[] = CONCAT(LOG_TREND_DIR, "\\trd*.d");
+	char mask[] = CONCAT3(LOG_TREND_DIR, DIRSEP, "trd*.d");
 	int currentKey, lastMonthKey;
 	int found = 0, oldestKey = 999999;
 
@@ -1298,7 +1298,7 @@ static void trimTrendLogBudget(void) {
 			break;
 		}
 
-		sprintf(path, "%s\\%s", LOG_TREND_DIR, oldestName);
+		sprintf(path, "%s" DIRSEP "%s", LOG_TREND_DIR, oldestName);
 #ifdef USE_CMSIS_RTOS2
 		res = fdelete(path, NULL);
 #else

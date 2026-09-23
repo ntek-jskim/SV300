@@ -466,7 +466,7 @@ int initSettings(int id)
 
 		strcpy((char *)db.comm.host, "SV300");
 		db.comm.tcpPort = 502;
-		db.comm.dhcpEn = 0;
+		db.comm.dhcpEn = 1;
 
 		db.etc.backlightTime = 1;
 		db.etc.brightness = 2;
@@ -1559,10 +1559,10 @@ int wavePreCaptureLF(int id, WAVE_WINDOW_BLK *pblk, WAVE_LF_CAP *pCap, PQ_EVT_Q 
 	}
 
 	/* FS_Task 쓰기(헤더 + dense 데이터, 가변 크기) */
-	if (pqE->eType == E_SAG)        { strcpy(path, "\\Trg_PQ\\"); strcat(path, "WSAG_"); }
-	else if (pqE->eType == E_SWELL) { strcpy(path, "\\Trg_PQ\\"); strcat(path, "WSWL_"); }
-	else if (pqE->eType == E_OC)    { strcpy(path, "\\Trg_PQ\\"); strcat(path, "WOC_"); }
-	else if (pqE->eType == E_sINTR || pqE->eType == E_lINTR) { strcpy(path, "\\Trg_PQ\\"); strcat(path, "WINT_"); }
+	if (pqE->eType == E_SAG)        { strcpy(path, TRG_PQ_DIR DIRSEP "WSAG_"); }
+	else if (pqE->eType == E_SWELL) { strcpy(path, TRG_PQ_DIR DIRSEP "WSWL_"); }
+	else if (pqE->eType == E_OC)    { strcpy(path, TRG_PQ_DIR DIRSEP "WOC_"); }
+	else if (pqE->eType == E_sINTR || pqE->eType == E_lINTR) { strcpy(path, TRG_PQ_DIR DIRSEP "WINT_"); }
 	else return 0;
 
 	getTrgFileName(path, pqE->Ts, fsmsg.fname);
@@ -1867,10 +1867,10 @@ int TransientEvent(int id, WAVE_WINDOW *pww, int bx, TS_CNTL *ptrg, int mode) {
 	if (ptrg->capF) {
 		if (id < 0 || id >= METER_CH_COUNT)
 			return res;
-		if (mode == 0) 
-			strcpy(path, "\\Trg_TVC\\WTV_");		
+		if (mode == 0)
+			strcpy(path, TRG_TRANSIENT_DIR DIRSEP "WTV_");
 		else
-			strcpy(path, "\\Trg_TVC\\WTC_");		
+			strcpy(path, TRG_TRANSIENT_DIR DIRSEP "WTC_");
 		getTrgFileName(path, ptrg->ts1, fsmsg.fname);		
 		strcpy(fsmsg.mode, "wb");
 		fsmsg.pbuf = &wbCap[id];
@@ -2794,22 +2794,42 @@ void Test_task(void *arg)
 
 /* [캡처 로테이션] mask에 맞고 접두어 집합(fx)에 속하는 파일이 keepN 초과면
  *  시간상 가장 오래된 1개 삭제. FS_task가 fsFileLock 보유 중에 호출한다.
- *  파일명 '_' 뒤 YYYYMMDDT... 문자열 비교로 시간순 정렬(WSAG_/WOC_ 접두어 길이차 무시). */
+ *  ffind/info.name 은 순수 파일명(경로 없음). FAT="WSAG_20260920T...d",
+ *  NOR 플랫="tpq_WSAG_20260920T...d"(폴더 접두어 포함). 아래 헬퍼는 두 형태 모두 처리:
+ *  - capNameInGroup: TRG_PQ_DIR DIRSEP 접두어가 있으면 건너뛴 뒤 fx(WSAG_ 등)와 비교.
+ *  - capTsPart: 첫 숫자('2026...')부터 반환 → 접두어 길이·글자수 변화와 무관하게 순수
+ *    타임스탬프(YYYYMMDDT...)만 비교(접두어는 모두 영문·숫자없음이라 안전). */
 static const char *const CAP_W_FX[] = { "WSAG_", "WSWL_", "WOC_", "WINT_" };	/* 파형(LF) 캡처(WINT=인터럽션) */
 static const char *const CAP_D_FX[] = { "DSAG_", "DSWL_", "DOC_", "DINT_" };	/* RMS 캡처(DINT=인터럽션) */
 
+#define	TRG_PQ_PREFIX_STR	TRG_PQ_DIR DIRSEP	/* 폴더/접두어 부분(플랫="tpq_", FAT="\trg_pq\") */
+
+/* info.name 에서 폴더 접두어(TRG_PQ_DIR DIRSEP)를 건너뛴 그룹명 시작 포인터.
+ *  FAT는 접두어가 없으므로 nm 그대로, 플랫은 "tpq_" 뒤(WSAG_...)를 가리킨다. */
+static const char *capStripDir(const char *nm) {
+	size_t pfx = sizeof(TRG_PQ_PREFIX_STR) - 1;
+	if (pfx > 0 && strncmp(nm, TRG_PQ_PREFIX_STR, pfx) == 0)
+		return nm + pfx;
+	return nm;
+}
+
 static int capNameInGroup(const char *nm, const char *const *fx, int nfx) {
+	const char *g = capStripDir(nm);
 	int i;
 	for (i = 0; i < nfx; i++) {
-		if (strncmp(nm, fx[i], strlen(fx[i])) == 0)
+		if (strncmp(g, fx[i], strlen(fx[i])) == 0)
 			return 1;
 	}
 	return 0;
 }
 
+/* 순수 타임스탬프(첫 숫자부터) 반환 — 그룹 접두어(WSAG_ 등, 영문) 길이차 무시하고
+ *  YYYYMMDDT...로 시간순 정렬. 숫자가 없으면(비정상) 이름 전체 반환. */
 static const char *capTsPart(const char *nm) {
-	const char *p = strchr(nm, '_');
-	return p ? (p + 1) : nm;
+	const char *p = nm;
+	while (*p && (*p < '0' || *p > '9'))
+		p++;
+	return *p ? p : nm;
 }
 
 static void trimCaptureGroup(const char *mask, const char *dir,
@@ -2830,7 +2850,12 @@ static void trimCaptureGroup(const char *mask, const char *dir,
 		}
 	}
 	if (have && count > keepN) {
-		sprintf(path, "%s\\%s", dir, oldest);
+		/* 플랫(NOR): info.name 이 이미 폴더 접두어 포함 전체 파일명 → 그대로 삭제.
+		 *  FAT: info.name 은 폴더 없는 순수 파일명 → dir + DIRSEP 를 앞에 붙여 전체 경로 구성. */
+		if (strncmp(oldest, TRG_PQ_PREFIX_STR, sizeof(TRG_PQ_PREFIX_STR) - 1) == 0)
+			strcpy(path, oldest);
+		else
+			sprintf(path, "%s" DIRSEP "%s", dir, oldest);
 #ifdef USE_CMSIS_RTOS2
 		res = fdelete(path, NULL);
 #else
@@ -2983,12 +3008,13 @@ void FS_task(void *arg)
 						(strncmp(pmsg->fname, EVENT_LIST_FILE, strlen(EVENT_LIST_FILE)) == 0)) {
 						trimFixedRecordFileFs(pmsg->fname, sizeof(EVENT_LOG), EVENT_LOG_CAP);
 					}
-					/* [로테이션] PQ 캡처: W계열/D계열 각각 최근 CAP_KEEP_EVENTS 이벤트만 유지 */
-					else if (strncmp(pmsg->fname, "\\Trg_PQ\\W", 9) == 0) {
-						trimCaptureGroup("\\Trg_PQ\\W*.d", "\\Trg_PQ", CAP_W_FX, 4, CAP_KEEP_EVENTS);
+					/* [로테이션] PQ 캡처: W계열/D계열 각각 최근 CAP_KEEP_EVENTS 이벤트만 유지.
+					 *  하드코딩 9 제거 — 접두어 길이(플랫 "tpq_W"=5 vs FAT "\trg_pq\W"=9)에 맞춰 sizeof-1 사용. */
+					else if (strncmp(pmsg->fname, TRG_PQ_W_PREFIX, sizeof(TRG_PQ_W_PREFIX) - 1) == 0) {
+						trimCaptureGroup(TRG_PQ_W_MASK, TRG_PQ_DIR, CAP_W_FX, 4, CAP_KEEP_EVENTS);
 					}
-					else if (strncmp(pmsg->fname, "\\Trg_PQ\\D", 9) == 0) {
-						trimCaptureGroup("\\Trg_PQ\\D*.d", "\\Trg_PQ", CAP_D_FX, 4, CAP_KEEP_EVENTS);
+					else if (strncmp(pmsg->fname, TRG_PQ_D_PREFIX, sizeof(TRG_PQ_D_PREFIX) - 1) == 0) {
+						trimCaptureGroup(TRG_PQ_D_MASK, TRG_PQ_DIR, CAP_D_FX, 4, CAP_KEEP_EVENTS);
 					}
 				}
 				t2 = sysTick64;			
@@ -3165,20 +3191,16 @@ void RMSCapture(int id, int ix) {
 #else	
 		// FS_Task에 쓰기 요청한다 
 		if (eType == E_SAG) {
-			strcpy(path, "\\Trg_PQ\\");
-			strcat(path, "DSAG_");		
+			strcpy(path, TRG_PQ_DIR DIRSEP "DSAG_");
 		}
 		else if (eType == E_SWELL) {
-			strcpy(path, "\\Trg_PQ\\");
-			strcat(path, "DSWL_");		
+			strcpy(path, TRG_PQ_DIR DIRSEP "DSWL_");
 		}
 		else if (eType == E_OC) {
-			strcpy(path, "\\Trg_PQ\\");
-			strcat(path, "DOC_");
+			strcpy(path, TRG_PQ_DIR DIRSEP "DOC_");
 		}
 		else if (eType == E_sINTR || eType == E_lINTR) {
-			strcpy(path, "\\Trg_PQ\\");
-			strcat(path, "DINT_");
+			strcpy(path, TRG_PQ_DIR DIRSEP "DINT_");
 		}
 		else
 			return;
@@ -3417,7 +3439,7 @@ void storeDemand() {
 	fsFileLock();
 	for (id = 0; id < METER_CH_COUNT; id++) {
 		if (id == 0) sprintf(path, "%s", DEMAND_FILE);
-		else sprintf(path, "%s\\demand.d%d", SYS_DIR, id);
+		else sprintf(path, "%s" DIRSEP "demand.d%d", SYS_DIR, id);
 		fp = fopen(path, "wb");
 		if (fp == NULL) {
 			continue;
@@ -3458,7 +3480,7 @@ void loadDemand() {
 		int valid = 0;
 
 		if (id == 0) sprintf(path, "%s", DEMAND_FILE);
-		else sprintf(path, "%s\\demand.d%d", SYS_DIR, id);
+		else sprintf(path, "%s" DIRSEP "demand.d%d", SYS_DIR, id);
 		fp = fopen(path, "rb");
 		if (fp != NULL) {
 			/* 두 블록 모두 정상 read + magic 일치해야 유효 (storeDemand는 파일 crc를
@@ -3737,7 +3759,7 @@ static void getEnergyLogFileName(int id, int sel, char *path)
 	if (id == 0) {
 		strcpy(path, (sel == 0) ? ENERGY_LOG_FILE0 : ENERGY_LOG_FILE1);
 	} else {
-		sprintf(path, "%s\\egy_log%d_m%d.d", SYS_DIR, sel, id);
+		sprintf(path, "%s" DIRSEP "egy_log%d_m%d.d", SYS_DIR, sel, id);
 	}
 }
 
@@ -3847,7 +3869,7 @@ void storeEnergyLogFs(int id, int sel, ENERGY_LOG *pEgyLog)
 /* ===== 15분 슬롯 에너지 로그(egy15) — 별도 전역, 월아카이브 소스 ===== */
 static void getEnergyLog15FileName(int id, int sel, char *path)
 {
-	sprintf(path, "%s\\egy15_%d_m%d.d", SYS_DIR, sel, id);
+	sprintf(path, "%s" DIRSEP "egy15_%d_m%d.d", SYS_DIR, sel, id);
 }
 
 static void initEnergyLog15Blob(void *blob)
@@ -4071,30 +4093,37 @@ uint32_t logCutoffKeyMonths(int months) {
 /* HWV2: 완료된 하루의 에너지 로그를 월단위 파일(\log_egy\egy<YYYYMM>_m<id>.d)로 아카이브.
  *  예산(FLASH_LOG_BUDGET_EGY) 초과 시 가장 오래된(날짜 최소) 파일부터 삭제 → 약 35일 보존. */
 static unsigned long egyArchNameKey(const char *name) {
-	unsigned long key = 0;
+	unsigned long key;
+	const char *p;
 	int i;
 	/* 아카이브만 인식: "egy" + YYYYMM(6자리) + "_" 형식만. 같은 접두어의 다른 파일
 	 * (egy_log*, egy15_<sel>_m<id>.d 등)은 0 반환 → 트림·예산집계에서 제외.
 	 * ※평면 EFS라 \system\egy15_* 도 \log_egy\egy*.d glob에 걸린다. 6자리를 정확히
 	 *   요구하지 않으면 "egy15_0_m1.d"가 key=15로 파싱돼 최古 아카이브로 오인·삭제된다
-	 *   (15분 에너지 로그 유실). Quality.c parseDateKey8 이 8자리를 정확히 요구하는 것과 동일 원칙. */
-	if (name[0] != 'e' || name[1] != 'g' || name[2] != 'y')
-		return 0;
-	for (i = 3; i <= 8; i++) {
-		if (name[i] < '0' || name[i] > '9')
-			return 0;		/* YYYYMM 6자리 미만 → 아카이브 아님 */
-		key = key * 10 + (unsigned long)(name[i] - '0');
+	 *   (15분 에너지 로그 유실). Quality.c parseDateKey8 이 8자리를 정확히 요구하는 것과 동일 원칙.
+	 * ※NOSDMEM(NOR 플랫): EGY_ARCH_FILE = LOG_EGY_DIR("egy") + '_' + "egy" 이므로 파일명이
+	 *   "egy_egy202609_m1.d"처럼 디렉터리접두어 "egy_"가 앞에 붙는다. 따라서 이름 선두 고정이 아니라
+	 *   "egy"+YYYYMM(6)+"_" 토큰을 탐색한다(FAT은 info.name="egy202609_m1.d"라 선두에서 즉시 매칭). */
+	for (p = name; p[0] != 0; p++) {
+		if (p[0] != 'e' || p[1] != 'g' || p[2] != 'y')
+			continue;
+		key = 0;
+		for (i = 3; i <= 8; i++) {
+			if (p[i] < '0' || p[i] > '9')
+				break;		/* YYYYMM 6자리 미만 → 이 "egy" 토큰은 아카이브 아님 */
+			key = key * 10 + (unsigned long)(p[i] - '0');
+		}
+		if (i == 9 && p[9] == '_')
+			return key;		/* egy<YYYYMM>_m<id>.d 형식 확인 */
 	}
-	if (name[9] != '_')
-		return 0;			/* egy<YYYYMM>_m<id>.d 형식만 */
-	return key;
+	return 0;
 }
 
 static int findOldestEgyArch(char *oldestName, uint32_t *totalSize) {
 	FINFO info;
 	int found = 0;
 	unsigned long oldestKey = 0xFFFFFFFFUL;
-	char mask[] = CONCAT(LOG_EGY_DIR, "\\egy*.d");
+	char mask[] = CONCAT3(LOG_EGY_DIR, DIRSEP, "egy*.d");
 
 	*totalSize = 0;
 	info.fileID = 0;
@@ -4120,7 +4149,7 @@ static void trimEgyArchBudget(void) {
 	while (findOldestEgyArch(oldestName, &total)) {
 		if (total <= FLASH_LOG_BUDGET_EGY)
 			break;
-		sprintf(path, "%s\\%s", LOG_EGY_DIR, oldestName);
+		sprintf(path, "%s" DIRSEP "%s", LOG_EGY_DIR, oldestName);
 #ifdef USE_CMSIS_RTOS2
 		res = fdelete(path, NULL);
 #else
@@ -4144,7 +4173,7 @@ static void trimEgyArchAge(uint32_t cutoffKey) {
 		return;
 	if (egyArchNameKey(oldestName) >= cutoffKey)
 		return;		/* 최古도 보존기간 내 → 삭제 없음 */
-	sprintf(path, "%s\\%s", LOG_EGY_DIR, oldestName);
+	sprintf(path, "%s" DIRSEP "%s", LOG_EGY_DIR, oldestName);
 #ifdef USE_CMSIS_RTOS2
 	res = fdelete(path, NULL);
 #else
@@ -4528,7 +4557,7 @@ static ITIC_LOG  _iticlog[METER_CH_COUNT];
 
 static void getEventFifoFileName(int id, char *path) {
 	if (id > 0) {
-		sprintf(path, "%s\\elog%s_fifo_m%d.d", EVENT_DIR, ALOG_VER, id);
+		sprintf(path, "%s" DIRSEP "elog%s_fifo_m%d.d", EVENT_DIR, ALOG_VER, id);
 	}
 	else {
 		strcpy(path, EVENT_FIFO_FILE);

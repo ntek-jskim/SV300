@@ -689,6 +689,23 @@ static void cmd_thd(char *par) {			/* THD 진단: online·U(RMS)·THD·wbFFT8k(f
 	}
 }
 
+static void cmd_wvf(char *par) {			/* WVF: 스파이크 추적통계 보기 / WVF C: 클리어(부팅과도분 제거) */
+#ifdef WV_DIAG
+	extern void wvfStatDump(void);
+	extern void wvfStatClear(void);
+	char *p, *next;
+	p = get_entry(par, &next);
+	if (p != NULL && (*p == 'C' || *p == 'c')) {
+		wvfStatClear();
+		printf("[WVF] stats cleared\n");
+		return;
+	}
+	wvfStatDump();
+#else
+	printf("[WVF] disabled (meter.h WV_DIAG off)\n");
+#endif
+}
+
 static void cmd_fftTest(char *par) {			/* FFTTEST [50|60]: Goertzel vs CZT 대조·시간(기본 60) */
 	char *p, *next;
 	extern void fft_goertzel_test(int freq);
@@ -1080,6 +1097,7 @@ static const SCMD cmd[] = {
 //	"HWMODEL", cmd_hwModel,
 	"FFTTEST", cmd_fftTest,			/* Goertzel vs CZT 고조파/시간 대조(검증) */
 	"THD", cmd_thd,				/* THD/전압고조파 즉시출력(태스크 단계시험용) */
+	"WVF", cmd_wvf,				/* 스파이크 추적통계 보기 / WVF C: 클리어 */
 	"HWVER", cmd_hwVersion,
 //	"GWENABLE", cmd_gwEnable,
 	"DEVINFO", cmd_devInfo,

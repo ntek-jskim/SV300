@@ -54,7 +54,7 @@ static MdnsResponderContext webMdns;
 #define WEB_TOK_LEN    26                     /* role 2 + exp 8 + sig 16 */
 #define WEB_SESS_TTL   (8u * 3600u)           /* 8시간(초, sysTick1s 기준) */
 #define WEB_KEY_LEN    16
-#define WEB_KEY_FILE   CONCAT(SYS_DIR, "\\websec.d")
+#define WEB_KEY_FILE   CONCAT3(SYS_DIR, DIRSEP, "websec.d")
 
 #define ROLE_NONE   0
 #define ROLE_VIEWER 1
@@ -1968,9 +1968,10 @@ static const char INDEX_HTML[] =
 /* Waveform / Report(EN50160+ITIC) / Monthly */
 "function drawLines(id,series){var cv=$(id);if(!cv)return;var w=cv.clientWidth||300;cv.width=w;cv.height=160;var g=cv.getContext('2d'),pad=30,L=series[0].length,mx=-1e9,mn=1e9,si,k;\n"
 " for(si=0;si<3;si++)for(k=0;k<L;k++){var v=series[si][k];if(v>mx)mx=v;if(v<mn)mn=v;}if(mx===mn){mx+=1;mn-=1;}\n"
+" var rg=mx-mn,dp=rg>=100?0:rg>=10?1:rg>=1?2:rg>=.1?3:4;\n"  /* 범위 작을수록(무부하 전류) 소수점 더 표시 */
 " g.clearRect(0,0,w,160);var gy=function(v){return 160-pad-(v-mn)/(mx-mn)*(160-2*pad);};\n"
 " g.strokeStyle='rgba(128,140,155,.2)';g.fillStyle='#8b9bb0';g.font='8px sans-serif';\n"
-" [0,0.5,1].forEach(function(f){var yv=mn+(mx-mn)*f,y=gy(yv);g.beginPath();g.moveTo(pad,y);g.lineTo(w,y);g.stroke();g.fillText(yv.toFixed(0),2,y+3);});\n"
+" [0,0.5,1].forEach(function(f){var yv=mn+(mx-mn)*f,y=gy(yv);g.beginPath();g.moveTo(pad,y);g.lineTo(w,y);g.stroke();g.fillText(yv.toFixed(dp),2,y+3);});\n"
 " for(si=0;si<3;si++){g.strokeStyle=PCOL[si];g.lineWidth=1.4;g.beginPath();for(k=0;k<L;k++){var x=pad+(w-pad-6)*k/(L-1),y=gy(series[si][k]);if(k===0)g.moveTo(x,y);else g.lineTo(x,y);}g.stroke();}}\n"
 "var EN_ROWS=[['Frequency Variation 1','(+1%~-1%),99.5%/Wk',99.5],['Frequency Variation 2','(+4%~-6%),100%/Wk',100],['Voltage Variation 1','(+10%~-10%),95%/Wk',95],['Voltage Variation 2','(+10~-15%),100%/Wk',100],['Voltage Unbalance','(<2%),100%/Wk',100],['THD','(<8%),95%/Wk',95],['Harmonics','(0.5%~6%),95%/Wk',95],['Plt','(1),95%/Wk',95]],EN_INFO=['Voltage Sag','Voltage Swell','Short Interruption','Signaling Volt.'];\n"
 "function passOf(v,thr){var ok=true,any=false,i;for(i=0;i<3;i++){if(v[i]!=null){any=true;if(v[i]<thr)ok=false;}}return (any&&ok)?1:0;}\n"

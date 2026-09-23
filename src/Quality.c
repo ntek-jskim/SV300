@@ -118,8 +118,8 @@ static int findOldestQualLog(char *oldestName, uint32_t *oldestSize, uint32_t *t
 #else
 	FINFO info;
 #endif
-	char maskQl[] = CONCAT(LOG_PQ_DIR, "\\ql*.d");
-	char maskQw[] = CONCAT(LOG_PQ_DIR, "\\qw*.d");
+	char maskQl[] = CONCAT3(LOG_PQ_DIR, DIRSEP, "ql*.d");
+	char maskQw[] = CONCAT3(LOG_PQ_DIR, DIRSEP, "qw*.d");
 	int found = 0, oldestKey = 99999999;
 
 	getQualStartDate(dstr);
@@ -180,7 +180,7 @@ static void trimQualLogBudget_nolock(void) {
 			break;
 		}
 
-		sprintf(path, "%s\\%s", LOG_PQ_DIR, oldestName);
+		sprintf(path, "%s" DIRSEP "%s", LOG_PQ_DIR, oldestName);
 #ifdef USE_CMSIS_RTOS2
 		res = fdelete(path, NULL);
 #else
@@ -240,7 +240,7 @@ static void trimQualLogAge_nolock(uint32_t cutoffKey) {
 	if ((uint32_t)parseDateKey8(oldestName) >= cutoffKey)
 		return;		/* 최古도 보존기간 내 → 삭제 없음 */
 
-	sprintf(path, "%s\\%s", LOG_PQ_DIR, oldestName);
+	sprintf(path, "%s" DIRSEP "%s", LOG_PQ_DIR, oldestName);
 #ifdef USE_CMSIS_RTOS2
 	res = fdelete(path, NULL);
 #else

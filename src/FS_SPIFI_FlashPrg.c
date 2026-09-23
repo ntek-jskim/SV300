@@ -106,6 +106,22 @@ static BOOL Init(U32 adr, U32 clk)
 	       (unsigned)s_spifi_obj.mfger, (unsigned)s_spifi_obj.devType, (unsigned)s_spifi_obj.devID,
 	       (unsigned)s_spifi_obj.devSize, (unsigned)s_spifi_obj.memSize);
 
+	/* [동적 용량 판별] 실제 칩(devSize/devID)과 컴파일 섹터맵(SF0_SIZE) 대조.
+	 *  컴파일은 최대칩(HWV2=16MB) 고정, 실제 소용량 칩이면 위 콜백 가드가 초과영역 차단.
+	 *  devID = JEDEC 용량코드: 0x18=16MB(MX25L12835F), 0x15=2MB(MX25L1636E). size=1<<devID. */
+#define SF_CFG_SIZE  0x1000000UL	/* 컴파일 섹터맵 크기(항상 16MB, File_Config.c SF0_SIZE와 일치) */
+	if (rc == 0 && s_spifi_obj.devSize != 0U) {
+		unsigned long dv = (unsigned long)s_spifi_obj.devSize;
+		if (dv == SF_CFG_SIZE)
+			printf("[SPIFI] 용량 일치: 실제=cfg=%luMB\n", dv >> 20);
+		else if (dv < SF_CFG_SIZE)
+			printf("[SPIFI] ★소용량칩: 실제=%luMB < cfg=%luMB → %luMB 초과영역 차단(콜백가드). 재빌드 불필요\n",
+			       dv >> 20, SF_CFG_SIZE >> 20, dv >> 20);
+		else
+			printf("[SPIFI] ★대용량칩: 실제=%luMB > cfg=%luMB → cfg %luMB만 사용(섹터맵 확장 필요)\n",
+			       dv >> 20, SF_CFG_SIZE >> 20, SF_CFG_SIZE >> 20);
+	}
+
 	if (rc != 0) {
 		return (__FALSE);
 	}
@@ -144,6 +160,15 @@ static BOOL ProgramPage(U32 adr, U32 sz, U8 *buf)
 	if (s_rom == NULL || buf == NULL || sz == 0U) {
 		return (__FALSE);
 	}
+	/* [동적 용량 가드] 컴파일 섹터맵은 최대칩(16MB) 기준이나 실제 칩이 소용량(예 2MB)일 수 있음.
+	 *  실 용량(devSize) 초과 주소 쓰기는 SPIFI 주소 wrap→기존 데이터 손상 유발 → 차단. */
+	if (s_spifi_obj.devSize != 0U) {
+		if (adr >= s_spifi_obj.devSize || sz > (s_spifi_obj.devSize - adr)) {
+			printf("[SPIFI] program OOR adr=0x%08x sz=%u > devSize=0x%08x (소용량칩)\n",
+			       (unsigned)adr, (unsigned)sz, (unsigned)s_spifi_obj.devSize);
+			return (__FALSE);
+		}
+	}
 
 	opers.dest = (char *)(uintptr_t)adr;
 	opers.length = (uint32_t)sz;
@@ -171,6 +196,12 @@ static BOOL EraseSector(U32 adr)
 	}
 
 	base = adr & ~(SF_VIRTUAL_SEC_BYTES - 1U);
+	/* [동적 용량 가드] 실 용량(devSize) 초과 섹터 소거 차단(주소 wrap 방지). 소용량 칩 자동 대응. */
+	if (s_spifi_obj.devSize != 0U && base >= s_spifi_obj.devSize) {
+		printf("[SPIFI] erase OOR adr=0x%08x > devSize=0x%08x (소용량칩)\n",
+		       (unsigned)base, (unsigned)s_spifi_obj.devSize);
+		return (__FALSE);
+	}
 	opers.dest = (char *)(uintptr_t)base;
 	opers.length = SF_VIRTUAL_SEC_BYTES;
 	opers.scratch = (char *)s_spifi_scratch;
