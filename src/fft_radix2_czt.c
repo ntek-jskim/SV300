@@ -1,3 +1,35 @@
+/*============================================================================
+ * fft_radix2_czt.c — 고조파/THD 엔진 + FFT_Task (파형 소비 태스크)
+ *----------------------------------------------------------------------------
+ * ※ 파일명은 레거시(과거 Radix2 FFT + CZT 시절). 현재 기본 엔진은 Goertzel.
+ *   Radix2 FFT(FFT_czt)·CZT는 폴백 경로로만 잔존(g_fftGoertzel=0).
+ *
+ * [고조파/THD 엔진] — Goertzel(측정주파수) 이 기본(g_fftGoertzel=1)
+ *   · 계수 coeff = 2·cos(2π·h·f_meas/8000) 로 8k 창(1600샘플=N_FFT)에서
+ *     1~63차 고조파를 '실측 기본주파수 f_meas' 에서 단일패스 동시 평가.
+ *   · 45~65Hz 면 실측 f_meas, 그 밖이면 공칭(50/60Hz) 폴백.
+ *   · 장점: 비동기 DFT/CZT(고정 bin)의 스펙트럼 누설(순수입력 ~1.8% THD 아티팩트)
+ *     제거 + CZT 대비 ~15.7배(204ms→13ms). 리샘플 불필요(FFT_prepare는 원시복사).
+ *   · H1 정규화(IEC), 차수별 게인보정 v_harm_gain[freq][h](프론트엔드 RC 롤오프 등).
+ *
+ * [FFT_Task] — LLOW(최저) 우선순위. os_evt 대기 → 채널별 wbFFT8k[id] 소비.
+ *   각 채널 처리 순서:
+ *     1) [진단] wvfDetect(id)  — WV_DIAG 시. 스파이크(median 편차) 검출·통계.
+ *        (Meter 스레드가 아닌 여기서 printf → 계측 타이밍 오염 없음. shell 'WVF')
+ *     2) 고조파/THD  — FFT_prepare(원시복사) → FFT_harmonic(Goertzel) → THD.
+ *   전압THD(U/Upp)는 M0만 산출→M1/M2 복사(전압 3칩 공유), 전류THD(I)는 채널별.
+ *   Quiet Capture(WV_QCAP): FFT_prepare에서 g_wfbQuiet 양보(flash/워커 동시활동
+ *   시 M0 readWFB 교란 회피 — 조용창에서만 처리).
+ *
+ * [주요 심볼]
+ *   FFT_goertzel   : Goertzel 측정freq 엔진(coeff=2cos, 1~63차)
+ *   FFT_harmonic   : 엔진 디스패치(g_fftGoertzel? Goertzel : CZT 폴백)
+ *   FFT_czt/FFT_postproc : CZT(Bluestein) 폴백(공칭 bin)
+ *   FFT_prepare/_pp: wbFFT8k → pFFT->xreal 복사(상전압/선간). 리샘플 안 함.
+ *   calcCF         : Crest Factor(peak/rms) — 정현파 판별 보조.
+ *   wvfDetect/wvfStatDump/wvfStatClear : [WV_DIAG] 스파이크 추적통계(shell 'WVF')
+ *   fft_goertzel_test : shell 'FFTTEST [50|60]' Goertzel vs CZT 대조 검증.
+ *============================================================================*/
 #include "RTL.h"
 #include "board.h"
 #include "math.h"
@@ -5,6 +37,7 @@
 #include "fft.h"
 #include "string.h"
 
+/* 차수별 게인 보정 [freq(0:50/1:60)][고조파 1~63]. 프론트엔드 RC 롤오프 등 보정. */
 float	v_harm_gain[2][63] = {
 // 50Hz
 {1,    1,     0.997, 0.996, 0.994, 0.991, 0.989, 0.986, 0.983, 0.980,
@@ -500,6 +533,129 @@ static float FFT_harmonic(int sel, uint16_t *pHD, float fMeas) {
 	return FFT_postproc(N_FFT, sel, pHD);
 }
 
+#ifdef WV_DIAG
+/* ── [WV_DIAG] 스파이크 검출 (FFT_Task = LLOW 우선순위에서 실행 → Meter 타이밍 오염 없음) ──
+ *  wbFFT8k[id].U[3]/I[3] (각 1600샘플)에서 median 편차>임계 스파이크 검출.
+ *  전압·전류가 같은 샘플위치(±2)에 동시 스파이크인지 판별:
+ *    coinc=동시(공통원인:전원/GND/REF/ADC타이밍), vOnly=전압만(공유노드), iOnly=전류만(개별).
+ *  printf는 FFT_Task(LLOW)라 계측 무영향. */
+#define WVF_N        1600
+/* [개선] 절대 임계는 신호 대비 너무 낮았음(50000=신호의 0.26%). → 신호 피크 비례 임계로 전환.
+ *  각 상 피크를 측정하고 median 편차를 피크 대비 %로 판정. 부하 크기 무관 일관.
+ *  임계 하나로 고정하지 않고 배율별 히스토그램(0.5/1/2/3%)으로 분포를 보여줘 실제 스파이크 크기대 확인. */
+
+/* [추적관찰] 칩별 누적통계 — shell(WVF 명령)에서 조회/클리어. 매프레임 printf 폭주 방지 위해
+ *  상세는 여기 누적하고, 콘솔 자동로그는 WVF_LOG_EVERY 프레임마다 요약만. clear로 부팅과도분 제거 후 순수 관측. */
+typedef struct {
+	uint32_t frm;			/* 처리 프레임수 */
+	uint32_t s05, s1, s2, s3;	/* 편차>피크의 0.5/1/2/3% 인 샘플 누적 */
+	uint32_t worstDev;		/* 최대 편차(raw) */
+	uint16_t worstPct100;		/* 그때 피크대비 %×100 */
+	uint16_t worstPh, worstK;	/* 그때 상/샘플위치 */
+	uint32_t worstPk;		/* 그때 피크 */
+} WVF_STAT;
+WVF_STAT wvfStat[3];			/* 전역: FS.c(WVF 명령)에서 extern 접근 */
+#define WVF_LOG_EVERY  500u		/* 콘솔 자동 요약로그 주기(프레임). 0이면 자동로그 OFF */
+
+/* [캡처 밀림 추적] ade9000.c readWFB_Data에서 갱신하는 전역(사용자 가설: 캡처 밀림→torn 스파이크?) */
+extern uint32_t wvfLagFrm[3], wvfLagCnt[3], wvfLagMax[3];
+extern uint8_t  wvfPageLast[3];
+extern uint32_t wvfTsPrev[3], wvfGapMax[3], wvfGapLate[3], wvfGapSum[3];
+
+void wvfStatClear(void) {		/* shell: WVF C — 누적 초기화(부팅과도분 제거) */
+	int i;
+	for (i = 0; i < 3; i++) {
+		wvfStat[i].frm = wvfStat[i].s05 = wvfStat[i].s1 = wvfStat[i].s2 = wvfStat[i].s3 = 0;
+		wvfStat[i].worstDev = wvfStat[i].worstPct100 = wvfStat[i].worstPh = wvfStat[i].worstK = 0;
+		wvfStat[i].worstPk = 0;
+		/* 밀림 계측도 리셋(단 TsPrev는 유지: 간격 연속성). */
+		wvfLagFrm[i] = wvfLagCnt[i] = wvfLagMax[i] = 0;
+		wvfGapMax[i] = wvfGapLate[i] = wvfGapSum[i] = 0;
+	}
+}
+void wvfStatDump(void) {		/* shell: WVF — 현재 누적 통계 출력 */
+	int i;
+	printf("[WVF STAT] (신호피크 대비 편차 배율별 누적샘플; >2%%~3%%가 유의하면 진짜 스파이크)\n");
+	for (i = 0; i < 3; i++) {
+		WVF_STAT *w = &wvfStat[i];
+		uint32_t f = w->frm ? w->frm : 1;
+		printf(" M%d frm=%u | >0.5%%=%u >1%%=%u >2%%=%u >3%%=%u | per1k: %u.%u/%u.%u/%u.%u/%u.%u"
+		       " | 누적Max=%u(%u.%02u%% pk%u ph%u k%u)\n",
+		       i, w->frm, w->s05, w->s1, w->s2, w->s3,
+		       w->s05*1000/f, (w->s05*10000/f)%10, w->s1*1000/f, (w->s1*10000/f)%10,
+		       w->s2*1000/f, (w->s2*10000/f)%10, w->s3*1000/f, (w->s3*10000/f)%10,
+		       w->worstDev, w->worstPct100/100, w->worstPct100%100, w->worstPk, w->worstPh, w->worstK);
+	}
+	/* 캡처 밀림 지표: gapAvg/Max=진입간격(ms, 정상16), late=24ms초과횟수, pageLag=page밀림. M2만 크면 밀림 확증. */
+	printf("[WVF LAG] (캡처 밀림; 정상 gap~16ms. M2만 크면 SSP1 공유버스 밀림→torn 가설 확증)\n");
+	for (i = 0; i < 3; i++) {
+		uint32_t lf = wvfLagFrm[i] ? wvfLagFrm[i] : 1;
+		printf(" M%d rd=%u | gap avg=%u.%u max=%u ms late(>24)=%u | pageLag cnt=%u max=%up(%ums) lastPg=%u\n",
+		       i, wvfLagFrm[i],
+		       wvfGapSum[i]/lf, (wvfGapSum[i]*10/lf)%10, wvfGapMax[i], wvfGapLate[i],
+		       wvfLagCnt[i], wvfLagMax[i], wvfLagMax[i]*2, wvfPageLast[i]);
+	}
+}
+
+static void wvfDetect(int id) {
+	extern WAVE_8K_BUF wbFFT8k[];
+	WVF_STAT *w;
+	int k, ph;
+	int32_t pkV = 1;			/* 전압 3상 최대 피크(|샘플|) */
+	int c05=0, c1=0, c2=0, c3=0;		/* 편차 > 피크의 0.5/1/2/3% 인 샘플 수 */
+	int maxDev = 0, maxPct100 = 0, maxPh = -1, maxK = 0;	/* 최대편차, 그때 피크대비 %(×100) */
+
+	if (id < 0 || id >= 3) return;
+	w = &wvfStat[id];
+
+	/* 1) 전압 3상 피크 측정(비례 임계 기준) */
+	for (ph = 0; ph < 3; ph++) {
+		int32_t *s = wbFFT8k[id].U[ph];
+		for (k = 0; k < WVF_N; k++) {
+			int32_t v = s[k]; if (v < 0) v = -v;
+			if (v > 100000000) continue;		/* 포화 제외 */
+			if (v > pkV) pkV = v;
+		}
+	}
+	/* 2) median 편차를 피크 대비 %로 판정 + 배율별 카운트 */
+	for (ph = 0; ph < 3; ph++) {
+		int32_t *s = wbFFT8k[id].U[ph];
+		for (k = 1; k < WVF_N-1; k++) {
+			int a = s[k-1], b = s[k], d = s[k+1], lo, hi, med;
+			int64_t dev, pct100;
+			if (b > 100000000 || b < -100000000) continue;
+			lo = a<d?a:d; hi = a<d?d:a; med = b<lo?lo:(b>hi?hi:b);
+			dev = b-med; if (dev<0) dev=-dev;
+			pct100 = dev * 10000 / pkV;		/* 피크 대비 %×100 (예 250 = 2.50%) */
+			if (pct100 >  50) c05++;
+			if (pct100 > 100) c1++;
+			if (pct100 > 200) c2++;
+			if (pct100 > 300) c3++;
+			if (dev > maxDev) { maxDev=(int)dev; maxPct100=(int)pct100; maxPh=ph; maxK=k; }
+		}
+	}
+
+	/* [분포 누적] 전역 통계에 누적(shell WVF로 조회/클리어). worst=역대 최대편차 시점 정보 보존. */
+	w->frm++;
+	w->s05 += (uint32_t)c05; w->s1 += (uint32_t)c1; w->s2 += (uint32_t)c2; w->s3 += (uint32_t)c3;
+	if ((uint32_t)maxDev > w->worstDev) {
+		w->worstDev = (uint32_t)maxDev; w->worstPct100 = (uint16_t)maxPct100;
+		w->worstPh = (uint16_t)maxPh; w->worstK = (uint16_t)maxK; w->worstPk = (uint32_t)pkV;
+	}
+	/* 콘솔 자동 요약로그(주기). 상세추적은 shell WVF 명령으로.
+	 *  worstMax=관측 시작 이후 누적 최대편차(raw, 신호대비%, 피크, 위치). 진짜 스파이크면 %가 큼.
+	 *  lag=캡처밀림(gap late>24ms 횟수/최대ms, pageLag). 스파이크와 밀림을 한 줄에서 대조. */
+	if (WVF_LOG_EVERY && (w->frm % WVF_LOG_EVERY) == 0u) {
+		printf("[WVF M%d] frm=%u >0.5%%=%u >1%%=%u >2%%=%u >3%%=%u | 누적Max=%u(%u.%02u%% pk%u ph%u k%u)"
+		       " | lag late=%u gapMx=%ums pgLag=%u\n",
+		       id, w->frm, w->s05, w->s1, w->s2, w->s3,
+		       w->worstDev, w->worstPct100/100, w->worstPct100%100,
+		       w->worstPk, w->worstPh, w->worstK,
+		       wvfGapLate[id], wvfGapMax[id], wvfLagCnt[id]);
+	}
+}
+#endif /* WV_DIAG */
+
 void FFT_Task(void)
 {
 	METERING  *pmeter= &meter[0].meter;
@@ -535,6 +691,10 @@ void FFT_Task(void)
 			pmeter = &meter[id].meter;
 			pcntl  = &meter[id].cntl;
 			pHD    = &meter[id].hd;
+
+#ifdef WV_DIAG
+			wvfDetect(id);	/* [진단] 스파이크 검출·로그(FFT_Task LLOW → Meter 오염 없음) */
+#endif
 
 			/* [Goertzel 측정freq] 채널 측정 기본파(45~65Hz면 실측, 밖이면 공칭)로 각 고조파를
 			   h·f에서 직접 평가(리샘플 없음). FFT_harmonic에 fMeas 전달. */

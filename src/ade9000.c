@@ -31,7 +31,58 @@ os_mbx_declare(mbox, 16);
 extern uint64_t sysTick64;
 extern OsTaskId tid_wave[];
 extern OsTaskId tid_meter[];
-extern OsTaskId tid_rmslog, tid_post, tid_energy;
+extern OsTaskId tid_metering;	/* [통합] RMSLog/PostScan/Energy 단일 태스크 */
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * [WV_DIAG_METER] 파형 취득 진단 (임시, 로그 수집용). 정식운전 시 WV_DIAG_METER 미정의로 무효.
+ *   목적: (A) 3칩 WFB 버스트 타이밍/겹침, (B) 칩별 스파이크(파형 손상) 발생량 실측.
+ *   DWT->CYCCNT(204MHz 사이클, ~4.9ns) 사용. 1사이클=1/204us.
+ *   활성화: 이 파일 위 또는 프로젝트 define에 WV_DIAG_METER 추가 후 재빌드.
+ * ─────────────────────────────────────────────────────────────────────────── */
+//#define WV_M0_ONLY	/* [진단] 특정칩만 RUN(id 지정). 3칩 모두 run 시 이 줄 주석(현재: 3칩 모두 RUN). */
+
+#ifdef WV_DIAG_METER
+/* CMSIS DWT/DEMCR 심볼과 충돌 없는 고유 매크로로 코어 디버그 레지스터 직접 접근(armcc/C90) */
+#define WVD_DEMCR   (*(volatile uint32_t *)0xE000EDFCUL)	/* Debug Exception & Monitor Ctrl */
+#define WVD_DWTCTRL (*(volatile uint32_t *)0xE0001000UL)	/* DWT_CTRL */
+#define WVD_CYCCNT  (*(volatile uint32_t *)0xE0001004UL)	/* DWT_CYCCNT */
+static void wvDiagInit(void) {
+	WVD_DEMCR   |= (1UL << 24);	/* TRCENA */
+	WVD_CYCCNT   = 0;
+	WVD_DWTCTRL |= 1UL;			/* CYCCNTENA */
+}
+static uint32_t wvCyc(void) { return WVD_CYCCNT; }	/* 현재 사이클 카운트 (inline 미사용: armcc C90) */
+#define WV_CYC_US(c)  ((c) / 204u)	/* 사이클 → us (204MHz) */
+
+/* 칩별 진단 누적 */
+static uint32_t wvBurstEnter[3];	/* 마지막 버스트 진입 사이클 */
+static uint32_t wvBurstUs[3];		/* 마지막 버스트 소요(us) */
+static uint32_t wvSpikeCnt[3];		/* 스파이크(임계초과) 구간 누적(500버스트마다 리셋) */
+static uint32_t wvSpikeMax[3];		/* 구간 내 최대 median 편차(오검출/임펄스 판별) */
+static int      wvMaxCh[3];			/* max 편차가 난 채널(0=IA 1=VA 2=IB 3=VB 4=IC 5=VC, 짝=전류/홀=전압) */
+static int      wvMaxA[3], wvMaxB[3], wvMaxD[3];	/* max 시점 3점 샘플값(a,b,d): 임펄스면 b만 튐 */
+static int      wvMaxPos[3];		/* max 스파이크의 128샘플 내 위치 k */
+static int      wvMaxSeq[3][128];	/* max 스파이크가 난 채널의 128샘플 전체(1버스트=반주기, 파형 육안판독) */
+static uint32_t wvScanCnt[3];		/* 버스트 횟수 */
+static uint32_t wvOverlapCnt[3];	/* 이 칩 진입 시 타칩 busy였던 횟수(구간 누적, 500버스트마다 리셋) */
+static uint8_t  wvBusy[3];			/* 현재 버스트 중 플래그 */
+/* [전압·전류 동시성] 같은 샘플위치(dk)에 전압스파이크·전류스파이크가 함께 있는지 판별.
+ *  coinc=동시(공통원인:전원/GND/REF), vOnly=전압만(공유노드 크로스토크), iOnly=전류만(개별). 구간누적. */
+static uint32_t wvCoinc[3], wvVonly[3], wvIonly[3];
+#endif /* WV_DIAG_METER */
+
+#ifdef WV_DIAG
+/* [캡처 밀림 추적] WV_DIAG(meter.h)로 활성. readWFB_Data에서 갱신, fft_radix2_czt.c의 WVF STAT(shell)에서 조회.
+ *  page-lag: 읽는 순간 page가 정상점(7/15)에서 진행한 정도. ts-gap: readWFB 진입 간격(ms, 정상 16ms). */
+uint32_t wvfLagFrm[3];		/* readWFB 진입 횟수 */
+uint32_t wvfLagCnt[3];		/* lag>0(page 밀림) 횟수 */
+uint32_t wvfLagMax[3];		/* 최대 page-lag(페이지수, 1페이지=2ms) */
+uint8_t  wvfPageLast[3];	/* 마지막 읽은 page */
+uint32_t wvfTsPrev[3];		/* 이전 진입 시각(ms) */
+uint32_t wvfGapMax[3];		/* 최대 진입 간격(ms) = 최대 밀림 */
+uint32_t wvfGapLate[3];		/* 간격>24ms(밀림) 횟수 */
+uint32_t wvfGapSum[3];		/* 간격 합(평균 계산용) */
+#endif /* WV_DIAG */
 
 extern int maxMinRmsFreq(int id);
 extern int maxMinPower(int id);
@@ -1096,11 +1147,11 @@ void readPhaseTHD(uint8_t id)
 	}
 	
 	meter[id].cntl.thdCalcF = 1;
-#ifdef __FREERTOS	
-	if (tid_post != 0) xTaskNotify(tid_post, 0x4, eSetBits);
+#ifdef __FREERTOS
+	if (tid_metering != 0) xTaskNotify(tid_metering, 0x10, eSetBits);	/* [통합] post thd */
 #else
-	if (tid_post != 0) os_evt_set(0x4, tid_post);
-#endif	
+	if (tid_metering != 0) os_evt_set(0x10, tid_metering);	/* [통합] post thd */
+#endif
 }
 
 
@@ -1178,11 +1229,11 @@ void readEnergy(uint8_t id)
 {	
 	readPhaseEnergy(id, ade9000[id].energy[ade9000[id].efr]);
 	ade9000[id].efr ^= 1;
-#ifdef __FREERTOS	
-	if (tid_energy != 0) xTaskNotify(tid_energy, 0x1, eSetBits);
+#ifdef __FREERTOS
+	if (tid_metering != 0) xTaskNotify(tid_metering, 0x2, eSetBits);	/* [통합] energy scan */
 #else
-	if (tid_energy != 0) os_evt_set(0x1, tid_energy);
-#endif	
+	if (tid_metering != 0) os_evt_set(0x2, tid_metering);	/* [통합] energy scan */
+#endif
 }
 
 float calcPhaseCurrent(int id, int sel)
@@ -1302,11 +1353,11 @@ void readPhasePower(uint8_t id) {
 	}
 	
 	meter[id].cntl.pwrCalcF = 1;
-#ifdef __FREERTOS	
-	if (tid_post != 0) xTaskNotify(tid_post, 0x2, eSetBits);
+#ifdef __FREERTOS
+	if (tid_metering != 0) xTaskNotify(tid_metering, 0x8, eSetBits);	/* [통합] post pwr */
 #else
-	if (tid_post != 0) os_evt_set(0x2, tid_post);
-#endif	
+	if (tid_metering != 0) os_evt_set(0x8, tid_metering);	/* [통합] post pwr */
+#endif
 }
 
 void calcPower(int id) {
@@ -1555,11 +1606,11 @@ void readPhaseFastRMS(uint8_t id) {
 	if (++ix >= meter[id].cntl.nFastRMS) {
 		ix =0;
 		if (++rmsWin[id].fr >= N_FASTRMS_BUF) rmsWin[id].fr = 0;
-#ifdef __FREERTOS		
-		if (tid_rmslog != 0) xTaskNotify(tid_rmslog, 0x1, eSetBits);
+#ifdef __FREERTOS
+		if (tid_metering != 0) xTaskNotify(tid_metering, 0x1, eSetBits);	/* [통합] RMS capture */
 #else
-		if (tid_rmslog != 0) os_evt_set(0x1, tid_rmslog);
-#endif		
+		if (tid_metering != 0) os_evt_set(0x1, tid_metering);	/* [통합] RMS capture */
+#endif
 	}
 	rmsWin[id].ix = ix;
 }
@@ -1626,11 +1677,11 @@ void readRmsAngle(uint8_t id)
 		ix = 0;
 		ade9000[id].fr ^= 1;
 		meter[id].cntl.rmsCalcF = 1;
-#ifdef __FREERTOS		
-		if (tid_post != 0) xTaskNotify(tid_post, 0x1, eSetBits);
+#ifdef __FREERTOS
+		if (tid_metering != 0) xTaskNotify(tid_metering, 0x4, eSetBits);	/* [통합] post rms */
 #else
-		if (tid_post != 0) os_evt_set(0x1, tid_post);
-#endif		
+		if (tid_metering != 0) os_evt_set(0x4, tid_metering);	/* [통합] post rms */
+#endif
 	}
 	if(++ix2 >= 10)
 		ix2 = 0;
@@ -2032,13 +2083,44 @@ void readWFB_Data(int id)
 	// (page==7)?0:0x400 은 "쓰는 중인 절반"을 읽어 앞/뒤 샘플이 섞이는 torn을 유발한다.
 	// 항상 "현재 쓰는 중이 아닌 안정된 절반"을 읽는다: writing=(page+1)&15, writing이 1st half면 2nd half(0x400) 읽기.
 	sp = ((((page + 1) & 15) < 8) ? 0x80*8 : 0);
+
+#ifdef WV_DIAG
+	/* [추적] 캡처 밀림 계측 (사용자 가설: 웨이브 캡처가 밀려 torn→스파이크?).
+	 *  ① page-lag: IRQ는 정상 page 7/15에서. 처리가 밀리면 page 진행(lag>0)한 상태로 읽음.
+	 *     lag가 크면 '쓰는 중 절반' 침범 위험. (직접: 읽는 순간의 밀림 정도)
+	 *  ② ts-gap: readWFB 진입 간격(ms). 정상=페이지IRQ 16ms. 밀리면 gap>16 (M1 처리 대기 등).
+	 *     '얼마나 밀렸나(ms)'를 직접 측정. M2만 gap/lag 크면 SSP1 공유버스 밀림 가설 확증. */
+	if (id >= 0 && id < 3) {
+		int d7 = (page - 7) & 15, d15 = (page - 15) & 15;
+		int lag = d7 < d15 ? d7 : d15;		/* 정상점(7/15)에서 진행한 페이지수. 0=정상, 1페이지=2ms */
+		uint32_t now = (uint32_t)sysTick64, gap;
+		wvfLagFrm[id]++;
+		if (lag > 0) wvfLagCnt[id]++;
+		if ((uint32_t)lag > wvfLagMax[id]) wvfLagMax[id] = (uint32_t)lag;
+		wvfPageLast[id] = (uint8_t)page;
+		if (wvfTsPrev[id]) {			/* 첫 진입 제외 */
+			gap = now - wvfTsPrev[id];	/* 이번 진입 간격(ms) */
+			if (gap > wvfGapMax[id]) wvfGapMax[id] = gap;
+			if (gap > 24) wvfGapLate[id]++;	/* 정상 16ms + 여유 → 24ms 초과 = 밀림 */
+			wvfGapSum[id] += gap;
+		}
+		wvfTsPrev[id] = now;
+	}
+#endif
 		
 	t1 = sysTick64;
 
+#ifdef WV_DIAG_METER
+	/* [진단 A] 버스트 진입 시각 기록 + 시간겹침 관측(진입 시 타칩 busy면 이 칩 카운터++) */
+	if (id >= 0 && id < 3) {
+		if (wvBusy[(id+1)%3] || wvBusy[(id+2)%3]) wvOverlapCnt[id]++;
+		wvBusy[id] = 1;
+		wvBurstEnter[id] = wvCyc();
+	}
+#endif
+
 	//Board_LED_On(1);	// 2.4ms
-	/* [파형 A수정] 8페이지 readWFB를 통째로 잠가 M1↔M2 인터리브 방지(순차 버스트).
-	   M0=bus0(락 무시), M1/M2=bus1(순차화). 상대 미터는 여기서 대기 → 각자 깨끗한 단일 버스트. */
-	ssp1WfbLock(id == 0 ? 0 : 1);
+	/* W2(26/09/22): SSP1을 Meter12 단일 스레드가 전담하므로 M1↔M2 인터리브가 없다 → ssp1WfbLock 제거. */
 	SSP_SSEL_Mode(id, 1);
 	for (i=0; i<8; i++, sp+=0x80) {
 		pwb = getWave32kBuf(&wQ[id]);
@@ -2083,7 +2165,82 @@ void readWFB_Data(int id)
 		}
 	}
 	SSP_SSEL_Mode(id, 0);
-	ssp1WfbUnlock(id == 0 ? 0 : 1);	/* [파형 A수정] 순차 버스트 락 해제 */
+
+#ifdef WV_DIAG_METER
+	/* [진단 B] 스파이크 검출(despike와 독립, 복구 안 함): 방금 채운 8페이지(128샘플/채널)에서
+	 *   median 편차가 임계 초과하는 샘플을 세어 칩별 누적. 전압(홀수ch) 50K / 전류(짝수ch) 80K.
+	 * [진단 A] 버스트 종료: 소요 us 기록, busy 해제, 주기적(각 칩 500회마다) 요약 로그. */
+	if (id >= 0 && id < 3) {
+		int dbase = wQ[id].fr - 8, dc, dk, dring, dthr, dspk = 0, dmax = 0;
+		int dmaxCh = -1, dmaxA = 0, dmaxB = 0, dmaxD = 0, dmaxK = 0;
+		int dseq[128];	/* 채널 1개분(스택 절약: 6채널 통째 보관 안 함) */
+		if (dbase < 0) dbase += PG_BUF_CNT;
+		for (dc = 0; dc < 6; dc++) {
+			/* [전압+전류 모두] ch 홀수=전압(1/3/5), 짝수=전류(0/2/4). 무부하 전류도 스파이크 관찰.
+			 * 단 미정의/포화값(|b|>1억, 예 -2^31)은 median편차 계산서 제외(로그 오염 방지). */
+			for (dk = 0; dk < 128; dk++) {
+				dring = dbase + (dk >> 4); if (dring >= PG_BUF_CNT) dring -= PG_BUF_CNT;
+				dseq[dk] = wQ[id].wb[dring].buf[6 * (dk & 15) + dc];
+			}
+			dthr = (dc & 1) ? 50000 : 80000;	/* 전압 50K / 전류 80K */
+			for (dk = 1; dk < 127; dk++) {
+				int a = dseq[dk-1], b = dseq[dk], d = dseq[dk+1];
+				int lo, hi, med, dev;
+				if (b > 100000000 || b < -100000000) continue;	/* 포화/미정의값 제외 */
+				lo = a<d?a:d; hi = a<d?d:a; med = b<lo?lo:(b>hi?hi:b); dev = b-med;
+				if (dev < 0) dev = -dev;
+				if (dev > dthr) dspk++;
+				if (dev > dmax) { dmax = dev; dmaxCh = dc; dmaxA = a; dmaxB = b; dmaxD = d; dmaxK = dk; }
+			}
+		}
+		/* 구간(500버스트) 누적: 개수 합 + 최대 편차 max(+채널·3점). 출력 시 리셋. */
+		wvSpikeCnt[id] += (uint32_t)dspk;
+		if ((uint32_t)dmax > wvSpikeMax[id] && dmaxCh >= 0) {
+			int w;
+			wvSpikeMax[id] = (uint32_t)dmax;
+			wvMaxCh[id] = dmaxCh; wvMaxA[id] = dmaxA; wvMaxB[id] = dmaxB; wvMaxD[id] = dmaxD;
+			wvMaxPos[id] = dmaxK;
+			/* max 채널 128샘플을 wb 링에서 다시 읽어 통째 보관(스택 재사용, dchSeq 불요) */
+			for (w = 0; w < 128; w++) {
+				int r = dbase + (w >> 4); if (r >= PG_BUF_CNT) r -= PG_BUF_CNT;
+				wvMaxSeq[id][w] = wQ[id].wb[r].buf[6 * (w & 15) + dmaxCh];
+			}
+		}
+		wvScanCnt[id]++;
+		wvBurstUs[id] = WV_CYC_US(wvCyc() - wvBurstEnter[id]);
+		wvBusy[id] = 0;
+		if ((wvScanCnt[id] % 500u) == 0u) {
+			/* spk/500=직전 500버스트 스파이크 합, max=그 구간 최대편차.
+			 *   정현파 피크 곡률 오검출이면 max ~5만~10만(임계 근처). 진짜 임펄스면 max 수백만~e9.
+			 * CF(peak/rms): 정상 정현파 ≈1.41, >1.5면 파형 스파이크. spikes 오검출이면 CF ~1.41 유지. */
+			/* maxCh: 짝수=전류(IA/IB/IC), 홀수=전압(VA/VB/VC). 무부하면 전류ch 노이즈로 max 클 수 있음.
+			 * a/b/d: max 시점 3점. b만 튀고 a·d 정상이면 단일 임펄스(진짜 스파이크), 셋 다 크면 정상 봉우리. */
+			/* ch 홀수=전압(1/3/5), 짝수=전류(0/2/4). 전압=3칩 공유, 전류=개별.
+			 * 개별인 전류에도 스파이크 나면 크로스토크 아닌 각 칩 자체(차동 불평형 등) 원인. */
+			METERING *pm = &meter[id].meter;
+			printf("[WVDIAG M%d] burst=%uus spk/500=%u max=%u ch%d(%d,%d,%d) ovlp/500=%u "
+			       "CF_U=%.2f/%.2f/%.2f\n",
+			       id, wvBurstUs[id], wvSpikeCnt[id], wvSpikeMax[id],
+			       wvMaxCh[id], wvMaxA[id], wvMaxB[id], wvMaxD[id], wvOverlapCnt[id],
+			       pm->CF_U[0], pm->CF_U[1], pm->CF_U[2]);
+			/* max 스파이크가 난 채널의 128샘플 전체 덤프(16개×8줄, pos=스파이크 위치).
+			 * 한 버스트=반주기(60Hz 8k→약 66샘플/반주기)라 128샘플이면 약 1주기.
+			 * 판독: 스파이크가 정현파 위 한 점만 튀는지, 여러 점인지, 위치가 매번 같은지 등. */
+			{
+				int w;
+				printf("  seq M%d ch%d max%u pos%d (128sample):\n",
+				       id, wvMaxCh[id], wvSpikeMax[id], wvMaxPos[id]);
+				for (w = 0; w < 128; w++) {
+					printf(" %d", wvMaxSeq[id][w]);
+					if ((w & 15) == 15) printf("\n");	/* 16개마다 줄바꿈 */
+				}
+			}
+			wvSpikeCnt[id] = 0;		/* 구간 리셋 */
+			wvSpikeMax[id] = 0;
+			wvOverlapCnt[id] = 0;
+		}
+	}
+#endif /* WV_DIAG_METER */
 
 #if !defined(WV_STAGED) && !defined(WV_NO_DESPIKE)	/* despike. WV_STAGED(진단) 또는 WV_NO_DESPIKE(보정 OFF 방침) 시 우회 */
 	/* [2층 마감] ①위 96워드 읽기 = 근본수정(0xC00 spill 원천 제거). ②아래 despike = 잔여 정리:
@@ -2242,6 +2399,10 @@ void initADE9000(uint8_t id)
 	if (id >= METER_CH_COUNT)
 		return;
 
+#ifdef WV_DIAG_METER
+	if (id == 0) wvDiagInit();	/* [진단] DWT 사이클카운터 1회 초기화 */
+#endif
+
 	/* 재시도 카운터: 첫 호출은 0 유지, 이후 initADE9000 재시도마다 증가 */
 	if (ade_status[id].failCount > 0 || ade_status[id].retryCount > 0)
 		ade_status[id].retryCount++;
@@ -2344,9 +2505,16 @@ void initADE9000(uint8_t id)
 	wtemp = (1<<3) | (1<<2) | (2);
 	write_reg16(id, 0x4b6, &wtemp);
 	
-	runCmd = 1;			
-	write_reg16(id, AD9X_RUN, &runCmd);					
-	printf("RUN DSP ...\n");
+	runCmd = 1;
+#ifdef WV_M0_ONLY
+	/* [진단] 지정 칩만 RUN=1, 나머지 RUN=0(ADC 정지→킥백 제거). 현재: M0만 run.
+	 * 목적: 타칩 stop 시 해당 칩 스파이크 변화 관찰(크로스토크 판별).
+	 *   M0만 run → M0 로그빈도 줄면 타칩 킥백 크로스토크, 안 줄면 M0 자체(비대칭+공유노드).
+	 * online은 chipId 확인(RUN 무관)이라 통과, 계측만 정지. */
+	if (id != 0) runCmd = 0;	/* ← run할 칩 id (M0만=0, M2만=2) */
+#endif
+	write_reg16(id, AD9X_RUN, &runCmd);
+	printf("RUN DSP (id=%d, run=%d) ...\n", id, runCmd);
 	
 	writeGainU(id);
 	writeGainI(id);
@@ -2410,17 +2578,23 @@ void initADE9000(uint8_t id)
 }
 
 void meterIrqSvc(int id) {
-   
-	if (tid_meter[id] != 0) {
-#ifdef __FREERTOS		
+	/* [W3 버스별 스레드] SSP1 공유 칩(M1·M2)은 단일 Meter12_Task(tid_meter[1])가
+	 * 전담한다. 따라서 M1·M2 IRQ(id==1 또는 id==2)는 모두 tid_meter[1]에 단일
+	 * 플래그(0x1)로 통보한다(0x1/0x2 분리 안 함). M0(id==0)는 tid_meter[0] 유지.
+	 * PIN_INT1/2_IRQHandler는 그대로 meterIrqSvc(1)/(2)를 호출하고, 라우팅은 여기서
+	 * 수행한다. */
+	OsTaskId tid = (id == 0) ? tid_meter[0] : tid_meter[1];
+
+	if (tid != 0) {
+#ifdef __FREERTOS
 		BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-      	xTaskNotifyFromISR(tid_meter[id], 0x1, eSetBits, &xHigherPriorityTaskWoken);      
+      	xTaskNotifyFromISR(tid, 0x1, eSetBits, &xHigherPriorityTaskWoken);
       	// Perform a context switch if necessary
       	portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 #else
-		isr_evt_set(0x1, tid_meter[id]);
-#endif		
-	}	
+		isr_evt_set(0x1, tid);
+#endif
+	}
 }
 
 
@@ -2754,159 +2928,13 @@ void checkPqEvent(int id) {
 // long  interruption : 5%(11V), > 60s
 uint64_t ts_irq[2], ts_delta[2];
 
-/* meter_scan_2(M1/M2): CH3 시 M1↔M2 RR + PQM 비트 17/19/21 슬라이스.
- * W1C는 stat0_snap 전체로 클리어 — 미처리 비트를 W1C에서 빼면 ZX/IRQ 연쇄 타임아웃. */
-#define AD9X_PQM_STAT0_SLICED  ((1u << 17) | (1u << 19) | (1u << 21))
-/* M1/M2 ZX notify 대기(ms): RR·슬라이스·SSP1 mutex 여유 (M0는 20ms 유지) */
+/* M1/M2 ZX notify 대기(ms): SSP1 mutex 경합 여유 (M0는 20ms 유지) */
 #define METER_SCAN2_ZX_TMO_MS  50
-static uint8_t m12_pq_slice[METER_CH_COUNT];
-#ifdef CH3
-static uint8_t m12_pq_rr_owner = 1;
-#endif
 
-void meter_scan_2(uint8_t id)
-{
-	uint32_t chipId, flag, zxtMask;
-	uint16_t version, runCmd=0, wtemp, fr;
-	uint32_t rms, stat0, stat0_snap, stat1, vlevel, dtemp, i, cnt=0, mask;
-	void *msg;
-	uint64_t tick64, zxTo;
-
-	if (id >= METER_CH_COUNT)
-		return;
-
-#ifdef __FREERTOS		
-	uint32_t ulNotificationValue;
-	if (xTaskNotifyWait(0, 0xFFFFFFFF, &ulNotificationValue, pdMS_TO_TICKS(METER_SCAN2_ZX_TMO_MS)) == 0)
-#else
-	if (os_evt_wait_and(0x1, METER_SCAN2_ZX_TMO_MS) == OS_R_TMO) 
-#endif	
-	{
-		printf(">>> ZX timeout [%d]...\n", id);
-		 // wave sampling를 다시시작한다
- //		if (id == 0)
- //			w8kQ.fr = w8kQ.re = 0;
- //		else
- //			w32kQ.fr = w32kQ.re = 0;
-		// online(정상 계측) 중엔 파형버퍼 유지 — SSP1 경합성 타임아웃으로 인한 불연속 방지
-		if (!meter[id].cntl.online)
-			wQ[id].fr = wQ[id].re = 0;
-	}	
-// 	ts_delta[id] = sysTick64 - ts_irq[id];
-//	ts_irq[id] = sysTick64;
- 
-	tick64 = sysTick64;
-	read_reg32(id, AD9X_STATUS0, &stat0);
-	read_reg32(id, AD9X_STATUS1, &stat1);
-	stat0_snap = stat0;
-
-	/* STATUS0 즉시 ack — 처리 후 클리어 시 스캔 중 새로 뜬 WFB page-full(bit17)까지
-	   지워져 그 절반을 건너뛰어 파형 seam 발생. 핸들러는 로컬 stat0 스냅샷으로 처리하므로 안전. */
-	write_reg32(id, AD9X_STATUS0, &stat0_snap);
-
-	// Energy READY, period = 1s
-	if (stat0 & (1<<0)) {
-		readEnergy(id);
-	}
-	/* WFB(파형)은 연속성이 필요하므로 RR/슬라이스와 무관하게 매 page-full(bit17)마다 읽는다(M0와 동일).
-	 * 이전에는 RR+슬라이스로 ~1/6만 읽어 M1/M2 파형이 깨졌음. */
-	if (stat0 & (1u << 17)) {
-#ifndef WV_NO_M12_WFB
-		readWFB_Data(id);
-#else
-		{ static uint32_t skc = 0; if ((skc++ % 300) == 0) printf("[WFB skip M%d]\n", id); }	/* [진단] M1/M2 파형캡처 skip(M0 커플링 격리) */
-#endif
-	}
-	/* 나머지 PQM(period/RMS/THD): CH3 M1↔M2 RR + 19/21 슬라이스로 SSP1 부하 분산 */
-#if defined(CH3) && (!defined(WV_STAGED) || defined(WV_EN_M2))	/* 단계검증: M2 있을 때만 RR */
-	if (id != m12_pq_rr_owner) {
-		/* 상대 미터 슬롯: PQM SPI 생략 */
-	} else
-#endif
-	{
-		unsigned sl = (unsigned)m12_pq_slice[id] % 2u;
-
-		if ((stat0 & (1u << 19)) && sl == 0u) {
-			readPeriod(id);
-			readPhaseFastRMS(id);
-			checkPqEvent(id);
-		}
-		if ((stat0 & (1u << 21)) && sl == 1u) {
-			readPhaseTHD(id);
-		}
-
-		m12_pq_slice[id] = (uint8_t)(((unsigned)m12_pq_slice[id] + 1u) % 2u);
-
-#if defined(CH3) && (!defined(WV_STAGED) || defined(WV_EN_M2))
-		m12_pq_rr_owner = (uint8_t)((id == 1) ? 2 : 1);
-#endif
-	}
-	
-	// RMS 10/12 cycle
-	if (stat0 & (1<<20)) {
-		readRmsAngle(id);
-	}
-	// PWR_READY (1s 단위로 읽는다 (PWR_TIME : 1s)
-	if (stat0 & (1<<18)) {
-		readPhasePower(id);
-	}	
-	
-	if (stat0 & (1<<25)) {
-		readTemp(id);
-	}
-	// STATUS0는 위에서 읽은 직후 이미 ack(조기 클리어)함 — 스캔 중 뜬 새 이벤트 보존
-	
-	//
-	//--------------------------------------------------------------------------------
-	// Wiring Mode별로 다르게 처리해야 한다, 현재 3P4W 만 처리 함.
-	// ZxToV(a,b,c)
-	if (stat1 & (1<<9)) {
-		if (meter[id].cntl.zxMonCnt == 0) {					
-				//printf("ZX DETECT ...\n");
-		}
-		meter[id].cntl.zxMonCnt++;
-	}
-		
-	if (stat1 & (1<<6)) {
-		if (meter[id].cntl.zxMonCnt != 0) {
-			//printf("ZXTOUT ...\n");
-		}
-		meter[id].cntl.zxMonCnt = 0;
-	}
-
-
-	if (meter[id].cntl.rstEvtList == 0x1234) {
-		meter[id].cntl.rstEvtList = 0;
-		clearEventList(id);		
-	}
-	if (meter[id].cntl.rstIticList == 0x1234) {
-		meter[id].cntl.rstIticList = 0;
-		clearIticListData(id);
-	}
-	
-	// clear status0 & status1	
-	write_reg32(id, AD9X_STATUS1, &stat1);	
-
-	if (meter[id].cntl.wCalF[0]) {		
-		if (meter[id].cntl.wCalF[1] == 1) {			
-			writeGainU(id);
-		}
-		else if (meter[id].cntl.wCalF[1] == 2) {
-			writeGainI(id);
-		}
-		else if (meter[id].cntl.wCalF[1] == 3) {
-			writeGainW(id);
-		}
-		else if (meter[id].cntl.wCalF[1] == 4) {			
-			writeGainPh(id);
-		}			
-		else if (meter[id].cntl.wCalF[1] == 5) {
-			writeGainIn(id);
-		}
-		meter[id].cntl.wCalF[0] = meter[id].cntl.wCalF[1] = 0;
-	}
-}
-
+/* meter_scan(id): M0/M1/M2 통합 스캔.
+ * - ZX 타임아웃: M0=20ms, M1/M2=METER_SCAN2_ZX_TMO_MS(50ms)
+ * - LED 토글: M0에서만(Energy READY 시)
+ * - PQM(period/RMS/THD)은 RR/슬라이스 없이 매 IRQ마다 조건 없이 처리(연속성 유지). */
 void meter_scan(uint8_t id)
 {
 	uint32_t chipId, flag, zxtMask;
@@ -2914,6 +2942,11 @@ void meter_scan(uint8_t id)
 	uint32_t rms, stat0, stat1, vlevel, dtemp, i, cnt=0, mask;
 	void *msg;
 	uint64_t tick64, zxTo;
+	/* ZX notify 대기: M0=20ms, M1/M2=50ms(SSP1 공유 경합 여유). C89: 선언은 블록 선두에 */
+	uint32_t zxTmoMs;
+#ifdef __FREERTOS
+	uint32_t ulNotificationValue;
+#endif
 
 	if (id >= METER_CH_COUNT)
 		return;
@@ -2921,14 +2954,14 @@ void meter_scan(uint8_t id)
 	//PG_FULL intr: 기본 발생 주기
 	// 8K: (Max 8ms) -> Hi/Low 적용시 4ms
 	// 32: (Max 32ms) -> Hi/Low 적용시 16ms
-#ifdef __FREERTOS		
-   uint32_t ulNotificationValue;
-	if (xTaskNotifyWait(0, 0xFFFFFFFF, &ulNotificationValue, pdMS_TO_TICKS(20)) == 0)
+	zxTmoMs = (id == 0) ? 20u : METER_SCAN2_ZX_TMO_MS;
+#ifdef __FREERTOS
+	if (xTaskNotifyWait(0, 0xFFFFFFFF, &ulNotificationValue, pdMS_TO_TICKS(zxTmoMs)) == 0)
 #else
-	if (os_evt_wait_and(0x1, 20) == OS_R_TMO) 
-#endif	
+	if (os_evt_wait_and(0x1, zxTmoMs) == OS_R_TMO)
+#endif
 	{
-		printf(">>> ZX timeout ...\n");
+		printf(">>> ZX timeout [%d]...\n", id);
 		// wave sampling를 다시시작한다
 //		if (id == 0)
 //			w8kQ.fr = w8kQ.re = 0;
@@ -2937,15 +2970,15 @@ void meter_scan(uint8_t id)
 		// online(정상 계측) 중엔 파형버퍼 유지 — 경합성 타임아웃으로 인한 불연속 방지
 		if (!meter[id].cntl.online)
 			wQ[id].fr = wQ[id].re = 0;
-	}	
+	}
 //	ts_delta[id] = sysTick64 - ts_irq[id];
 //	ts_irq[id] = sysTick64;
- 
+
 	tick64 = sysTick64;
 //	printf("@@@ meter_scan tick, %d\n", tick64);
 
 	// read IRQ stat0 & stat1
-	read_reg32(id, AD9X_STATUS0, &stat0);	
+	read_reg32(id, AD9X_STATUS0, &stat0);
 //	read_reg32(id, 0x423, &dtemp);
 //	if (dtemp != stat0) {
 //		printf("@@@ Invalid Read Data(32), %x, %x\n", stat0, dtemp);
@@ -2964,16 +2997,26 @@ void meter_scan(uint8_t id)
 	// Energy READY, period = 1s
 	if (stat0 & (1<<0)) {
 		readEnergy(id);
-		Board_LED_Toggle(LED_STS);
+		if (id == 0)
+			Board_LED_Toggle(LED_STS);
 	}
 	// capture Wave Form
+	/* WFB(파형)은 연속성이 필요하므로 매 page-full(bit17)마다 읽는다(M0/M1/M2 동일). */
 	if (stat0 & (1<<17)) {
 		//(id ==0) ? readWFB_Data(id) : readWFB8k_Data(id);
+#ifndef WV_NO_M12_WFB
 		readWFB_Data(id);
+#else
+		/* [진단] M1/M2 파형캡처 skip(M0 커플링 격리) — 정식운전(미정의)엔 무관 */
+		if (id == 0)
+			readWFB_Data(id);
+		else
+			{ static uint32_t skc = 0; if ((skc++ % 300) == 0) printf("[WFB skip M%d]\n", id); }
+#endif
 	}
-	
+
 //	Board_LED_On(3);	// 실행시간: 15us
-	
+
 	// RMS 1/2 cycle
 	if (stat0 & (1<<19)) {
 		readPeriod(id);

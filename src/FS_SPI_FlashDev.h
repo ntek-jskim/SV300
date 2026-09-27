@@ -7,8 +7,10 @@
 #ifndef FS_SPI_FLASHDEV_H
 #define FS_SPI_FLASHDEV_H
 
-#ifdef HWV2
-/* MX25L12835F 128Mbit(16MB) — 64KB x 256 */
+/* [동적 대응] 섹터맵은 항상 최대칩(MX25L12835F 16MB, 64KB×256)으로 고정.
+ *  실제 소용량 칩(예 MX25L1636E 2MB)은 부팅 시 SPIFI devSize로 판별하여
+ *  FS_SPIFI_FlashPrg.c의 콜백(ProgramPage/EraseSector)이 초과영역을 차단 → 재빌드 없이 자동 대응.
+ *  (RL-FlashFS는 런타임 섹터맵 교체 불가 → 컴파일은 최대칩 고정, 런타임은 콜백 가드로 축소.) */
 #define SPI_FLASH_DEVICE                                                           \
 	DSB(0x10000, 0x000000), DSB(0x10000, 0x010000), DSB(0x10000, 0x020000), DSB(0x10000, 0x030000), \
 	DSB(0x10000, 0x040000), DSB(0x10000, 0x050000), DSB(0x10000, 0x060000), DSB(0x10000, 0x070000), \
@@ -76,21 +78,5 @@
 	DSB(0x10000, 0xFC0000), DSB(0x10000, 0xFD0000), DSB(0x10000, 0xFE0000), DSB(0x10000, 0xFF0000)
 
 #define SF_NSECT    256
-
-#else	/* 기본: MX25L1636E 16Mbit(2MB) — 64KB x 32 */
-
-#define SPI_FLASH_DEVICE                                                           \
-	DSB(0x10000, 0x000000), DSB(0x10000, 0x010000), DSB(0x10000, 0x020000), DSB(0x10000, 0x030000), \
-	DSB(0x10000, 0x040000), DSB(0x10000, 0x050000), DSB(0x10000, 0x060000), DSB(0x10000, 0x070000), \
-	DSB(0x10000, 0x080000), DSB(0x10000, 0x090000), DSB(0x10000, 0x0A0000), DSB(0x10000, 0x0B0000), \
-	DSB(0x10000, 0x0C0000), DSB(0x10000, 0x0D0000), DSB(0x10000, 0x0E0000), DSB(0x10000, 0x0F0000), \
-	DSB(0x10000, 0x100000), DSB(0x10000, 0x110000), DSB(0x10000, 0x120000), DSB(0x10000, 0x130000), \
-	DSB(0x10000, 0x140000), DSB(0x10000, 0x150000), DSB(0x10000, 0x160000), DSB(0x10000, 0x170000), \
-	DSB(0x10000, 0x180000), DSB(0x10000, 0x190000), DSB(0x10000, 0x1A0000), DSB(0x10000, 0x1B0000), \
-	DSB(0x10000, 0x1C0000), DSB(0x10000, 0x1D0000), DSB(0x10000, 0x1E0000), DSB(0x10000, 0x1F0000)
-
-#define SF_NSECT    32
-
-#endif	/* HWV2 */
 
 #endif /* FS_SPI_FLASHDEV_H */

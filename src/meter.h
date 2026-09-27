@@ -8,6 +8,7 @@
    ▶ 정식 운전 = WV_STAGED OFF(전체 태스크 자동 ON). 재진단 시 WV_STAGED만 주석해제하면 아래 블록 재활성. */
 //#define	WV_STAGED		/* [정식운전] OFF. 재진단 시 이 줄만 주석해제 */
 #define	WV_NO_DESPIKE		/* [보정 OFF] despike 우회 유지(사용자 방침). despike 켜려면 이 줄 주석 처리 */
+#define	WV_DIAG			/* [진단] 스파이크 검출·로그. FFT_Task(LLOW)에서 검출→Meter 오염 없음. 정식운전 시 주석 */
 
 /* ↓ WV_STAGED 진단모드 전용 — 정식운전(WV_STAGED OFF)에선 전부 무효. 재진단 시 필요한 것만 주석해제. */
 //#define	WV_EN_RMSLOG
@@ -31,15 +32,41 @@
 // Qual Test 
 #undef	_QUAL_TEST
 
-#define	SYS_DIR	"\\system"
-#define	LOG_PQ_DIR "\\log_pq"
-#define	LOG_TREND_DIR	"\\log_trend"
-#define	LOG_EGY_DIR "\\log_egy"		/* HWV2: 일단위 에너지 아카이브 */
-#define	TRG_PQ_DIR "\\trg_pq"
-#define	TRG_TRANSIENT_DIR "\\trg_tvc"
-#define	FW_DIR "\\firmware"
-#define	ALARM_DIR	"\\alarm"
-#define	EVENT_DIR "\\event"
+/* [FS 경로 분기] RL-FlashFS의 SPI NOR(SF0, S:)는 EFS라 서브디렉터리 미지원(플랫).
+ *  NOSDMEM(=NOR/EFS, SV300_3CH 타겟)에선 폴더 대신 파일명 접두어 + 구분자 '_' 를 쓴다.
+ *  NOSDMEM 미정의(MMC/FAT)에선 기존 서브폴더 경로 그대로 유지.
+ *  접두어는 EFS 파일명 길이(31자) 여유 위해 짧게. */
+#ifdef NOSDMEM   /* NOR EFS 플랫: 폴더→접두어, 구분자 '_' */
+  #define	SYS_DIR           "sys"
+  #define	LOG_PQ_DIR        "pq"
+  #define	LOG_TREND_DIR     "trd"
+  #define	LOG_EGY_DIR       "egy"
+  #define	TRG_PQ_DIR        "tpq"
+  #define	TRG_TRANSIENT_DIR "ttvc"
+  #define	FW_DIR            "fw"
+  #define	ALARM_DIR         "alm"
+  #define	EVENT_DIR         "evt"
+  #define	DIRSEP            "_"
+#else            /* MMC FAT: 서브폴더 */
+  #define	SYS_DIR           "\\system"
+  #define	LOG_PQ_DIR        "\\log_pq"
+  #define	LOG_TREND_DIR     "\\log_trend"
+  #define	LOG_EGY_DIR       "\\log_egy"		/* HWV2: 일단위 에너지 아카이브 */
+  #define	TRG_PQ_DIR        "\\trg_pq"
+  #define	TRG_TRANSIENT_DIR "\\trg_tvc"
+  #define	FW_DIR            "\\firmware"
+  #define	ALARM_DIR         "\\alarm"
+  #define	EVENT_DIR         "\\event"
+  #define	DIRSEP            "\\"
+#endif
+
+/* [PQ 캡처 파일 접두어] 폴더/접두어 매크로 + 구분자 조합(NOR 플랫="tpq_", FAT="\trg_pq\").
+ *  파형(LF)=W계열, RMS=D계열. FS_task 로테이션 분기·마스크에서 하드코딩 대신 사용한다.
+ *  strncmp 길이는 sizeof-1로 산출하여 접두어 길이 변화(대문자→플랫)에 안전. */
+#define	TRG_PQ_W_PREFIX		TRG_PQ_DIR DIRSEP "W"		/* W계열(파형 캡처) 그룹 접두어 */
+#define	TRG_PQ_D_PREFIX		TRG_PQ_DIR DIRSEP "D"		/* D계열(RMS 캡처) 그룹 접두어 */
+#define	TRG_PQ_W_MASK		TRG_PQ_DIR DIRSEP "W*.d"		/* W계열 ffind 마스크 */
+#define	TRG_PQ_D_MASK		TRG_PQ_DIR DIRSEP "D*.d"		/* D계열 ffind 마스크 */
 
 #define	ALOG_VER "0"
 #define	ELOG_VER "0"
@@ -47,42 +74,47 @@
 #define	CONCAT(x, y) x""y
 #define	CONCAT3(x, y, z) x""y""z
 #define	CONCAT4(x, y, z, a) x""y""z""a
+#define	CONCAT5(x, y, z, a, b) x""y""z""a""b
 
-#define	TEMP_FILE	"\\temp.$$$"
+#ifdef NOSDMEM
+  #define	TEMP_FILE	"_temp.$$$"		/* 앞 구분자 '_' 포함: CONCAT(XXX_DIR, TEMP_FILE)=<접두어>_temp.$$$ */
+#else
+  #define	TEMP_FILE	"\\temp.$$$"
+#endif
 
-#define	QW_TEMP_FILE	CONCAT4(LOG_PQ_DIR, "\\qw", QUAL_VER, "_temp.d")
-#define	QW_LAST_FILE	CONCAT4(LOG_PQ_DIR, "\\qw", QUAL_VER, "_last.d")
-#define	QL_TEMP_FILE	CONCAT4(LOG_PQ_DIR, "\\ql", QUAL_VER, "_temp.d")
+#define	QW_TEMP_FILE	CONCAT5(LOG_PQ_DIR, DIRSEP, "qw", QUAL_VER, "_temp.d")
+#define	QW_LAST_FILE	CONCAT5(LOG_PQ_DIR, DIRSEP, "qw", QUAL_VER, "_last.d")
+#define	QL_TEMP_FILE	CONCAT5(LOG_PQ_DIR, DIRSEP, "ql", QUAL_VER, "_temp.d")
 
-#define	QW_FILE CONCAT4(LOG_PQ_DIR, "\\qw", QUAL_VER, "_")
-#define	QL_FILE CONCAT4(LOG_PQ_DIR, "\\ql", QUAL_VER, "_")
+#define	QW_FILE CONCAT5(LOG_PQ_DIR, DIRSEP, "qw", QUAL_VER, "_")
+#define	QL_FILE CONCAT5(LOG_PQ_DIR, DIRSEP, "ql", QUAL_VER, "_")
 
-#define	SETTING_FILE	CONCAT(SYS_DIR, "\\settings.d")
-#define DEMAND_FILE CONCAT(SYS_DIR, "\\demand.d")
-#define DEMAND_FILE1 CONCAT(SYS_DIR, "\\demand.d1")
-#define DEMAND_FILE2 CONCAT(SYS_DIR, "\\demand.d2")
-#define	ENERGY_FILE	CONCAT(SYS_DIR, "\\energy.d")
+#define	SETTING_FILE	CONCAT3(SYS_DIR, DIRSEP, "settings.d")
+#define DEMAND_FILE CONCAT3(SYS_DIR, DIRSEP, "demand.d")
+#define DEMAND_FILE1 CONCAT3(SYS_DIR, DIRSEP, "demand.d1")
+#define DEMAND_FILE2 CONCAT3(SYS_DIR, DIRSEP, "demand.d2")
+#define	ENERGY_FILE	CONCAT3(SYS_DIR, DIRSEP, "energy.d")
 
-#define	ENERGY_LOG_FILE0	CONCAT(SYS_DIR, "\\egy_log0.d")
-#define	ENERGY_LOG_FILE1	CONCAT(SYS_DIR, "\\egy_log1.d")
-#define	EGY_ARCH_FILE		CONCAT(LOG_EGY_DIR, "\\egy")	/* HWV2: egy<YYYYMM>_m{id}.d 월단위 append (egy_log*와 접두어 통일) */
+#define	ENERGY_LOG_FILE0	CONCAT3(SYS_DIR, DIRSEP, "egy_log0.d")
+#define	ENERGY_LOG_FILE1	CONCAT3(SYS_DIR, DIRSEP, "egy_log1.d")
+#define	EGY_ARCH_FILE		CONCAT3(LOG_EGY_DIR, DIRSEP, "egy")	/* HWV2: egy<YYYYMM>_m{id}.d 월단위 append (egy_log*와 접두어 통일) */
 
-#define	MAXMIN_FILE	CONCAT(SYS_DIR, "\\maxmin.d")
-#define	ALARM_ST_FILE CONCAT(SYS_DIR, "\\astat.d")
-#define	ALARM_ST_FILE1 CONCAT(SYS_DIR, "\\astat.d1")
-#define	ALARM_ST_FILE2 CONCAT(SYS_DIR, "\\astat.d2")
-#define	ALARM_DEF_FILE CONCAT(SYS_DIR, "\\almdef.d")	/* 알람설정(almSet) 영속 파일(3채널) */
-#define	PQE_DEF_FILE CONCAT(SYS_DIR, "\\pqedef.d")	/* PQE/Transient/Waveform/Trend 설정 영속(3채널, SETTINGS 미포함분) */
+#define	MAXMIN_FILE	CONCAT3(SYS_DIR, DIRSEP, "maxmin.d")
+#define	ALARM_ST_FILE CONCAT3(SYS_DIR, DIRSEP, "astat.d")
+#define	ALARM_ST_FILE1 CONCAT3(SYS_DIR, DIRSEP, "astat.d1")
+#define	ALARM_ST_FILE2 CONCAT3(SYS_DIR, DIRSEP, "astat.d2")
+#define	ALARM_DEF_FILE CONCAT3(SYS_DIR, DIRSEP, "almdef.d")	/* 알람설정(almSet) 영속 파일(3채널) */
+#define	PQE_DEF_FILE CONCAT3(SYS_DIR, DIRSEP, "pqedef.d")	/* PQE/Transient/Waveform/Trend 설정 영속(3채널, SETTINGS 미포함분) */
 int storePqeDef(void);
 int loadPqeDef(void);
-#define ALARM_LIST_FILE CONCAT4(ALARM_DIR, "\\alog", ALOG_VER, "_")
-#define EVENT_LIST_FILE CONCAT4(EVENT_DIR, "\\elog", ELOG_VER, "_")
-#define TREND_FILE CONCAT(LOG_TREND_DIR, "\\trd")
+#define ALARM_LIST_FILE CONCAT5(ALARM_DIR, DIRSEP, "alog", ALOG_VER, "_")
+#define EVENT_LIST_FILE CONCAT5(EVENT_DIR, DIRSEP, "elog", ELOG_VER, "_")
+#define TREND_FILE CONCAT3(LOG_TREND_DIR, DIRSEP, "trd")
 
-#define	EVENT_FIFO_FILE	CONCAT4(EVENT_DIR, "\\elog", ALOG_VER, "_fifo.d")
-#define	ALARM_FIFO_FILE	CONCAT4(ALARM_DIR, "\\alog", ALOG_VER, "_fifo.d")
+#define	EVENT_FIFO_FILE	CONCAT5(EVENT_DIR, DIRSEP, "elog", ALOG_VER, "_fifo.d")
+#define	ALARM_FIFO_FILE	CONCAT5(ALARM_DIR, DIRSEP, "alog", ALOG_VER, "_fifo.d")
 /* 손상 FIFO 1회 정리: 이 파일이 없을 때만 ALARM_FIFO_FILE 삭제 후 생성(재실행 방지). 다시 purge하려면 센티넬 삭제 */
-#define	ALARM_FIFO_PURGE_SENTINEL	CONCAT(ALARM_DIR, "\\alog0_fifo_purged_once.d")
+#define	ALARM_FIFO_PURGE_SENTINEL	CONCAT3(ALARM_DIR, DIRSEP, "alog0_fifo_purged_once.d")
 
 // Alarm/Event 보존 건수 제한
 #define	ALARM_LOG_CAP	1024
@@ -2204,9 +2236,11 @@ typedef struct {
 #define Tid_Shell		1 
 #define	Tid_FFT			2 
 #define	Tid_Wave		3 
-#define	Tid_Rmslog		4
-#define	Tid_PostScan	5 
-#define Tid_Energy		6
+#define	Tid_Rmslog		4	/* [통합] RMSLog/PostScan/Energy → Metering_Task 통합 후 미사용(롤백대비 유지) */
+#define	Tid_PostScan	5
+#define Tid_Energy		6	/* [통합] Metering_Task 통합 후 미사용(롤백대비 유지) */
+/* [통합] 단일 Metering_Task(HIGH) wdt 인덱스 — PostScan(5) 슬롯 재사용(wdtTbl[32] 여유) */
+#define	Tid_Metering	Tid_PostScan
 #define	Tid_Meter		7
 #define	Tid_Meter2		8
 #ifdef CH3

@@ -138,12 +138,18 @@
 
 /*--------------------------- os_idle_demon ---------------------------------*/
 
+/* [CPU 부하율] idle demon free-running 카운터. tickHandler(1초)가 증분을 스냅샷해
+ *  '무부하 시 최대 idle/s'(g_idleMax, 쓰레드 생성 전 캘리브레이션) 대비 현재 idle/s 로 부하율 산출.
+ *  volatile: idle(백그라운드)이 증가, tickHandler/shell 이 읽음. U32=RTL.h 타입(stdint 미포함). */
+volatile U32 g_idleCnt = 0;
+
 __task void os_idle_demon (void) {
   /* The idle demon is a system task, running when no other task is ready */
   /* to run. The 'os_xxx' function calls are not allowed from this task.  */
 
   for (;;) {
   /* HERE: include optional user code to be executed when no task runs.*/
+    g_idleCnt++;			/* [CPU 부하율] 아무 태스크도 안 돌 때만 증가 */
   }
 }
 

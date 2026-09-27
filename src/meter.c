@@ -466,7 +466,7 @@ int initSettings(int id)
 
 		strcpy((char *)db.comm.host, "SV300");
 		db.comm.tcpPort = 502;
-		db.comm.dhcpEn = 0;
+		db.comm.dhcpEn = 1;
 
 		db.etc.backlightTime = 1;
 		db.etc.brightness = 2;
@@ -1559,10 +1559,10 @@ int wavePreCaptureLF(int id, WAVE_WINDOW_BLK *pblk, WAVE_LF_CAP *pCap, PQ_EVT_Q 
 	}
 
 	/* FS_Task 쓰기(헤더 + dense 데이터, 가변 크기) */
-	if (pqE->eType == E_SAG)        { strcpy(path, "\\Trg_PQ\\"); strcat(path, "WSAG_"); }
-	else if (pqE->eType == E_SWELL) { strcpy(path, "\\Trg_PQ\\"); strcat(path, "WSWL_"); }
-	else if (pqE->eType == E_OC)    { strcpy(path, "\\Trg_PQ\\"); strcat(path, "WOC_"); }
-	else if (pqE->eType == E_sINTR || pqE->eType == E_lINTR) { strcpy(path, "\\Trg_PQ\\"); strcat(path, "WINT_"); }
+	if (pqE->eType == E_SAG)        { strcpy(path, TRG_PQ_DIR DIRSEP "WSAG_"); }
+	else if (pqE->eType == E_SWELL) { strcpy(path, TRG_PQ_DIR DIRSEP "WSWL_"); }
+	else if (pqE->eType == E_OC)    { strcpy(path, TRG_PQ_DIR DIRSEP "WOC_"); }
+	else if (pqE->eType == E_sINTR || pqE->eType == E_lINTR) { strcpy(path, TRG_PQ_DIR DIRSEP "WINT_"); }
 	else return 0;
 
 	getTrgFileName(path, pqE->Ts, fsmsg.fname);
@@ -1867,10 +1867,10 @@ int TransientEvent(int id, WAVE_WINDOW *pww, int bx, TS_CNTL *ptrg, int mode) {
 	if (ptrg->capF) {
 		if (id < 0 || id >= METER_CH_COUNT)
 			return res;
-		if (mode == 0) 
-			strcpy(path, "\\Trg_TVC\\WTV_");		
+		if (mode == 0)
+			strcpy(path, TRG_TRANSIENT_DIR DIRSEP "WTV_");
 		else
-			strcpy(path, "\\Trg_TVC\\WTC_");		
+			strcpy(path, TRG_TRANSIENT_DIR DIRSEP "WTC_");
 		getTrgFileName(path, ptrg->ts1, fsmsg.fname);		
 		strcpy(fsmsg.mode, "wb");
 		fsmsg.pbuf = &wbCap[id];
@@ -2794,22 +2794,42 @@ void Test_task(void *arg)
 
 /* [캡처 로테이션] mask에 맞고 접두어 집합(fx)에 속하는 파일이 keepN 초과면
  *  시간상 가장 오래된 1개 삭제. FS_task가 fsFileLock 보유 중에 호출한다.
- *  파일명 '_' 뒤 YYYYMMDDT... 문자열 비교로 시간순 정렬(WSAG_/WOC_ 접두어 길이차 무시). */
+ *  ffind/info.name 은 순수 파일명(경로 없음). FAT="WSAG_20260920T...d",
+ *  NOR 플랫="tpq_WSAG_20260920T...d"(폴더 접두어 포함). 아래 헬퍼는 두 형태 모두 처리:
+ *  - capNameInGroup: TRG_PQ_DIR DIRSEP 접두어가 있으면 건너뛴 뒤 fx(WSAG_ 등)와 비교.
+ *  - capTsPart: 첫 숫자('2026...')부터 반환 → 접두어 길이·글자수 변화와 무관하게 순수
+ *    타임스탬프(YYYYMMDDT...)만 비교(접두어는 모두 영문·숫자없음이라 안전). */
 static const char *const CAP_W_FX[] = { "WSAG_", "WSWL_", "WOC_", "WINT_" };	/* 파형(LF) 캡처(WINT=인터럽션) */
 static const char *const CAP_D_FX[] = { "DSAG_", "DSWL_", "DOC_", "DINT_" };	/* RMS 캡처(DINT=인터럽션) */
 
+#define	TRG_PQ_PREFIX_STR	TRG_PQ_DIR DIRSEP	/* 폴더/접두어 부분(플랫="tpq_", FAT="\trg_pq\") */
+
+/* info.name 에서 폴더 접두어(TRG_PQ_DIR DIRSEP)를 건너뛴 그룹명 시작 포인터.
+ *  FAT는 접두어가 없으므로 nm 그대로, 플랫은 "tpq_" 뒤(WSAG_...)를 가리킨다. */
+static const char *capStripDir(const char *nm) {
+	size_t pfx = sizeof(TRG_PQ_PREFIX_STR) - 1;
+	if (pfx > 0 && strncmp(nm, TRG_PQ_PREFIX_STR, pfx) == 0)
+		return nm + pfx;
+	return nm;
+}
+
 static int capNameInGroup(const char *nm, const char *const *fx, int nfx) {
+	const char *g = capStripDir(nm);
 	int i;
 	for (i = 0; i < nfx; i++) {
-		if (strncmp(nm, fx[i], strlen(fx[i])) == 0)
+		if (strncmp(g, fx[i], strlen(fx[i])) == 0)
 			return 1;
 	}
 	return 0;
 }
 
+/* 순수 타임스탬프(첫 숫자부터) 반환 — 그룹 접두어(WSAG_ 등, 영문) 길이차 무시하고
+ *  YYYYMMDDT...로 시간순 정렬. 숫자가 없으면(비정상) 이름 전체 반환. */
 static const char *capTsPart(const char *nm) {
-	const char *p = strchr(nm, '_');
-	return p ? (p + 1) : nm;
+	const char *p = nm;
+	while (*p && (*p < '0' || *p > '9'))
+		p++;
+	return *p ? p : nm;
 }
 
 static void trimCaptureGroup(const char *mask, const char *dir,
@@ -2830,7 +2850,12 @@ static void trimCaptureGroup(const char *mask, const char *dir,
 		}
 	}
 	if (have && count > keepN) {
-		sprintf(path, "%s\\%s", dir, oldest);
+		/* 플랫(NOR): info.name 이 이미 폴더 접두어 포함 전체 파일명 → 그대로 삭제.
+		 *  FAT: info.name 은 폴더 없는 순수 파일명 → dir + DIRSEP 를 앞에 붙여 전체 경로 구성. */
+		if (strncmp(oldest, TRG_PQ_PREFIX_STR, sizeof(TRG_PQ_PREFIX_STR) - 1) == 0)
+			strcpy(path, oldest);
+		else
+			sprintf(path, "%s" DIRSEP "%s", dir, oldest);
 #ifdef USE_CMSIS_RTOS2
 		res = fdelete(path, NULL);
 #else
@@ -2915,7 +2940,11 @@ void FS_task(void *arg)
 #endif
 	
 	_enableTaskMonitor(Tid_Fs, 50);
-	
+
+	/* [태스크 통합] 옛 Trend_Task 시작부의 헤더검증을 FS_task 로 흡수(1회).
+	 *  기존 트렌드 파일의 header 와 현재 trend 설정을 비교해 다르면 rename 한다. */
+	checkTrendHeader();
+
 	t3 = sysTick32;
 	while (meter[id].cntl.runFlag) {
 #ifdef __FREERTOS		
@@ -2983,12 +3012,13 @@ void FS_task(void *arg)
 						(strncmp(pmsg->fname, EVENT_LIST_FILE, strlen(EVENT_LIST_FILE)) == 0)) {
 						trimFixedRecordFileFs(pmsg->fname, sizeof(EVENT_LOG), EVENT_LOG_CAP);
 					}
-					/* [로테이션] PQ 캡처: W계열/D계열 각각 최근 CAP_KEEP_EVENTS 이벤트만 유지 */
-					else if (strncmp(pmsg->fname, "\\Trg_PQ\\W", 9) == 0) {
-						trimCaptureGroup("\\Trg_PQ\\W*.d", "\\Trg_PQ", CAP_W_FX, 4, CAP_KEEP_EVENTS);
+					/* [로테이션] PQ 캡처: W계열/D계열 각각 최근 CAP_KEEP_EVENTS 이벤트만 유지.
+					 *  하드코딩 9 제거 — 접두어 길이(플랫 "tpq_W"=5 vs FAT "\trg_pq\W"=9)에 맞춰 sizeof-1 사용. */
+					else if (strncmp(pmsg->fname, TRG_PQ_W_PREFIX, sizeof(TRG_PQ_W_PREFIX) - 1) == 0) {
+						trimCaptureGroup(TRG_PQ_W_MASK, TRG_PQ_DIR, CAP_W_FX, 4, CAP_KEEP_EVENTS);
 					}
-					else if (strncmp(pmsg->fname, "\\Trg_PQ\\D", 9) == 0) {
-						trimCaptureGroup("\\Trg_PQ\\D*.d", "\\Trg_PQ", CAP_D_FX, 4, CAP_KEEP_EVENTS);
+					else if (strncmp(pmsg->fname, TRG_PQ_D_PREFIX, sizeof(TRG_PQ_D_PREFIX) - 1) == 0) {
+						trimCaptureGroup(TRG_PQ_D_MASK, TRG_PQ_DIR, CAP_D_FX, 4, CAP_KEEP_EVENTS);
 					}
 				}
 				t2 = sysTick64;			
@@ -3048,8 +3078,13 @@ void FS_task(void *arg)
 			pcntl->runFlag = meter[id].cntl.runFlag = 0;
 			printf("[[reboot: external WDT reset ...]]\n");
 		}
+
+		/* [태스크 통합] 옛 Trend_Task 루프 본문 흡수. tm_min 이 바뀐 뒤 최대 100ms(폴링주기)
+		 *  안에 1분 1회만 실제 동작하고, 같은 분이면 즉시 return 이라 매 루프 호출해도 무해.
+		 *  fsQ 처리와 같은 태스크라 flash write 가 순차 실행되어 경합이 없다. */
+		trendTick();
 	}
-	
+
 	// wait forever
 	printf("FS_task stopped ...\n");
 #ifdef __FREERTOS	
@@ -3165,20 +3200,16 @@ void RMSCapture(int id, int ix) {
 #else	
 		// FS_Task에 쓰기 요청한다 
 		if (eType == E_SAG) {
-			strcpy(path, "\\Trg_PQ\\");
-			strcat(path, "DSAG_");		
+			strcpy(path, TRG_PQ_DIR DIRSEP "DSAG_");
 		}
 		else if (eType == E_SWELL) {
-			strcpy(path, "\\Trg_PQ\\");
-			strcat(path, "DSWL_");		
+			strcpy(path, TRG_PQ_DIR DIRSEP "DSWL_");
 		}
 		else if (eType == E_OC) {
-			strcpy(path, "\\Trg_PQ\\");
-			strcat(path, "DOC_");
+			strcpy(path, TRG_PQ_DIR DIRSEP "DOC_");
 		}
 		else if (eType == E_sINTR || eType == E_lINTR) {
-			strcpy(path, "\\Trg_PQ\\");
-			strcat(path, "DINT_");
+			strcpy(path, TRG_PQ_DIR DIRSEP "DINT_");
 		}
 		else
 			return;
@@ -3417,7 +3448,7 @@ void storeDemand() {
 	fsFileLock();
 	for (id = 0; id < METER_CH_COUNT; id++) {
 		if (id == 0) sprintf(path, "%s", DEMAND_FILE);
-		else sprintf(path, "%s\\demand.d%d", SYS_DIR, id);
+		else sprintf(path, "%s" DIRSEP "demand.d%d", SYS_DIR, id);
 		fp = fopen(path, "wb");
 		if (fp == NULL) {
 			continue;
@@ -3458,7 +3489,7 @@ void loadDemand() {
 		int valid = 0;
 
 		if (id == 0) sprintf(path, "%s", DEMAND_FILE);
-		else sprintf(path, "%s\\demand.d%d", SYS_DIR, id);
+		else sprintf(path, "%s" DIRSEP "demand.d%d", SYS_DIR, id);
 		fp = fopen(path, "rb");
 		if (fp != NULL) {
 			/* 두 블록 모두 정상 read + magic 일치해야 유효 (storeDemand는 파일 crc를
@@ -3737,7 +3768,7 @@ static void getEnergyLogFileName(int id, int sel, char *path)
 	if (id == 0) {
 		strcpy(path, (sel == 0) ? ENERGY_LOG_FILE0 : ENERGY_LOG_FILE1);
 	} else {
-		sprintf(path, "%s\\egy_log%d_m%d.d", SYS_DIR, sel, id);
+		sprintf(path, "%s" DIRSEP "egy_log%d_m%d.d", SYS_DIR, sel, id);
 	}
 }
 
@@ -3847,7 +3878,7 @@ void storeEnergyLogFs(int id, int sel, ENERGY_LOG *pEgyLog)
 /* ===== 15분 슬롯 에너지 로그(egy15) — 별도 전역, 월아카이브 소스 ===== */
 static void getEnergyLog15FileName(int id, int sel, char *path)
 {
-	sprintf(path, "%s\\egy15_%d_m%d.d", SYS_DIR, sel, id);
+	sprintf(path, "%s" DIRSEP "egy15_%d_m%d.d", SYS_DIR, sel, id);
 }
 
 static void initEnergyLog15Blob(void *blob)
@@ -4071,30 +4102,37 @@ uint32_t logCutoffKeyMonths(int months) {
 /* HWV2: 완료된 하루의 에너지 로그를 월단위 파일(\log_egy\egy<YYYYMM>_m<id>.d)로 아카이브.
  *  예산(FLASH_LOG_BUDGET_EGY) 초과 시 가장 오래된(날짜 최소) 파일부터 삭제 → 약 35일 보존. */
 static unsigned long egyArchNameKey(const char *name) {
-	unsigned long key = 0;
+	unsigned long key;
+	const char *p;
 	int i;
 	/* 아카이브만 인식: "egy" + YYYYMM(6자리) + "_" 형식만. 같은 접두어의 다른 파일
 	 * (egy_log*, egy15_<sel>_m<id>.d 등)은 0 반환 → 트림·예산집계에서 제외.
 	 * ※평면 EFS라 \system\egy15_* 도 \log_egy\egy*.d glob에 걸린다. 6자리를 정확히
 	 *   요구하지 않으면 "egy15_0_m1.d"가 key=15로 파싱돼 최古 아카이브로 오인·삭제된다
-	 *   (15분 에너지 로그 유실). Quality.c parseDateKey8 이 8자리를 정확히 요구하는 것과 동일 원칙. */
-	if (name[0] != 'e' || name[1] != 'g' || name[2] != 'y')
-		return 0;
-	for (i = 3; i <= 8; i++) {
-		if (name[i] < '0' || name[i] > '9')
-			return 0;		/* YYYYMM 6자리 미만 → 아카이브 아님 */
-		key = key * 10 + (unsigned long)(name[i] - '0');
+	 *   (15분 에너지 로그 유실). Quality.c parseDateKey8 이 8자리를 정확히 요구하는 것과 동일 원칙.
+	 * ※NOSDMEM(NOR 플랫): EGY_ARCH_FILE = LOG_EGY_DIR("egy") + '_' + "egy" 이므로 파일명이
+	 *   "egy_egy202609_m1.d"처럼 디렉터리접두어 "egy_"가 앞에 붙는다. 따라서 이름 선두 고정이 아니라
+	 *   "egy"+YYYYMM(6)+"_" 토큰을 탐색한다(FAT은 info.name="egy202609_m1.d"라 선두에서 즉시 매칭). */
+	for (p = name; p[0] != 0; p++) {
+		if (p[0] != 'e' || p[1] != 'g' || p[2] != 'y')
+			continue;
+		key = 0;
+		for (i = 3; i <= 8; i++) {
+			if (p[i] < '0' || p[i] > '9')
+				break;		/* YYYYMM 6자리 미만 → 이 "egy" 토큰은 아카이브 아님 */
+			key = key * 10 + (unsigned long)(p[i] - '0');
+		}
+		if (i == 9 && p[9] == '_')
+			return key;		/* egy<YYYYMM>_m<id>.d 형식 확인 */
 	}
-	if (name[9] != '_')
-		return 0;			/* egy<YYYYMM>_m<id>.d 형식만 */
-	return key;
+	return 0;
 }
 
 static int findOldestEgyArch(char *oldestName, uint32_t *totalSize) {
 	FINFO info;
 	int found = 0;
 	unsigned long oldestKey = 0xFFFFFFFFUL;
-	char mask[] = CONCAT(LOG_EGY_DIR, "\\egy*.d");
+	char mask[] = CONCAT3(LOG_EGY_DIR, DIRSEP, "egy*.d");
 
 	*totalSize = 0;
 	info.fileID = 0;
@@ -4120,7 +4158,7 @@ static void trimEgyArchBudget(void) {
 	while (findOldestEgyArch(oldestName, &total)) {
 		if (total <= FLASH_LOG_BUDGET_EGY)
 			break;
-		sprintf(path, "%s\\%s", LOG_EGY_DIR, oldestName);
+		sprintf(path, "%s" DIRSEP "%s", LOG_EGY_DIR, oldestName);
 #ifdef USE_CMSIS_RTOS2
 		res = fdelete(path, NULL);
 #else
@@ -4144,7 +4182,7 @@ static void trimEgyArchAge(uint32_t cutoffKey) {
 		return;
 	if (egyArchNameKey(oldestName) >= cutoffKey)
 		return;		/* 최古도 보존기간 내 → 삭제 없음 */
-	sprintf(path, "%s\\%s", LOG_EGY_DIR, oldestName);
+	sprintf(path, "%s" DIRSEP "%s", LOG_EGY_DIR, oldestName);
 #ifdef USE_CMSIS_RTOS2
 	res = fdelete(path, NULL);
 #else
@@ -4528,7 +4566,7 @@ static ITIC_LOG  _iticlog[METER_CH_COUNT];
 
 static void getEventFifoFileName(int id, char *path) {
 	if (id > 0) {
-		sprintf(path, "%s\\elog%s_fifo_m%d.d", EVENT_DIR, ALOG_VER, id);
+		sprintf(path, "%s" DIRSEP "elog%s_fifo_m%d.d", EVENT_DIR, ALOG_VER, id);
 	}
 	else {
 		strcpy(path, EVENT_FIFO_FILE);
@@ -4791,11 +4829,12 @@ void clearIticListData(int id)
 //
 //
 
-void Energy_Task(void *arg) 
+#if 0	/* [통합] Energy_Task는 Metering_Task로 통합됨(롤백 대비 보존). */
+void Energy_Task(void *arg)
 {
    uint32_t notificationValue;
    int	id=0;
- 
+
 	// demand/energy time stamp 초기화 — 전 활성채널 (초기화가 id=0에만 적용되어 m1/m2가
 	//  조기 롤오버로 부분 아카이브를 만들던 버그 수정). 날짜/시각은 Task 시작 시 확실히
 	//  유효한 meter[0].cntl.tod 를 공유해 사용(전 채널 동일 클럭, app_main에서 m0→전채널 복사).
@@ -4866,11 +4905,240 @@ void Energy_Task(void *arg)
 	}
 	
 	printf("Energy_Task stopped ...\n");
-#ifdef __FREERTOS	
+#ifdef __FREERTOS
 	vTaskSuspend(NULL);
 #else
 	os_evt_wait_and(0xffff, 0xffff);
-#endif	
+#endif
+}
+#endif	/* #if 0 Energy_Task(통합됨) */
+
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * [통합] Metering_Task(HIGH) — 기존 RMSLog_Task + PostScan_Task + Energy_Task 통합.
+ *   RTX(CMSIS-RTOS v1) 경로만 살림(__FREERTOS 미정의). notify는 tid_metering 단일:
+ *     0x01 RMS capture, 0x02 energy scan, 0x04 post rms, 0x08 post pwr, 0x10 post thd.
+ *   os_evt_wait_or(0x1F, 100)로 5비트 OR + 100ms 타임아웃(폴링성 rmslog/post 유지).
+ *   처리는 수신 이벤트 비트가 아닌 기존 내부 플래그/조건으로 판별(torn-notify 안전).
+ *   한 루프 안 순서: (1)RMS 캡처+게이트 → (2)PostScan calc/alarm/maxmin/publish
+ *                    → (3)energy scan → (4)copySimpleMap(500ms). publish는 calc 후.
+ * ───────────────────────────────────────────────────────────────────────────── */
+/* [통합] Metering_Task가 아래(파일 뒤쪽)에 정의된 alarm/sag/swell 헬퍼를 호출하므로
+ *  암시적 선언(implicit decl) 충돌 방지를 위한 전방 선언. 정의는 기존 위치 그대로. */
+void resetAlarm(int id);
+int  checkSagCond(int id);
+int  checkSwellCond(int id);
+
+void Metering_Task(void *arg)
+{
+	int id = 0;
+	int bF[METER_CH_COUNT];		/* [RMSLog] CH별 Buffer Ready 래치 */
+	int smpDiv = 0;				/* [PostScan] SMP_MAP 500ms 분주 */
+
+	/* ── [Energy] 시작 초기화: demand/energy/egy15 타임스탬프 전 활성채널 + 부팅 롤오버 아카이브 ──
+	 *  (id=0에만 적용되어 m1/m2가 조기 롤오버로 부분 아카이브를 만들던 버그 수정 유지) */
+	for (id = 0; id < ACTIVE_METER_CH_COUNT; id++) {
+		// demand time stamp 초기화
+		meter[id].cntl.dmdTs = sysTickDemand;
+		meter[id].cntl.dmdTs15m = sysTick15m;
+		//meter[id].cntl.dmdTs1H = meter[id].cntl.tod.tm_hour;
+		meter[id].cntl.dmdStartTs = sysTick1s;
+		meter[id].cntl.dmdStartTs15m = sysTick1s;
+
+		// energy log
+		meter[id].cntl.egyTs1H = meter[0].cntl.tod.tm_hour;
+		meter[id].cntl.egyTs1D = meter[0].cntl.tod.tm_mday;
+		meter[id].cntl.egyStartTs1D = sysTick1s;
+
+		// 15분 슬롯 에너지(egy15) — 기준선/추적자 초기화(Ereg32는 loadEnergy에서 유효)
+		egy15[id].lastQ = meter[0].cntl.tod.tm_hour * 4 + meter[0].cntl.tod.tm_min / 15;
+		egy15[id].lastQstore = egy15[id].lastQ;	/* 부팅 직후 불필요 저장 방지(다음 슬롯 +2분에 첫 저장) */
+		egy15[id].dayMday = meter[0].cntl.tod.tm_mday;
+		egy15[id].dayStartTick = sysTick1s;
+		egy15[id].pendArch = 0;
+		egy15[id].buf[0] = EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KWH,   EGY_SIGN_IMPORT);
+		egy15[id].buf[1] = EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KVARH, EGY_SIGN_IMPORT);
+		egy15[id].buf[2] = EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KVARH, EGY_SIGN_EXPORT);
+		egy15[id].buf[3] = EGY_TOTAL(meter[id].egy.Ereg32[0], EGY_MODE_KVAH,  EGY_SIGN_IMPORT);
+		// 부팅 시 로드된 today가 지난 날짜면 → 아카이브 후 리셋(과거일이 오늘 슬롯과 섞이지 않게)
+		if (egy15[id].log[0].ts) {
+			struct tm lt0;
+			uint32_t t0 = egy15[id].log[0].ts;
+			uLocalTime(&t0, &lt0);
+			if (lt0.tm_mday != meter[0].cntl.tod.tm_mday || lt0.tm_mon != meter[0].cntl.tod.tm_mon) {
+				memcpy(&egy15[id].log[1], &egy15[id].log[0], sizeof(ENERGY_LOG15));
+#ifdef HWV2
+				archiveEnergyLog15Day(id, &egy15[id].log[1]);
+				storeEnergyLog15Fs(id, 1);
+#endif
+				memset(&egy15[id].log[0], 0, sizeof(ENERGY_LOG15));
+				egy15[id].log[0].magic = 0x1234abcd;
+				egy15[id].log[0].ts = sysTick1s;
+				storeEnergyLog15Fs(id, 0);
+			}
+		}
+	}
+	id = 0;
+
+	memset(bF, 0, sizeof(bF));
+	_enableTaskMonitor(Tid_Metering, 50);
+
+	while (pcntl->runFlag) {
+		int ledAlmCount = 0;
+
+#ifdef __FREERTOS
+		uint32_t notificationValue;
+		xTaskNotifyWait(0, 0xFFFFFFFF, &notificationValue, pdMS_TO_TICKS(100));
+#else
+		os_evt_wait_or(0x1F, 100);	/* 5비트 OR + 100ms 타임아웃(폴링 주기 보장) */
+#endif
+#ifdef WV_QCAP
+		while (g_wfbQuiet) osDelayTask(5);	/* 조용창: 파형 캡처 중엔 양보 */
+#endif
+		meter[0].cntl.wdtTbl[Tid_Metering].count++;
+
+		/* ── (1) [RMSLog 몫] fast-RMS 캡처 + Buffer Ready 판정 ── */
+		for (id = 0; id < ACTIVE_METER_CH_COUNT; id++) {
+			if (rmsWin[id].fr != rmsWin[id].re) {
+				if (bF[id]) {
+					RMSCapture(id, rmsWin[id].re);
+					if (++rmsWin[id].re >= N_FASTRMS_BUF)
+						rmsWin[id].re = 0;
+				}
+				else {
+					/* 10 프레임 이상 쌓이면 해당 CH 캡처 시작 */
+					if (rmsWin[id].fr > 10) {
+						bF[id] = 1;
+						printf("[Buffer Ready M%d]\n", id);
+					}
+				}
+			}
+		}
+		/* 통신 게이트: 활성 CH 전부 Buffer Ready([Buffer Ready M#], fr>10=bF) 시 허용.
+		   [A안] 부분고장(1칩 실패)도 web/Modbus로 진단 가능하도록 10초 타임아웃 폴백:
+		   전 칩 준비 or 10초 경과 시 통신 허용(실패 칩은 0/무효 보고). 정상=즉시, 부분고장=10초 후. */
+		if (!g_meterReady) {
+			static uint32_t rdyWait = 0;	/* 100ms 단위 대기 카운트 */
+			int _rdy = 1;
+			for (id = 0; id < ACTIVE_METER_CH_COUNT; id++)
+				if (!bF[id]) { _rdy = 0; break; }
+			if (_rdy || ++rdyWait >= 100) {	/* 전 칩 준비 or 100×100ms=10초 타임아웃 */
+				g_meterReady = 1;
+				if (_rdy) {
+					printf("[Meter Ready - web/modbus enabled]\n");
+				} else {
+					int msk = 0, k;
+					for (k = 0; k < ACTIVE_METER_CH_COUNT; k++) if (bF[k]) msk |= (1 << k);
+					printf("[Meter Ready - TIMEOUT 10s, partial bF mask=0x%x]\n", msk);
+				}
+			}
+		}
+
+		/* ── (2) [PostScan 몫] rms/pwr/thd calc + alarm + max/min + snapshot ── */
+		for (id = 0; id < ACTIVE_METER_CH_COUNT; id++) {
+			MAXMIN *pmmId = &meter[id].maxmin;
+
+			// 1초 단위로 호출 (5번의 10/12 cycle 마다 호출된다)
+			if (meter[id].cntl.rmsCalcF) {
+				meter[id].cntl.rmsCalcF = 0;
+				calcRmsAngle(id);
+
+	#ifdef _CHIP_SAG_SWELL
+				if (!meter[id].cntl.sagEn) {
+					if (checkSagCond(id)) {
+						printf("Enable Sag ...\n");
+						meter[id].cntl.sagEn = 1;
+					}
+				}
+				if (!meter[id].cntl.swellEn) {
+					if (checkSwellCond(id)) {
+						printf("Enable Swell ...\n");
+						meter[id].cntl.swellEn = 1;
+					}
+				}
+	#endif
+				meter[id].meter.utc = sysTick1s;
+			}
+
+			// 1s
+			if (meter[id].cntl.pwrCalcF) {
+				meter[id].cntl.pwrCalcF = 0;
+				calcPower(id);
+
+				if (meter[id].cntl.rstAlmList == 0x1234) {
+					meter[id].cntl.rstAlmList = 0;
+					resetAlarm(id);
+					storeAlarmStatus(id);
+					deleteAlarmLog(id);
+//					Board_LED_Off(1);				// alarm off
+				}
+#if 1
+				else if (alarmProc(id) > 0) {
+					meter[id].alarm.updateTs = sysTick32;
+					storeAlarmStatus(id);
+				}
+#endif
+				ledAlmCount += meter[id].alarm.almCount;
+			}
+
+			// 1s
+			if (meter[id].cntl.thdCalcF) {
+				meter[id].cntl.thdCalcF = 0;
+				calcTHD(id);
+			}
+
+			// demand 지운다
+			if (meter[id].cntl.rstMaxMin == 0x1234) {
+				meter[id].cntl.rstMaxMin = 0;
+
+				memset(pmmId, 0, sizeof(MAXMIN));
+				pmmId->rstTime = sysTick1s;
+				storeMaxMin();
+			}
+
+			if (pmmId->fr != pmmId->re) {
+				pmmId->ts = sysTick1s;
+				pmmId->re = pmmId->fr;
+				mmDirty = 1;			/* RAM 극값 갱신됨 → flash 저장 대기(즉시 재기록 금지) */
+			}
+			/* [FAT처닝수정] max/min flash 저장은 MM_SAVE_SEC(15분)마다만. 노이즈로 미세 새 극값이
+			   생길 때마다 storeMaxMin(fopen"wb"=파일 통째 재기록)하면 0x100000(FAT)/0x110000 상시
+			   소거 → M0 파형/THD 교란. RAM 추적은 계속, 리셋(rstMaxMin)은 위에서 즉시 저장 유지. */
+			if (mmDirty && (uint32_t)(sysTick1s - mmLastSave) >= MM_SAVE_SEC) {
+				mmDirty = 0;
+				mmLastSave = sysTick1s;
+				storeMaxMin();
+			}
+
+			/* 계측(METERING) 스냅샷 발행: 이 채널의 계산이 끝난 직후 원자적으로 교체.
+			   Modbus 읽기가 라이브 meter[].meter 대신 완결 스냅샷을 보게 하여
+			   품질 flash write 블로킹 중에도 torn read(garbage) 방지. */
+			publishMeterSnap(id);
+		}
+		Board_LED_Set(LED_STS, ledAlmCount);
+
+		/* ── (3) [Energy 몫] energy scan ── */
+		for (id = 0; id < ACTIVE_METER_CH_COUNT; id++) {
+			if (ade9000[id].efr != ade9000[id].ere) {
+				energy_scan(id, ade9000[id].energy[ade9000[id].ere], &egyNvr);
+				ade9000[id].ere ^= 1;
+			}
+		}
+
+		/* ── (4) SMP_MAP(#1,2,3 Simple) 갱신: 100ms 웨이크 × 5 = 500ms ── */
+		if (++smpDiv >= 5) {
+			smpDiv = 0;
+			copySimpleMap();
+		}
+	}
+
+	// reboot가 set되면
+	printf("Metering_Task stopped ...\n");
+#ifdef __FREERTOS
+	vTaskSuspend(NULL);
+#else
+	os_evt_wait_and(0xffff, 0xffff);
+#endif
 }
 
 
@@ -4895,6 +5163,7 @@ void Dummy_Task(void *arg)
 }
 #endif
 
+#if 0	/* [통합] RMSLog_Task는 Metering_Task로 통합됨(롤백 대비 보존). */
 void RMSLog_Task(void *arg)
 {
 	int id, bF[METER_CH_COUNT];
@@ -4952,6 +5221,7 @@ void RMSLog_Task(void *arg)
       osDelayTask(100);
 	}
 }
+#endif	/* #if 0 RMSLog_Task(통합됨) */
 
 
 // 전압이 sag 시작 조건(모든 전압이 sag limit 보다 커야한다)
@@ -5049,6 +5319,7 @@ int checkMaxMinItv(int id) {
 	}	
 }
 
+#if 0	/* [통합] PostScan_Task는 Metering_Task로 통합됨(롤백 대비 보존). */
 void PostScan_Task(void *arg)
 {
 	int id=0;
@@ -5159,14 +5430,15 @@ void PostScan_Task(void *arg)
 		}
 	}
 	
-	// reboot가 set되면 
+	// reboot가 set되면
 	printf("PostScan_Task stopped ...\n");
-#ifdef __FREERTOS	
+#ifdef __FREERTOS
 	vTaskSuspend(NULL);
 #else
 	os_evt_wait_and(0xffff, 0xffff);
-#endif	
+#endif
 }
+#endif	/* #if 0 PostScan_Task(통합됨) */
 
 
 #if 0		// 채널 분리 이전 ITIC FIFO 보조 함수 보관 블록(현재 경로에서 호출되지 않음)
@@ -5277,69 +5549,82 @@ void Meter0_Task(void *param)
 	}
 }
 
-void Meter1_Task(void *param) {
-	int	id=1;
-//	
-	printf("[task Meter#1 started ...\n");
-//	
-	memset(&wQ[id], 0, sizeof(wQ[id]));
-		
-	wbFFT8k[id].fr = wbFFT8k[id].re = 0;
+/* ─────────────────────────────────────────────────────────────────────────
+ * Meter12_Task — SSP1 공유 칩(M1, M2)을 단일 스레드로 통합(W3, 버스별 스레드)
+ *
+ * [설계] M0=SSP0 전용(Meter0_Task 유지), M1·M2=SSP1 공유 → 한 스레드에서만
+ *        SSP1을 접근하게 하여 W2의 락 제거를 안전하게 만든다. 3칩/2버스.
+ *
+ * [스캔 방식] 옵션 A: 매 루프에서 meter_scan(1) 다음 meter_scan(2)를 순차 호출.
+ *
+ * [IRQ/wait 판단] meter_scan(id)는 함수 진입부에서 자체적으로 ZX notify(플래그
+ *   0x1)를 대기한다(ade9000.c meter_scan: os_evt_wait_and(0x1, 50ms) /
+ *   xTaskNotifyWait). meterIrqSvc는 M1·M2 IRQ 모두 tid_meter[1](=이 태스크)에
+ *   0x1 단일 플래그로 통보한다(0x1/0x2 분리 안 함).
+ *     · 정상 흐름: meter_scan(1)이 0x1 하나를 소비→M1 처리, 이어 meter_scan(2)가
+ *       다음 0x1을 대기→M2 처리. 두 칩 page-full이 각 ~16ms 주기이므로 두 wait가
+ *       자연히 각자 다음 IRQ에 걸려 순번대로 소비된다.
+ *     · 이벤트 플래그는 카운팅이 아니라 비트마스크다. 두 IRQ가 태스크 busy 구간에
+ *       거의 동시에 떠 0x1이 하나로 합쳐지면, meter_scan(1)이 그 하나를 소비하고
+ *       meter_scan(2)는 다음 IRQ(어느 칩이든) 혹은 50ms 타임아웃까지 대기한다.
+ *       이때 meter_scan(2)는 최신 STATUS0/1을 읽어 처리하므로 데이터 정합은 유지되고
+ *       (칩별 STATUS는 각자 하드웨어가 래치), 최대 지연은 타임아웃(50ms)으로 유계다.
+ *       online 중 파형버퍼는 유지(meter_scan 내부에서 timeout 시 online이면 버퍼
+ *       보존)되므로 seam도 생기지 않는다.
+ *   → 가장 안전한 형태는 meter_scan 내부 wait를 그대로 두고 이 루프는 단순히
+ *     meter_scan(1); meter_scan(2); 를 연속 호출하는 것. 별도 wait를 이 루프에
+ *     추가하면 이중 대기가 되어 오히려 지연/어긋남을 유발하므로 넣지 않는다.
+ *
+ * [태스크 모니터] 하나만 등록(Tid_Meter2 사용). Tid_Meter3는 이제 놀게 된다
+ *   (M2 전용 태스크가 사라졌으므로 WDT 슬롯 미사용).
+ * ───────────────────────────────────────────────────────────────────────── */
+void Meter12_Task(void *param) {
+	printf("[task Meter#12 started ...\n");
 
-	initADE9000(id);
-
+	/* ── M1(id=1) 초기화 ── */
+	memset(&wQ[1], 0, sizeof(wQ[1]));
+	wbFFT8k[1].fr = wbFFT8k[1].re = 0;
+	initADE9000(1);
 	/* SPI 실패 시 5초 간격으로 재시도 */
-	while (!getAdeStatus(id)->online) {
+	while (!getAdeStatus(1)->online) {
 		printf("[M%d] ADE9000 offline - retry %d in 5s (fail=%d, chipId=0x%08x)\n",
-		       id, getAdeStatus(id)->retryCount,
-		       getAdeStatus(id)->failCount, getAdeStatus(id)->chipId);
+		       1, getAdeStatus(1)->retryCount,
+		       getAdeStatus(1)->failCount, getAdeStatus(1)->chipId);
 		osDelayTask(5000);
-		initADE9000(id);
+		initADE9000(1);
 	}
-
-	ExtINTR_Init(id, 2, 0);	// PINT1, EINT2
-	ExtINTR_Enable(id);	// PINT1
-	_enableTaskMonitor(Tid_Meter2, 50);
-//	
-	while (1) {
-		meter[0].cntl.wdtTbl[Tid_Meter2].count++;
-		meter_scan_2(id);
-//		//os_dly_wait(1000);
-	}
-}
+	ExtINTR_Init(1, 2, 0);	// PINT1, EINT2
+	ExtINTR_Enable(1);		// PINT1
 
 #ifdef CH3
-void Meter2_Task(void *param) {
-	int	id=2;
-//	
-	printf("[task Meter#2 started ...\n");
-//	
-	memset(&wQ[id], 0, sizeof(wQ[id]));
-		
-	wbFFT8k[id].fr = wbFFT8k[id].re = 0;
-
-	initADE9000(id);
-
+	/* ── M2(id=2) 초기화 ── */
+	memset(&wQ[2], 0, sizeof(wQ[2]));
+	wbFFT8k[2].fr = wbFFT8k[2].re = 0;
+	initADE9000(2);
 	/* SPI 실패 시 5초 간격으로 재시도 */
-	while (!getAdeStatus(id)->online) {
+	while (!getAdeStatus(2)->online) {
 		printf("[M%d] ADE9000 offline - retry %d in 5s (fail=%d, chipId=0x%08x)\n",
-		       id, getAdeStatus(id)->retryCount,
-		       getAdeStatus(id)->failCount, getAdeStatus(id)->chipId);
+		       2, getAdeStatus(2)->retryCount,
+		       getAdeStatus(2)->failCount, getAdeStatus(2)->chipId);
 		osDelayTask(5000);
-		initADE9000(id);
+		initADE9000(2);
 	}
-
 	/* CH3: M2 IRQ0 -> EINT3, PINT2 채널 사용 */
-	ExtINTR_Init(id, 3, 0);	// PINT2, EINT3
-	ExtINTR_Enable(id);		// PINT2
-	_enableTaskMonitor(Tid_Meter3, 50);
-//	
+	ExtINTR_Init(2, 3, 0);	// PINT2, EINT3
+	ExtINTR_Enable(2);		// PINT2
+#endif
+
+	/* WDT 모니터는 하나만 등록. Tid_Meter3는 미사용(놀게 됨). */
+	_enableTaskMonitor(Tid_Meter2, 50);
+
 	while (1) {
-		meter[0].cntl.wdtTbl[Tid_Meter3].count++;
-		meter_scan_2(id);
+		meter[0].cntl.wdtTbl[Tid_Meter2].count++;
+		meter_scan(1);			/* M1: 내부에서 0x1 대기 → 처리 */
+#ifdef CH3
+		meter_scan(2);			/* M2: 내부에서 다음 0x1 대기 → 처리 */
+#endif
 	}
 }
-#endif
 
 
 int checkPassword(uint8_t *pwd) {

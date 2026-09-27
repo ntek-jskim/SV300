@@ -25,6 +25,10 @@ int deleteAlarmLog(int id);
 void buildTrendSetting();
 int loadEventLog(void);
 int alarmFsDispatch(const FS_MSG *pmsg);
+/* [태스크 통합] Trend_Task → FS_task 흡수. FS_task 시작부 checkTrendHeader() 1회 +
+ *  루프마다 trendTick()(1분 1회 실제 동작, 그 외 즉시 return) 호출용 */
+void checkTrendHeader(void);
+void trendTick(void);
 
 #endif
 

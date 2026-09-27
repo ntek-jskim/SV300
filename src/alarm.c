@@ -33,7 +33,7 @@ static void getAlarmFifoFileName(int id, char *path) {
 	if (id == 0) {
 		strcpy(path, ALARM_FIFO_FILE);
 	} else {
-		sprintf(path, "%s\\alog%s_fifo_m%d.d", ALARM_DIR, ALOG_VER, id);
+		sprintf(path, "%s" DIRSEP "alog%s_fifo_m%d.d", ALARM_DIR, ALOG_VER, id);
 	}
 }
 
@@ -1256,7 +1256,7 @@ static int findOldestTrendLog(char *oldestName, uint32_t *oldestSize, uint32_t *
 #else
 	FINFO info;
 #endif
-	char mask[] = CONCAT(LOG_TREND_DIR, "\\trd*.d");
+	char mask[] = CONCAT3(LOG_TREND_DIR, DIRSEP, "trd*.d");
 	int currentKey, lastMonthKey;
 	int found = 0, oldestKey = 999999;
 
@@ -1298,7 +1298,7 @@ static void trimTrendLogBudget(void) {
 			break;
 		}
 
-		sprintf(path, "%s\\%s", LOG_TREND_DIR, oldestName);
+		sprintf(path, "%s" DIRSEP "%s", LOG_TREND_DIR, oldestName);
 #ifdef USE_CMSIS_RTOS2
 		res = fdelete(path, NULL);
 #else
@@ -1436,15 +1436,79 @@ void checkTrendHeader() {
 	fsFileUnlock();
 }
 
-void Trend_Task(void *arg)		
+/* [태스크 통합] 옛 Trend_Task 루프의 "tm_min 이 바뀌었을 때 1회 실행되던 본문"을
+ *  이 함수로 추출한다. FS_task(meter.c, LOW)가 100ms 폴링마다 이 함수를 호출한다.
+ *  느린 flash write(appendTrendRcrd)를 FS_task 한 곳으로 모아 실시간 캡처와의
+ *  간섭 창구를 단일화하고 태스크 1개를 줄이는 것이 목적이다.
+ *  static lastmin 으로 1분 1회 실행을 보장하고, tm_min 이 안 바뀌었으면 즉시 return
+ *  하므로 매 루프 호출해도 무해하다. */
+void trendTick(void)
 {
-	int mid, i, itv;	
+	static int lastmin = -1;		/* 최초 진입 시 tm_min 과 반드시 다르게 → 첫 분에 즉시 1회 */
+	int mid, i, itv;
+
+	/* 1분 경과 감지: 같은 분이면 아무것도 하지 않는다(옛 osDelayTask(1000);continue 대체) */
+	if (lastmin == pcntl->tod.tm_min)
+		return;
+
+	lastmin = pcntl->tod.tm_min;
+
+	// trend data 생성 (meter CH × trend group)
+	for (mid = 0; mid < ACTIVE_METER_CH_COUNT; mid++) {
+		for (i=0; i<4; i++) {
+			if (meter[mid].trend[i].active == 0) {
+				trdOnMin[mid][i] = 0;	/* 꺼져 있으면 리셋 → 다시 켤 때 허용시간 전액 재부여 */
+				continue;
+			}
+
+			/* 경계는 배열 크기(TRD_TIME_N)여야 한다. 기존 '>= 8'은 trdTime[8]=60(60분)을
+			 * 배제해 60분 선택 시 실제로는 10분으로 기록됐다(쓰기량 6배).
+			 * 범위 밖 값의 폴백도 가장 느린 60분이 안전하다. */
+			itv = (meter[mid].trend[i].interval >= TRD_TIME_N) ? 60 : trdTime[meter[mid].trend[i].interval];
+
+			if (itv < TREND_FAST_ITV_MIN) {
+				if (++trdOnMin[mid][i] > TREND_AUTO_OFF_MIN) {
+					meter[mid].trend[i].active = 0;
+					trdOnMin[mid][i] = 0;
+					printf("Trend auto-off: m=%d g=%d itv=%dmin (limit %dmin)\n",
+					       mid, i, itv, TREND_AUTO_OFF_MIN);
+					continue;
+				}
+			}
+			else {
+				trdOnMin[mid][i] = 0;
+			}
+
+			if ((pcntl->tod.tm_min % itv) == 0) {
+				getTrendData(mid, i, meter[mid].trend[i].chan);
+			}
+		}
+	}
+
+	// 저장 기간 최대 1년
+	for (mid = 0; mid < ACTIVE_METER_CH_COUNT; mid++) {
+		for (i=0; i<4; i++) {
+			if (row[mid][i].valid) {
+				appendTrendRcrd(mid, i);
+				row[mid][i].valid = 0;
+			}
+		}
+	}
+}
+
+/* [태스크 통합] Trend_Task 는 FS_task(meter.c)로 흡수되어 더 이상 생성하지 않는다.
+ *  롤백 대비를 위해 원본을 #if 0 으로 보존한다. 로직은 위 trendTick()/checkTrendHeader()
+ *  로 이동했으며 FS_task 가 시작부에서 checkTrendHeader() 1회, 루프마다 trendTick() 를 호출한다. */
+#if 0
+void Trend_Task(void *arg)
+{
+	int mid, i, itv;
 	int lastsec=pcntl->tod.tm_sec;
 	int lastmin=pcntl->tod.tm_min;
 //	FINFO info;
 //	FILE *fp;
-	
-	// 기존 트랜드 파일의 header와 trend 설정을 비교한다. 
+
+	// 기존 트랜드 파일의 header와 trend 설정을 비교한다.
 	checkTrendHeader();
 	_enableTaskMonitor(Tid_Trend, 50);
 	while (pcntl->runFlag) {
@@ -1457,9 +1521,9 @@ void Trend_Task(void *arg)
          osDelayTask(1000);
 			continue;
 		}
-		
+
 		lastmin  = pcntl->tod.tm_min;
-		
+
 		// trend data 생성 (meter CH × trend group)
 		for (mid = 0; mid < ACTIVE_METER_CH_COUNT; mid++) {
 			for (i=0; i<4; i++) {
@@ -1491,7 +1555,7 @@ void Trend_Task(void *arg)
 				}
 			}
 		}
-			
+
 		// 저장 기간 최대 1년
 		for (mid = 0; mid < ACTIVE_METER_CH_COUNT; mid++) {
 			for (i=0; i<4; i++) {
@@ -1502,11 +1566,12 @@ void Trend_Task(void *arg)
 			}
 		}
 	}
-	
+
 	printf("Trend_task stopped ...\n");
-#ifdef __FREERTOS	
+#ifdef __FREERTOS
 	vTaskSuspend(NULL);
 #else
 	os_evt_wait_and(0xffff, 0xffff);
 #endif
 }
+#endif	/* Trend_Task → FS_task 흡수 */
