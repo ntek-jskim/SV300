@@ -15,7 +15,7 @@
 #define	FW_VER	0003
 #define	FW_BUILD_YEAR 26
 #define	FW_BUILD_MON  9
-#define	FW_BUILD_DAY  21
+#define	FW_BUILD_DAY  28
 
 #define	SQRT_2	 1.414213562 
 
