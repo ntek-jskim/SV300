@@ -85,6 +85,10 @@
   1) ★트렌드 고속기록 자동 OFF + interval 경계 버그 수정 — trdTime[] 경계가 '>= 8'이라 60분(trdTime[8])을 선택해도 실제로는 10분 간격으로 기록돼 쓰기량이 6배였다(경계를 배열 크기 TRD_TIME_N으로 정정, 범위 밖 폴백도 60분). 10분 미만 고속 간격은 60분까지만 기록하고 active=0으로 스스로 멈춘다 — 1분 간격이면 72B × 최대 12조합 = 1.19MB/일(월 35MB)로 트렌드 예산 3MB·flash 16MB를 넘기는데, 금월·전월 파일 보호 때문에 트리머가 지울 대상을 못 찾아 상한 없이 증가하던 경로를 차단
   2) `time` 콘솔 명령 시각 표시 2건 수정(앱: uLocalTime 규약을 표준 struct tm으로 오인해 +1900·+1 이중보정 → 3926-10-15가 2026-09-15로 / RTC: EXT_RTC 빌드인데 RTC_GetTimeUTC만 분기가 없어 빈 내장 RTC 섀도우를 읽고 mktime 실패 0xFFFFFFFF → I2C RTC 직접 읽기) + 내장웹 Maintenance 보강(PC Time·Device 현재시각·SNTP 주의문구·FW Update Clear, 카드 그리드 2열로 System/Firmware Update 폭 정렬)
 
+26/09/21 FW V00.03
+  1) 공장초기화 기본 네트워크값 조정 — 서브넷 255.255.255.0→255.255.0.0, 게이트웨이 192.168.9.1→192.168.1.1. 현장 게이트웨이(192.168.1.1)에 맞추면서 기본 IP 192.168.9.124와 같은 대역에 들어오도록 마스크를 /16으로 넓힘(FW 빌드일자 26/09/21)
+  2) [확인·코드 무변경] 시리얼번호 설정 콘솔명령은 MACSET이 아니라 SNSET — 앱 cmd_macset은 pcal->sn[0]/sn[1]에 저장하고(mDNS 호스트명 sv300-YYMMDDNNN·METER_INFO 시리얼이 사용) pcal->mac[]은 부팅마다 CPU UID로 덮어써 앱에서 설정해도 남지 않음(이더넷 MAC도 UID 기반). initSettings() 직접 실행 명령은 없으나 기존 INITDB가 동일 역할 — FS_task가 전 채널 initSettings+initExtSettings→build_set_db→saveSettings 후 리셋, 초기화 범위는 settings.dat(db)뿐이고 FRAM METER_CAL·almSet·pqeDef·에너지는 보존
+
 ────────────────────────────────────────────────────────────
 [릴리스 노트/요약] 26/08/25 FW V00.03 — THD 정확화 & 파형 원인규명
 ────────────────────────────────────────────────────────────
