@@ -28,7 +28,7 @@ os_mbx_declare(mbox, 16);
 //FRAM_ENERGY2 fenergy2, *pfEnergy2=&fenergy2;
 
 
-extern uint64_t sysTick64;
+extern volatile uint64_t sysTick64;
 extern OsTaskId tid_wave[];
 extern OsTaskId tid_meter[];
 extern OsTaskId tid_metering;	/* [통합] RMSLog/PostScan/Energy 단일 태스크 */

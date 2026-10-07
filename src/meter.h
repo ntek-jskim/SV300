@@ -2338,7 +2338,7 @@ extern int fwWrite(void *fh, const void *buf, int len);	/* 청크 쓰기(반환=
 extern void fwEndWrite(void *fh, int ok);	/* 종료(ok=0이면 부분파일 삭제) */
 extern void reqReboot(int cmd);				/* smb_rtu.c: rebootFlag 세팅(지연 리부팅) */
 extern uint32_t sysTick32, sysTick1s, sysTick10s, sysTick10m, sysTick15m, sysTickDemand, WM_tick32;
-extern uint64_t sysTick64;
+extern volatile uint64_t sysTick64;	/* ISR(tickHandler) 갱신 — volatile 필수, app_main.c 주석 참조 */
 
 extern void fetchEvent(int id, int cmd);
 extern void putFsQ(FS_MSG *p);

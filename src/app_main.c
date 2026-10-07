@@ -79,7 +79,10 @@ extern void shell (void);
 
 static int tick;
 uint32_t sysTick32, sysTick1s, sysTick10s, sysTick10m, sysTick15m, sysTickDemand, WM_tick32;
-uint64_t sysTick64;
+/* tickHandler(ISR)가 갱신하고 태스크에서 읽는다. volatile 이 없으면 -O2 에서 읽기가
+ *  루프 밖으로 호이스팅된다 — cpuCalibIdle()의 (sysTick64-t0) 가 상수 0 으로 접혀
+ *  app 타깃(-O2)이 app_init 에서 무한루프로 홀딩됐다(디버그 타깃 -O1 은 우연히 동작). */
+volatile uint64_t sysTick64;
 uint32_t et1, et2;
 
 uint16_t *getNtpIp(void) {

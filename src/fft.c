@@ -5,7 +5,7 @@
 #include "fft.h"
 #include "string.h"
 
-extern uint64_t sysTick64;
+extern volatile uint64_t sysTick64;
 
 //U8 static _sdram_area[0x100000] __attribute__ ((section ("FFT_RAM"), zero_init));
 //FFT_BUF *pfft=(FFT_BUF *)_sdram_area;

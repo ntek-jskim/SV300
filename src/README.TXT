@@ -89,6 +89,10 @@
   1) 공장초기화 기본 네트워크값 조정 — 서브넷 255.255.255.0→255.255.0.0, 게이트웨이 192.168.9.1→192.168.1.1. 현장 게이트웨이(192.168.1.1)에 맞추면서 기본 IP 192.168.9.124와 같은 대역에 들어오도록 마스크를 /16으로 넓힘(FW 빌드일자 26/09/21)
   2) [확인·코드 무변경] 시리얼번호 설정 콘솔명령은 MACSET이 아니라 SNSET — 앱 cmd_macset은 pcal->sn[0]/sn[1]에 저장하고(mDNS 호스트명 sv300-YYMMDDNNN·METER_INFO 시리얼이 사용) pcal->mac[]은 부팅마다 CPU UID로 덮어써 앱에서 설정해도 남지 않음(이더넷 MAC도 UID 기반). initSettings() 직접 실행 명령은 없으나 기존 INITDB가 동일 역할 — FS_task가 전 채널 initSettings+initExtSettings→build_set_db→saveSettings 후 리셋, 초기화 범위는 settings.dat(db)뿐이고 FRAM METER_CAL·almSet·pqeDef·에너지는 보존
 
+26/10/07 FW V00.03
+  1) ★app 타깃 부팅 홀딩 근본수정 — sysTick64에 volatile 누락. tickHandler(ISR)가 갱신하는 변수인데 비volatile이라 -O2에서 cpuCalibIdle()의 (sysTick64-t0)가 루프 밖으로 호이스팅·상수 0으로 접혀 app_init()에서 무한루프(조건 0<200 항상 참). app 프로젝트만 -O2, 디버그 프로젝트는 -O1이라 SV300_3CH_16M은 정상·SV300_3CH_app_16M만 홀딩. 선언 5곳(app_main.c 정의, meter.h, ade9000.c/fft.c/fft_radix2_czt.c 중복 extern)을 volatile로 통일 → 디스어셈블로 루프 내 재읽기 확인, 양 타깃 0 Error, 실기 3채널(M0/M1/M2 [ok])·웹·셸 정상 부팅
+  2) 빌드설정: SV300_3CH_app_16M에 _WDT_EN 추가(3CH 릴리스 타깃 워치독 활성 — 이번 홀딩과 무관함을 실기 확인), FW_BUILD 26/10/07, README 빌드옵션표에 _16M 타깃 2종 누락분 반영
+
 ────────────────────────────────────────────────────────────
 [릴리스 노트/요약] 26/08/25 FW V00.03 — THD 정확화 & 파형 원인규명
 ────────────────────────────────────────────────────────────
@@ -123,8 +127,9 @@ HWV2 : SPI FLASH 16MB
 DTEST : DEBUG TEST용
 
 // debug
-SV300\keil\SV300.uvproj\SV300              : LPC4330 USE_LPCXPRESSO_4337 CMSIS_BITPOSITIONS GPL_LICENSE_TERMS_ACCEPTED CORE_M4 USE_KSZ8863 GEMS9000 EXT_RTC _FTP_SERVER VFRMS METER_TEST_DATA
-SV300\keil\SV300.uvproj\SV300_3CH          : LPC4330 USE_LPCXPRESSO_4337 CMSIS_BITPOSITIONS GPL_LICENSE_TERMS_ACCEPTED CORE_M4 USE_KSZ8863 GEMS9000 EXT_RTC _FTP_SERVER VFRMS METER_TEST_DATA NOSDMEM HWV1 CH3 HWV2
+SV300\keil\SV300.uvproj\SV300                 : LPC4330 USE_LPCXPRESSO_4337 CMSIS_BITPOSITIONS GPL_LICENSE_TERMS_ACCEPTED CORE_M4 USE_KSZ8863 GEMS9000 EXT_RTC _FTP_SERVER VFRMS METER_TEST_DATA
+SV300\keil\SV300.uvproj\SV300_3CH             : LPC4330 USE_LPCXPRESSO_4337 CMSIS_BITPOSITIONS GPL_LICENSE_TERMS_ACCEPTED CORE_M4 USE_KSZ8863 GEMS9000 EXT_RTC _FTP_SERVER VFRMS METER_TEST_DATA NOSDMEM HWV1 CH3 HWV2
 // release
-SV300\keil\SV300_app.uvproj\SV300_app      : LPC4330 USE_LPCXPRESSO_4337 CMSIS_BITPOSITIONS GPL_LICENSE_TERMS_ACCEPTED CORE_M4 USE_KSZ8863 GEMS9000 EXT_RTC _FTP_SERVER VFRMS _WDT_EN
-SV300\keil\SV300_app.uvproj\SV300_3CH_app  : LPC4330 USE_LPCXPRESSO_4337 CMSIS_BITPOSITIONS GPL_LICENSE_TERMS_ACCEPTED CORE_M4 USE_KSZ8863 GEMS9000 EXT_RTC _FTP_SERVER VFRMS NOSDMEM HWV1 CH3 _WDT_EN HWV2
+SV300\keil\SV300_app.uvproj\SV300_app         : LPC4330 USE_LPCXPRESSO_4337 CMSIS_BITPOSITIONS GPL_LICENSE_TERMS_ACCEPTED CORE_M4 USE_KSZ8863 GEMS9000 EXT_RTC _FTP_SERVER VFRMS _WDT_EN
+SV300\keil\SV300_app.uvproj\SV300_3CH_app     : LPC4330 USE_LPCXPRESSO_4337 CMSIS_BITPOSITIONS GPL_LICENSE_TERMS_ACCEPTED CORE_M4 USE_KSZ8863 GEMS9000 EXT_RTC _FTP_SERVER VFRMS NOSDMEM HWV1 CH3 _WDT_EN HWV2
+SV300\keil\SV300_app.uvproj\SV300_3CH_app_16M : LPC4330 USE_LPCXPRESSO_4337 CMSIS_BITPOSITIONS GPL_LICENSE_TERMS_ACCEPTED CORE_M4 USE_KSZ8863 GEMS9000 EXT_RTC _FTP_SERVER VFRMS NOSDMEM HWV1 CH3 _WDT_EN HWV2

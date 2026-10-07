@@ -80,7 +80,7 @@ float	i_harm_gain[2][63] = {
 
 extern FFT_CZT *pFFT;
 
-extern uint64_t sysTick64;
+extern volatile uint64_t sysTick64;
 //extern float lineFreq;
 extern void maxMinTHD(int id);
 
