@@ -184,6 +184,13 @@
 #define SNMP_AGENT_SUPPORT ENABLED
 //SNMP MIB module support
 #define SNMP_MIB_SUPPORT ENABLED
+//system 그룹 버퍼 — 기본 16은 sysDescr("SV300 FW Vxx.xx (YY/MM/DD)")에 부족
+#define SNMP_MIB_SYS_DESCR_SIZE 48
+//sysName = 호스트명 "sv300-<SN>"(15자) — NET_MAX_HOSTNAME_LEN(24)에 맞춤
+#define SNMP_MIB_SYS_NAME_SIZE 24
+//sysContact/sysLocation — snmp.d 문자열 최대 길이(SNMP_CFG_STR_LEN=32)에 맞춤
+#define SNMP_MIB_SYS_CONTACT_SIZE 32
+#define SNMP_MIB_SYS_LOCATION_SIZE 32
 
 //HTTP server support (web dashboard) — 정적자산은 S0:(SPI Flash) FS에서 서빙
 #define HTTP_SERVER_SUPPORT ENABLED

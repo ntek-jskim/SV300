@@ -1944,6 +1944,16 @@
               <FilePath>..\src\web.c</FilePath>
             </File>
             <File>
+              <FileName>snmp_trap.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\snmp_trap.c</FilePath>
+            </File>
+            <File>
+              <FileName>snmp_cfg.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\snmp_cfg.c</FilePath>
+            </File>
+            <File>
               <FileName>ssplib.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\src\ssplib.c</FilePath>
@@ -4006,6 +4016,16 @@
               <FilePath>..\src\web.c</FilePath>
             </File>
             <File>
+              <FileName>snmp_trap.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\snmp_trap.c</FilePath>
+            </File>
+            <File>
+              <FileName>snmp_cfg.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\snmp_cfg.c</FilePath>
+            </File>
+            <File>
               <FileName>ssplib.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\src\ssplib.c</FilePath>
@@ -6066,6 +6086,16 @@
               <FileName>web.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\src\web.c</FilePath>
+            </File>
+            <File>
+              <FileName>snmp_trap.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\snmp_trap.c</FilePath>
+            </File>
+            <File>
+              <FileName>snmp_cfg.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\snmp_cfg.c</FilePath>
             </File>
             <File>
               <FileName>ssplib.c</FileName>

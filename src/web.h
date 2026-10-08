@@ -18,4 +18,11 @@ void webServerStart(NetInterface *interface);
  * ERR_NAME_NOT_RESOLVED가 지속되므로, 이름은 늦게 띄우지 말 것. */
 void webMdnsStart(NetInterface *interface);
 
+/* 장치 호스트명 "sv300-<SN>" — mDNS·인터페이스 호스트명(LLMNR/DHCP)·SNMP sysName 공용.
+ * pcal(db_init)이 로드된 뒤 호출할 것 */
+void webGetHostname(char *buf, size_t size);
+
+/* SNMP sysDescr 문자열 "SV300 FW Vxx.xx (YY/MM/DD)" — setMeterInfo(db_init) 뒤 호출 */
+void webGetSysDescr(char *buf, size_t size);
+
 #endif /* WEB_H */

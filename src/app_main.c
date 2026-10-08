@@ -434,6 +434,14 @@ int dhcpModeGet() {
    return pdb->comm.dhcpEn;
 }
 
+int snmpEnGet() {
+   return pdb->comm.snmpEn;
+}
+
+int snmpVerGet() {
+   return pdb->comm.snmpVer;
+}
+
 
 void ipAddrGet(char *buf) {
    sprintf(buf, "%d.%d.%d.%d", pdb->comm.ip0[0], pdb->comm.ip0[1], pdb->comm.ip0[2], pdb->comm.ip0[3]);

@@ -11,11 +11,13 @@
 #include "time.h"
 #include "crc.h"
 #include "alarm.h"
+#include "snmp_trap.h"
+#include "snmp_cfg.h"
 
-#define	FW_VER	0003
+#define	FW_VER	0004
 #define	FW_BUILD_YEAR 26
 #define	FW_BUILD_MON  10
-#define	FW_BUILD_DAY  7
+#define	FW_BUILD_DAY  8
 
 #define	SQRT_2	 1.414213562 
 
@@ -1170,6 +1172,18 @@ int loadSettings(SETTINGS	*pdb)
 		}
 	}
 
+	/* SNMP 숫자형(7155~7160)은 구 DAQ 설정 자리 — DAQ 빌드를 거친 기기의 잔존값
+	 * (srate/length 등)이 SNMP ON·엉뚱한 Trap IP로 읽히지 않도록 0/1 이외면 SNMP 블록 초기화 */
+	if (db.comm.snmpEn > 1 || db.comm.trapEn > 1) {
+		printf("{{SNMP settings invalid (en=%u trap=%u) — cleared}}\n",
+		       db.comm.snmpEn, db.comm.trapEn);
+		db.comm.snmpEn = 0;
+		db.comm.trapEn = 0;
+		memset(db.comm.trap_ip, 0, sizeof(db.comm.trap_ip));
+	}
+	if (db.comm.snmpVer > 2)
+		db.comm.snmpVer = 0;
+
 	memcpy(&meter[0].setting, &db, sizeof(SETTINGS));
 
 	for (id = 0; id < METER_CH_COUNT; id++) {
@@ -1190,22 +1204,8 @@ int loadSettings(SETTINGS	*pdb)
 
 	for (id = 0; id < METER_CH_COUNT; id++)
 		buildExtSettings(id);
-		
-#ifdef	DAQ
-	db.comm.daq_ip[0] = 192;
-	db.comm.daq_ip[1] = 168;
-	db.comm.daq_ip[2] = 8;
-	db.comm.daq_ip[3] = 71;
 
-	db.comm.daq_format = 0;
-	db.comm.daq_id = 1;
-	db.comm.daq_interval = 1;
-	db.comm.daq_length = 4;
-	db.comm.daq_srate = 2;
-	db.comm.daq_bitpersample = 0;
-#endif
-	
-	// setting을 backup영역으로 복사한다 
+	// setting을 backup영역으로 복사한다
 //	memcpy(pdbk, pdb, sizeof(SETTINGS));		
 	
 	return ret;
@@ -3034,6 +3034,9 @@ void FS_task(void *arg)
 		else if (meter[id].cntl.saveSetting == 0x1234) {
 			/* 파일: SETTINGS 단일(db). PT/CT는 db.pt[id]/ct[id], PQE는 meter[] */
 			memcpy(&db, &meter[0].setting, sizeof(SETTINGS));
+			/* layoutVer는 내부값 — Modbus(7161)·설정 백업복원으로 쓰인 값이 저장되면
+			 * 다음 부팅에 레이아웃 불일치로 설정 전체가 초기화되므로 펌웨어 값으로 고정 */
+			db.comm.layoutVer = SETTINGS_LAYOUT_VER;
 			saveSettings(&db);
 			storeAlarmDef();	/* 알람설정(almSet) 영속화 — SETTINGS에 미포함이라 별도 저장 */
 			storePqeDef();		/* PQE/Transient/Waveform/Trend 설정 영속화 — SETTINGS 미포함, 별도 저장 */
@@ -3060,6 +3063,7 @@ void FS_task(void *arg)
 			build_set_db();
 			memcpy(&db, &meter[0].setting, sizeof(SETTINGS));
 			saveSettings(&db);
+			snmpCfgFactoryReset();	/* SNMP 커뮤니티·비밀값 파일도 삭제(재배치·반납 시 잔존 방지) */
 			meter[id].cntl.factReset = 0;
 			meter[id].cntl.saveSetting = 0;
 			printf("[[INITDB: saved, NVIC_SystemReset]]\n");
@@ -5070,6 +5074,7 @@ void Metering_Task(void *arg)
 					resetAlarm(id);
 					storeAlarmStatus(id);
 					deleteAlarmLog(id);
+					snmpTrapAlarmReset(id);		/* storeAlarmLog를 안 거치므로 리셋 Trap 별도 */
 //					Board_LED_Off(1);				// alarm off
 				}
 #if 1
@@ -5376,6 +5381,7 @@ void PostScan_Task(void *arg)
 					resetAlarm(id);
 					storeAlarmStatus(id);
 					deleteAlarmLog(id);
+					snmpTrapAlarmReset(id);		/* storeAlarmLog를 안 거치므로 리셋 Trap 별도 */
 //					Board_LED_Off(1);				// alarm off
 				}
 #if 1

@@ -10,6 +10,7 @@
 #include "string.h"
 #include "meter.h"
 #include "alarm.h"
+#include "snmp_trap.h"
 
 extern int getYear_n_WoY(int doY, int doW);
 extern void assertAlarmOutput(int point, int state);
@@ -781,6 +782,10 @@ int storeAlarmLog(int id, int ix, int status, float value, int doSel) {
 	fsmsg.pbuf = &pcntlId->alog;
 	fsmsg.size = sizeof(ALARM_LOG);
 	putFsQ(&fsmsg);
+
+	/* SNMP Trap(발생/복귀) — 큐에 넣기만 한다 */
+	snmpTrapAlarm(id, ix, status, pcntlId->alog.chan, pcntlId->alog.cond,
+		pcntlId->alog.level, value, pcntlId->alog.ts, almTbl[id][pcntlId->alog.chan].nm);
 
 	memcpy(&pFifo->alog[pFifo->fr], &pcntlId->alog, sizeof(pcntlId->alog));
 	if (pFifo->count < N_ALARM_FIFO) {

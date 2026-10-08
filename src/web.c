@@ -29,6 +29,7 @@
 
 #include "web.h"
 #include "meter.h"
+#include "snmp_cfg.h"
 
 extern METER_DEF meter[];
 
@@ -1129,6 +1130,31 @@ static unsigned long jsonNum(const char *body, const char *key)
 	return strtoul(p + 1, NULL, 10);   /* u32 및 음수(2's complement wrap) 처리 */
 }
 
+/* JSON 문자열 값 추출 — 1:성공, 0:키 없음, -1:형식/문자 오류.
+ * 허용 문자 = 출력 가능 ASCII(0x20~0x7E) 중 '"'·'\\' 제외(SNMP DisplayString, 응답 JSON 이스케이프 불필요) */
+static int jsonStr(const char *body, const char *key, char *out, int size)
+{
+	char pat[24];
+	const char *p;
+	int n = 0;
+
+	snprintf(pat, sizeof(pat), "\"%s\"", key);
+	p = strstr(body, pat);
+	if (!p) return 0;
+	p = strchr(p + strlen(pat), ':');
+	if (!p) return -1;
+	p++;
+	while (*p == ' ') p++;
+	if (*p++ != '"') return -1;
+	while (*p && *p != '"') {
+		if (*p < 0x20 || *p > 0x7e || *p == '\\' || n >= size - 1) return -1;
+		out[n++] = *p++;
+	}
+	if (*p != '"') return -1;
+	out[n] = 0;
+	return 1;
+}
+
 /* 쿼리스트링 정수 파라미터(없으면 -1) */
 static int qparam(const char *qs, const char *key)
 {
@@ -1163,7 +1189,7 @@ typedef struct {
 	uint8_t     type, card, ro, nw;
 } GField;
 
-/* card: 0=Device Information, 1=Communication, 2=ETC, 3=Status */
+/* card: 0=Device Information, 1=Communication, 2=ETC, 3=Status, 4=SNMP */
 static const GField GEN[] = {
 	{ "serial",          "Serial Number",        7070, WT_SERIAL, 0, 1, 0 },
 	{ "mac",             "MAC Address",          7076, WT_MAC,    0, 1, 0 },
@@ -1193,6 +1219,11 @@ static const GField GEN[] = {
 	{ "sntp",            "SNTP",                 7112, WT_BOOL, 1, 0, 0 },
 	{ "sntp_ip",         "SNTP Server",          7130, WT_IP,   1, 0, 0 },
 	{ "sntp_interval",   "SNTP Interval (min)",  7113, WT_U16,  1, 0, 0 },
+	/* card 4 = SNMP — 숫자형(COMM_CFG 7153, 7155~7160). 문자열은 /api/snmp(snmp.d)로 카드에 덧붙임 */
+	{ "snmp",            "SNMP",                 7155, WT_BOOL, 4, 0, 0 },
+	{ "snmp_ver",        "SNMP Version",         7153, WT_U16,  4, 0, 0 },
+	{ "snmp_trap",       "Trap",                 7156, WT_BOOL, 4, 0, 0 },
+	{ "trap_ip",         "Trap Server",          7157, WT_IP,   4, 0, 0 },
 	{ "freq",            "Frequency (Hz)",       7170, WT_U16,  2, 0, 0 },
 	{ "va_type",         "VA Type",              7388, WT_U16,  2, 0, 0 },
 	{ "pf_sign",         "PF Sign",              7389, WT_U16,  2, 0, 0 },
@@ -1318,6 +1349,47 @@ static error_t apiSetReg(HttpConnection *c)
 
 	if (beginJson(c)) return ERROR_WRITE_FAILED;
 	w(c, r == 0 ? "{\"ok\":true}" : "{\"ok\":false,\"error\":\"write rejected\"}");
+	return httpCloseStream(c);
+}
+
+/* GET /api/snmp — SNMP 문자열 설정(snmp.d). 커뮤니티는 비밀값이라 값 대신 기본값 여부만 */
+static error_t apiSnmpGet(HttpConnection *c)
+{
+	const SNMP_CFG *s = snmpCfgGet();
+	char b[160];
+
+	if (beginJson(c)) return ERROR_WRITE_FAILED;
+	snprintf(b, sizeof(b), "{\"ok\":true,\"commDefault\":%s,\"contact\":\"%s\",",
+		strcmp(s->community, "public") ? "false" : "true", s->contact);
+	w(c, b);
+	snprintf(b, sizeof(b), "\"location\":\"%s\"}", s->location);
+	w(c, b);
+	return httpCloseStream(c);
+}
+
+/* POST /api/snmp {community?,contact?,location?} — admin. 파일 저장(FS 큐), 다음 부팅부터 적용 */
+static error_t apiSnmpSet(HttpConnection *c)
+{
+	char body[200];
+	char comm[SNMP_CFG_STR_LEN + 1], cont[SNMP_CFG_STR_LEN + 1], loc[SNMP_CFG_STR_LEN + 1];
+	int rc, rt, rl;
+
+	if (webRole(c) != ROLE_ADMIN)
+		return webJsonStatus(c, 403, "{\"ok\":false,\"error\":\"admin only\"}");
+
+	webReadBody(c, body, sizeof(body));
+	rc = jsonStr(body, "community", comm, sizeof(comm));
+	rt = jsonStr(body, "contact",   cont, sizeof(cont));
+	rl = jsonStr(body, "location",  loc,  sizeof(loc));
+	if (rc < 0 || rt < 0 || rl < 0)
+		return webJsonStatus(c, 400, "{\"ok\":false,\"error\":\"ASCII only, max 32, no \\\" or \\\\\"}");
+	if (rc > 0 && (comm[0] == 0 || strchr(comm, ' ')))
+		return webJsonStatus(c, 400, "{\"ok\":false,\"error\":\"community: 1~32 chars, no space\"}");
+
+	snmpCfgSave(rc > 0 ? comm : NULL, rt > 0 ? cont : NULL, rl > 0 ? loc : NULL);
+
+	if (beginJson(c)) return ERROR_WRITE_FAILED;
+	w(c, "{\"ok\":true}");
 	return httpCloseStream(c);
 }
 
@@ -1782,8 +1854,9 @@ static const char INDEX_HTML[] =
 " jp('/api/sv300/command',{cmd:cmd}).then(function(r){\n"
 "  if(r.s===403){alert('Admin only');return}if(!r.d.ok){alert('Command failed');return}loadEvents();});}\n"
 /* setup */
-"var OPT={freq:{0:'60 Hz',1:'50 Hz'},va_type:{0:'RMS (S=VA)',1:'Vector'},pf_sign:{0:'IEC',1:'IEEE'},demand_interval:{0:'1 min',1:'5 min',2:'15 min',3:'30 min',4:'60 min'},minmax_reset:{0:'Daily',1:'Weekly',2:'Monthly'},timezone:{'-720':'UTC-12:00','-600':'Hawaii -10:00','-540':'Alaska -09:00','-480':'Pacific -08:00','-420':'Mountain -07:00','-360':'Central -06:00','-300':'Eastern -05:00','-180':'-03:00','0':'UTC +00:00','60':'Berlin +01:00','120':'Athens +02:00','180':'Moscow +03:00','210':'Tehran +03:30','240':'Dubai +04:00','300':'Karachi +05:00','330':'India +05:30','345':'Nepal +05:45','360':'Dhaka +06:00','420':'Bangkok +07:00','480':'Shanghai +08:00','540':'Seoul +09:00','570':'Adelaide +09:30','600':'Sydney +10:00','720':'Auckland +12:00'}};\n"
-"var CARDN=['Device Information','Communication','ETC','Status'],setCur='general';\n"
+"var OPTDIS={snmp_ver:{1:1,2:1}};\n"
+"var OPT={snmp_ver:{0:'v1/v2c',1:'v1/v2c/v3 (next FW)',2:'v3 only (next FW)'},freq:{0:'60 Hz',1:'50 Hz'},va_type:{0:'RMS (S=VA)',1:'Vector'},pf_sign:{0:'IEC',1:'IEEE'},demand_interval:{0:'1 min',1:'5 min',2:'15 min',3:'30 min',4:'60 min'},minmax_reset:{0:'Daily',1:'Weekly',2:'Monthly'},timezone:{'-720':'UTC-12:00','-600':'Hawaii -10:00','-540':'Alaska -09:00','-480':'Pacific -08:00','-420':'Mountain -07:00','-360':'Central -06:00','-300':'Eastern -05:00','-180':'-03:00','0':'UTC +00:00','60':'Berlin +01:00','120':'Athens +02:00','180':'Moscow +03:00','210':'Tehran +03:30','240':'Dubai +04:00','300':'Karachi +05:00','330':'India +05:30','345':'Nepal +05:45','360':'Dhaka +06:00','420':'Bangkok +07:00','480':'Shanghai +08:00','540':'Seoul +09:00','570':'Adelaide +09:30','600':'Sydney +10:00','720':'Auckland +12:00'}};\n"
+"var CARDN=['Device Information','Communication','ETC','Status','SNMP'],setCur='general';\n"
 "var WM={0:'not used',1:'3P4W',2:'3P3W(2CT)',3:'3P3W(3CT)',4:'1P2W(L1)',5:'1P2W(L2)',6:'1P2W(L3)',7:'1P3W',8:'SIM'};\n"
 "var CT2M={0:'5A',1:'100mA/333mV',2:'Rogowski'},ZCTM={1:'200mV:100mV',2:'200mV:1.5mA',3:'200mV:0.1mA'},DIM={0:'DI',1:'PI'},DIRM={0:'+',1:'-'};\n"
 "var PT_F=[{o:0,l:'Wiring Mode',t:'u16',opt:WM},{o:2,l:'V Nominal',t:'u32'},{o:4,l:'PT1',t:'u32'},{o:6,l:'PT2',t:'u16'}];\n"
@@ -1826,10 +1899,10 @@ static const char INDEX_HTML[] =
 " var on=(b.value==='1'),inv=b.getAttribute('data-inv')==='1',hid=b.getAttribute('data-hide')==='1',lock=b.disabled||(inv?on:!on);\n"
 " b.getAttribute('data-dep').split(',').forEach(function(k){root.querySelectorAll(\"[data-k='\"+k.trim()+\"']\").forEach(function(el){\n"
 "  if(hid){var r=el.closest('.srow');if(r)r.style.display=lock?'none':'';}else el.disabled=lock;});});});}\n"
-"var GDEP={dhcp:['ip,subnet,gateway,dns',1],sntp:['sntp_ip,sntp_interval',0]};\n"
+"var GDEP={dhcp:['ip,subnet,gateway,dns',1],sntp:['sntp_ip,sntp_interval',0],snmp:['snmp_ver,snmp_trap,trap_ip,snmp_community,snmp_contact,snmp_location',0],snmp_trap:['trap_ip',0]};\n"
 "function ctlOf(f){var d=\"data-addr='\"+f.addr+\"' data-type='\"+f.type+\"' data-orig='\"+esc(f.val)+\"' data-k='\"+f.k+\"'\",dis=IS_ADMIN?'':'disabled';\n"
 " if(f.ro)return \"<span class='sv' data-k='\"+f.k+\"'>\"+fmtV(f)+\"</span><span class='rtag'>R</span>\";\n"
-" if(OPT[f.k]){var o=OPT[f.k],s=\"<select \"+d+' '+dis+\" onchange='setMark(this)'>\";for(var k in o)s+=\"<option value='\"+k+\"'\"+((''+k)===(''+f.val)?' selected':'')+'>'+esc(o[k])+'</option>';return s+'</select>';}\n"
+" if(OPT[f.k]){var o=OPT[f.k],s=\"<select \"+d+' '+dis+\" onchange='setMark(this)'>\";for(var k in o)s+=\"<option value='\"+k+\"'\"+((''+k)===(''+f.val)?' selected':'')+((OPTDIS[f.k]&&OPTDIS[f.k][k])?' disabled':'')+'>'+esc(o[k])+'</option>';return s+'</select>';}\n"
 " if(f.type==='bool'){var g=GDEP[f.k];return togBtn(d,!!f.val,dis,g?g[0]:'',g?g[1]:0,0);}\n"
 " var tp=(f.type==='ip'||f.type==='str')?'text':'number';\n"
 " return \"<input type='\"+tp+\"' \"+d+\" value='\"+esc(f.val)+\"' \"+dis+\" oninput='setMark(this)'>\";}\n"
@@ -1837,26 +1910,35 @@ static const char INDEX_HTML[] =
    다른 카드가 날아가므로, 해당 워드블록만 1초마다 읽어 값 span 만 교체한다. */
 "var STF=[],STLO=0,STN=0;\n"
 "function loadGeneral(){return j('/api/general').then(function(r){if(!r.d.ok){$('setBody').innerHTML=\"<p class='stub'>load error</p>\";return;}\n"
-" var cs=[[],[],[],[]];r.d.fields.forEach(function(f){cs[f.card].push(f)});var h=\"<div class='setgrid'>\";\n"
+" var cs=[[],[],[],[],[]];r.d.fields.forEach(function(f){cs[f.card].push(f)});var h=\"<div class='setgrid'>\";\n"
 " STF=cs[3];STLO=0;STN=0;STF.forEach(function(f){if(!STLO||f.addr<STLO)STLO=f.addr;});\n"
 " STF.forEach(function(f){if(f.addr-STLO+1>STN)STN=f.addr-STLO+1;});\n"
-" cs.forEach(function(fs,ci){h+=\"<div class='setcard'><h3>\"+CARDN[ci]+'</h3>';fs.forEach(function(f){h+=\"<div class='srow'><span class='sk'>\"+esc(f.label)+'</span>'+ctlOf(f)+'</div>';});h+='</div>';});\n"
-" h+='</div>';$('setBody').innerHTML=h;togDeps($('setBody'));sn('Save & Apply.');});}\n"
+" cs.forEach(function(fs,ci){h+=\"<div class='setcard'\"+(ci===4?\" id='snmpCard'\":'')+\"><h3>\"+CARDN[ci]+'</h3>';fs.forEach(function(f){h+=\"<div class='srow'><span class='sk'>\"+esc(f.label)+'</span>'+ctlOf(f)+'</div>';});h+='</div>';});\n"
+" h+='</div>';$('setBody').innerHTML=h;togDeps($('setBody'));sn('Save & Apply.');return loadSnmpStr();});}\n"
+/* SNMP 문자열(snmp.d) — data-addr 대신 data-snmp. 커뮤니티는 비밀값이라 값을 받지 않고 새로 입력할 때만 저장 */
+"function escA(s){return esc(s).replace(/'/g,'&#39;');}\n"
+"function loadSnmpStr(){return j('/api/snmp').then(function(r){var c=$('snmpCard');if(!c||!r.d||!r.d.ok)return;var dis=IS_ADMIN?'':'disabled';\n"
+" function row(l,k,v,tp,ph){return \"<div class='srow'><span class='sk'>\"+l+\"</span><input type='\"+tp+\"' data-snmp='\"+k+\"' data-k='snmp_\"+k+\"' data-orig='\"+escA(v)+\"' value='\"+escA(v)+\"' maxlength='32' placeholder='\"+ph+\"' \"+dis+\" oninput='setMark(this)'></div>\";}\n"
+" c.insertAdjacentHTML('beforeend',row('Community','community','','password',r.d.commDefault?'public (default) - change!':'(unchanged)')\n"
+"  +row('sysContact','contact',r.d.contact,'text','')+row('sysLocation','location',r.d.location,'text','e.g. Bldg-B 2F MCC-3')\n"
+"  +\"<div class='srow'><span class='sk'></span><span style='color:var(--muted);font-size:12px'>ASCII only, max 32 &middot; SNMP / Community / Contact / Location: applied after reboot</span></div>\");togDeps($('setBody'));});}\n"
 "function loadStatus(){if(!STN||setCur!=='general')return Promise.resolve();\n"
 " return j('/api/regs?addr='+STLO+'&n='+STN).then(function(r){if(!r.d||!r.d.ok)return;\n"
 "  STF.forEach(function(f){var e=document.querySelector(\"#setBody .sv[data-k='\"+f.k+\"']\");if(e)e.textContent=r.d.words[f.addr-STLO];});});}\n"
 "function setMark(el){var v=(el.type==='checkbox')?(el.checked?'1':'0'):el.value;if((''+v)!==el.getAttribute('data-orig'))el.classList.add('chg');else el.classList.remove('chg');}\n"
 "function setRes(m){$('setRes').textContent=m}\n"
-"function saveSet(){var els=document.querySelectorAll('#setBody [data-addr]'),chg=[];\n"
+"function saveSet(){var els=document.querySelectorAll('#setBody [data-addr]'),chg=[],sc={},ns=0;\n"
 " els.forEach(function(el){var v=(el.type==='checkbox')?(el.checked?'1':'0'):el.value;if((''+v)!==el.getAttribute('data-orig'))chg.push({el:el,v:v});});\n"
-" if(!chg.length){setRes('No changes');return;}if(!confirm(chg.length+' change(s). Save?'))return;setRes('Writing...');\n"
+" document.querySelectorAll('#setBody [data-snmp]').forEach(function(el){if(el.value!==el.getAttribute('data-orig')){sc[el.getAttribute('data-snmp')]=el.value;ns++;}});\n"
+" if(!chg.length&&!ns){setRes('No changes');return;}if(!confirm((chg.length+ns)+' change(s). Save?'))return;setRes('Writing...');\n"
 " var i=0;function wr(a,t,v){return jp('/api/setreg',{addr:a,type:t,val:v});}\n"
-" function next(){if(i>=chg.length){j('/api/savecfg',{method:'POST'}).then(function(){setRes('Saved ('+chg.length+')');reloadSet();});return;}\n"
+" function next(){if(i>=chg.length){if(!chg.length){setRes('Saved ('+ns+')');reloadSet();return;}j('/api/savecfg',{method:'POST'}).then(function(){setRes('Saved ('+(chg.length+ns)+')');reloadSet();});return;}\n"
 "  var it=chg[i++],addr=+it.el.getAttribute('data-addr'),type=it.el.getAttribute('data-type');\n"
 "  if(type==='ip'){var p=(it.v||'0.0.0.0').split('.'),k=0;(function nip(){if(k>=4){next();return;}wr(addr+k,'u16',+(p[k]||0)).then(function(){k++;nip();});})();}\n"
 "  else if(type==='float'){var wf=fToU16(+it.v||0),k2=0;(function nf(){if(k2>=2){next();return;}wr(addr+k2,'u16',wf[k2]).then(function(){k2++;nf();});})();}\n"
 "  else{var scl=+(it.el.getAttribute('data-scale')||1);wr(addr,type,Math.round((+it.v||0)*scl)).then(function(rr){if(rr.s===403){setRes('Admin only');return;}next();});}}\n"
-" next();}\n"
+" if(!ns){next();return;}\n"
+" jp('/api/snmp',sc).then(function(rr){if(!rr.d||!rr.d.ok){setRes('SNMP: '+((rr.d&&rr.d.error)||('error '+rr.s)));return;}next();});}\n"
 /* setup: PT/CT/IO/Command */
 "function decodeF(wds,idx,t){if(t==='u32')return((wds[idx]||0)|((wds[idx+1]||0)<<16))>>>0;if(t==='i16'){var v=wds[idx]||0;return v>32767?v-65536:v;}return wds[idx]||0;}\n"
 "function grpCtl(f,addr,val){var sc=f.sc||1,dv=(sc!==1)?(val/sc):val,d=\"data-addr='\"+addr+\"' data-type='\"+f.t+\"' data-scale='\"+sc+\"' data-orig='\"+dv+\"'\",dis=IS_ADMIN?'':'disabled';\n"
@@ -2135,6 +2217,7 @@ static error_t webRequestCallback(HttpConnection *c, const char_t *uri)
 	if (!strcmp(uri, "/api/sv300/command")) return apiCommand(c);
 	if (!strcmp(uri, "/api/setreg"))        return apiSetReg(c);
 	if (!strcmp(uri, "/api/savecfg"))       return apiSaveCfg(c);
+	if (!strcmp(uri, "/api/snmp") && !strcmp(c->request.method, "POST")) return apiSnmpSet(c);
 	if (!strcmp(uri, "/api/fwupload"))      return apiFwUpload(c);
 	if (!strcmp(uri, "/api/fwstatus"))      return apiFwStatus(c);
 	if (!strcmp(uri, "/api/fwapply"))       return apiFwApply(c);
@@ -2159,6 +2242,7 @@ static error_t webRequestCallback(HttpConnection *c, const char_t *uri)
 		if (!strcmp(uri, "/api/vq"))           return apiVq(c);
 		if (!strcmp(uri, "/api/monthly"))      return apiMonthly(c);
 		if (!strcmp(uri, "/api/general"))      return apiGeneral(c);
+		if (!strcmp(uri, "/api/snmp"))         return apiSnmpGet(c);
 		if (!strncmp(uri, "/api/regs", 9))     return apiRegs(c);
 		return webJsonStatus(c, 404, "{\"ok\":false,\"error\":\"notfound\"}");
 	}
@@ -2167,7 +2251,33 @@ static error_t webRequestCallback(HttpConnection *c, const char_t *uri)
 }
 
 /*----------------------------------------------------------------------------
- * mDNS responder — http://sv300-<SN 하위3바이트>.local/
+ * 장치 호스트명 — sv300-<SN 하위4바이트>
+ *  mDNS·인터페이스 호스트명(LLMNR/DHCP)·SNMP sysName 공용
+ *----------------------------------------------------------------------------*/
+void webGetHostname(char *buf, size_t size)
+{
+	/* SN(Serial Number, pcal->sn) 하위 4바이트 기반 호스트명 (3바이트는 타제품과 중복 우려).
+	 * sn[1] 바이트는 hex 가 아니라 10진수 의미값이다 (년/월/일/일련번호) —
+	 * FS.c cmd_macset 이 10진수로 입력받아 그대로 바이트에 넣는다.
+	 * 예) 25년 1월 2일 3번 -> "sv300-250102003". 일련번호는 0~255 라 3자리.
+	 * 부트로더(SV300_boot/boot.c)와 반드시 같은 포맷을 유지할 것. */
+	snprintf(buf, size, "sv300-%02u%02u%02u%03u",
+	         (unsigned)((pcal->sn[1] >> 24) & 0xff), (unsigned)((pcal->sn[1] >> 16) & 0xff),
+	         (unsigned)((pcal->sn[1] >>  8) & 0xff), (unsigned)( pcal->sn[1]        & 0xff));
+}
+
+/* SNMP sysDescr — 시리얼 콘솔 배너와 동일한 FW 표기 */
+void webGetSysDescr(char *buf, size_t size)
+{
+	METER_INFO *inf = &meter[0].info;
+
+	snprintf(buf, size, "SV300 FW V%02X.%02X (%02u/%02u/%02u)",
+	         (inf->fwVer >> 8) & 0xff, inf->fwVer & 0xff,
+	         (unsigned)inf->fwBuildYear, (unsigned)inf->fwBuildMon, (unsigned)inf->fwBuildDay);
+}
+
+/*----------------------------------------------------------------------------
+ * mDNS responder — http://sv300-<SN 하위4바이트>.local/
  *----------------------------------------------------------------------------*/
 void webMdnsStart(NetInterface *interface)
 {
@@ -2180,14 +2290,7 @@ void webMdnsStart(NetInterface *interface)
 	e = mdnsResponderInit(&webMdns, &s);
 	if (e) { printf("[WEB] mDNS init failed (%d)\n", (int)e); return; }
 
-	/* SN(Serial Number, pcal->sn) 하위 4바이트 기반 호스트명 (3바이트는 타제품과 중복 우려).
-	 * sn[1] 바이트는 hex 가 아니라 10진수 의미값이다 (년/월/일/일련번호) —
-	 * FS.c cmd_macset 이 10진수로 입력받아 그대로 바이트에 넣는다.
-	 * 예) 25년 1월 2일 3번 -> "sv300-250102003". 일련번호는 0~255 라 3자리.
-	 * 부트로더(SV300_boot/boot.c)와 반드시 같은 포맷을 유지할 것. */
-	snprintf(host, sizeof(host), "sv300-%02u%02u%02u%03u",
-	         (unsigned)((pcal->sn[1] >> 24) & 0xff), (unsigned)((pcal->sn[1] >> 16) & 0xff),
-	         (unsigned)((pcal->sn[1] >>  8) & 0xff), (unsigned)( pcal->sn[1]        & 0xff));
+	webGetHostname(host, sizeof(host));
 	mdnsResponderSetHostname(&webMdns, host);
 
 	e = mdnsResponderStart(&webMdns);

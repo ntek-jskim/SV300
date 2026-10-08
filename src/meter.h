@@ -905,17 +905,21 @@ typedef struct {
 	uint16_t ip0[4], sm0[4], gw0[4], dns0[4], sntp[4];
 	char     host[32];
 
-	uint16_t daq_ip[4];	// update server ip
-	uint16_t dhcpEn;
-	uint16_t daq_srate;	// sampling rate (0: 32k, 1:16k, 2:8k: 3:4k, 4:2k
-	uint16_t daq_length;	// 0: 2k, 1:4k, 2:8k, 3:16k, 4: 32k, 5:64k
-	uint16_t daq_interval;	//  minute
-	uint16_t daq_format;	// 0: wave, 1: onion
-	uint16_t daq_id; // 0 ~ 65535
-	uint8_t  daq_bitpersample;	// 0 : 16it, 1: 32bit
-	uint16_t layoutVer;		/* settings.dat 레이아웃 버전 — 불일치 시 재초기화 */
-	uint16_t r1[8];
+	uint16_t r0[3];			/* 7150~7152 예약(구 DAQ server ip — DAQ 기능 삭제) */
+	uint16_t snmpVer;		/* 7153 SNMP 허용 버전 (0:v1/v2c, 1:v1/v2c/v3, 2:v3 only) — 부팅 시 반영.
+							 *      SNMPv3 미지원 펌웨어는 값과 무관하게 v1/v2c로 동작 */
+	uint16_t dhcpEn;		/* 7154 (제품군 공통 주소·confWebApp 사용 — 이동 금지) */
+	/* SNMP 숫자형 설정 = 구 DAQ 설정 자리(7155~7160). 문자열·비밀값(커뮤니티·sysContact/Location·v3)은
+	 * Modbus 노출 방지 위해 snmp.d 파일(snmp_cfg.c). 구 DAQ 잔존값은 loadSettings()에서 정리 */
+	uint16_t snmpEn;		/* 7155 SNMP 에이전트 사용 (0:OFF, 1:ON) — 부팅 시 반영 */
+	uint16_t trapEn;		/* 7156 SNMP Trap 사용 (0:OFF, 1:ON) — 저장 즉시 반영 */
+	uint16_t trap_ip[4];	/* 7157~7160 SNMP Trap 수신지(NMS) IP */
+	uint16_t layoutVer;		/* 7161 settings.dat 레이아웃 버전(내부값) — 이동 금지 */
+	uint16_t r1[8];			/* 7162~7169 예약 */
 } COMM_CFG;
+
+/* COMM_CFG = Modbus 7110~7169(60워드) 고정 — 크기가 바뀌면 뒤 레지스터·settings.dat가 밀리므로 컴파일 에러 */
+typedef char comm_cfg_layout_check[(sizeof(COMM_CFG) == 60 * 2) ? 1 : -1];
 
 /* COMM_CFG/SETTINGS 필드 배치가 바뀔 때마다 값을 올린다(연/월). 크기가 같아도 재초기화 유도 */
 #define SETTINGS_LAYOUT_VER		0x2606u

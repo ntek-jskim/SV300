@@ -82,6 +82,8 @@
 #include "debug.h"
 #include "proxy.h"
 #include "web.h"
+#include "snmp_trap.h"
+#include "snmp_cfg.h"
 
 extern volatile uint8_t g_meterReady;   /* 계측 준비완료(Modbus 통신 허용) — meter.c 정의. 웹은 게이트 없음 */
 
@@ -100,7 +102,6 @@ extern volatile uint8_t g_meterReady;   /* 계측 준비완료(Modbus 통신 허
 
 //Ethernet interface configuration
 #define APP_IF_NAME "eth0"
-#define APP_HOST_NAME "rstp-bridge-demo"
 #define APP_MAC_ADDR "00-AB-CD-54-20-00"
 
 //#define APP_USE_DHCP_CLIENT ENABLED
@@ -195,6 +196,8 @@ extern void Sntp_Set(int v);
    void Timer1_Init(int);
    extern void tickSet(uint32_t sec, uint32_t msec, uint32_t mode);
    int  dhcpModeGet();
+   int  snmpEnGet();
+   int  snmpVerGet();
    void ipAddrGet(char *);
    void subnetMaskGet(char *);
    void gatewayIpGet(char *);
@@ -405,7 +408,8 @@ void init(void)
    Ipv4Addr ipv4Addr;
    Ipv6Addr ipv6Addr;
    char macstr[32];
-   
+   char hostName[NET_MAX_HOSTNAME_LEN + 1];
+
    db_init();
 
 
@@ -417,6 +421,21 @@ void init(void)
       //Debug message
       TRACE_ERROR("Failed to initialize SNMPv2-MIB!\r\n");
    }
+
+   /* system 그룹 — 데모 기본값("Description"/"Name"...) 대신 실제 장치 정보.
+    * sysContact/sysLocation은 snmp.d(웹 SNMP 카드, 미설정 시 빈 문자열 — RFC 3418).
+    * sysObjectID는 IANA PEN 발급 후 설정. */
+   snmpCfgLoad();
+   webGetSysDescr(snmpMibBase.sysGroup.sysDescr, sizeof(snmpMibBase.sysGroup.sysDescr));
+   snmpMibBase.sysGroup.sysDescrLen = osStrlen(snmpMibBase.sysGroup.sysDescr);
+   webGetHostname(snmpMibBase.sysGroup.sysName, sizeof(snmpMibBase.sysGroup.sysName));
+   snmpMibBase.sysGroup.sysNameLen = osStrlen(snmpMibBase.sysGroup.sysName);
+   osStrncpy(snmpMibBase.sysGroup.sysContact, snmpCfgActive()->contact,
+      sizeof(snmpMibBase.sysGroup.sysContact));
+   snmpMibBase.sysGroup.sysContactLen = osStrlen(snmpCfgActive()->contact);
+   osStrncpy(snmpMibBase.sysGroup.sysLocation, snmpCfgActive()->location,
+      sizeof(snmpMibBase.sysGroup.sysLocation));
+   snmpMibBase.sysGroup.sysLocationLen = osStrlen(snmpCfgActive()->location);
 
    //BRIDGE-MIB initialization
    error = bridgeMibInit();
@@ -450,8 +469,9 @@ void init(void)
 
    //Set interface name
    netSetInterfaceName(interface, APP_IF_NAME);
-   //Set host name
-   netSetHostname(interface, APP_HOST_NAME);
+   //Set host name — mDNS와 동일한 "sv300-<SN>" (LLMNR·DHCP 호스트명)
+   webGetHostname(hostName, sizeof(hostName));
+   netSetHostname(interface, hostName);
    //Set host MAC address
    macAddrGetStr(macstr);
    macStringToAddr(macstr, &macAddr);
@@ -627,48 +647,67 @@ void init(void)
 #endif
 #endif
 
-   //Get default settings
-   snmpAgentGetDefaultSettings(&snmpAgentSettings);
-   //Minimum version accepted by the SNMP agent
-   snmpAgentSettings.versionMin = SNMP_VERSION_1;
-   //Maximum version accepted by the SNMP agent
-   snmpAgentSettings.versionMax = SNMP_VERSION_2C;
-   //SNMP port number
-   snmpAgentSettings.port = SNMP_PORT;
-   //SNMP trap port number
-   snmpAgentSettings.trapPort = SNMP_TRAP_PORT;
-
-   //SNMP agent initialization
-   error = snmpAgentInit(&snmpAgentContext, &snmpAgentSettings);
-   //Failed to initialize SNMP agent?
-   if(error)
+   /* SNMP 사용 여부(COMM_CFG.snmpEn, 7155) — 부팅 시에만 반영(변경 후 Reboot 필요).
+    * OFF면 에이전트·Trap 모두 기동하지 않는다(UDP 161 닫힘). */
+   if (snmpEnGet())
    {
-      //Debug message
-      TRACE_ERROR("Failed to initialize SNMP agent!\r\n");
+      //Get default settings
+      snmpAgentGetDefaultSettings(&snmpAgentSettings);
+      //Minimum/Maximum version accepted by the SNMP agent — COMM_CFG.snmpVer(7153)
+      snmpAgentSettings.versionMin = SNMP_VERSION_1;
+      snmpAgentSettings.versionMax = SNMP_VERSION_2C;
+#if (SNMP_V3_SUPPORT == ENABLED)
+      if (snmpVerGet() == 1)          /* v1/v2c/v3 */
+         snmpAgentSettings.versionMax = SNMP_VERSION_3;
+      else if (snmpVerGet() == 2)     /* v3 only */
+         snmpAgentSettings.versionMin = snmpAgentSettings.versionMax = SNMP_VERSION_3;
+#else
+      if (snmpVerGet() != 0)
+         printf("[SNMP] v3 not supported in this FW — v1/v2c (snmpVer=%d)\n", snmpVerGet());
+#endif
+      //SNMP port number
+      snmpAgentSettings.port = SNMP_PORT;
+      //SNMP trap port number
+      snmpAgentSettings.trapPort = SNMP_TRAP_PORT;
+
+      //SNMP agent initialization
+      error = snmpAgentInit(&snmpAgentContext, &snmpAgentSettings);
+      //Failed to initialize SNMP agent?
+      if(error)
+      {
+         //Debug message
+         TRACE_ERROR("Failed to initialize SNMP agent!\r\n");
+      }
+
+      //Load SNMPv2-MIB
+      snmpAgentLoadMib(&snmpAgentContext, &snmpMibModule);
+      //Load BRIDGE-MIB
+      snmpAgentLoadMib(&snmpAgentContext, &bridgeMibModule);
+      //Load RSTP-MIB
+      snmpAgentLoadMib(&snmpAgentContext, &rstpMibModule);
+      //SV300-MIB(Trap 알림 객체) 로드 + 알람 Trap 송신 태스크
+      snmpTrapInit(&snmpAgentContext);
+
+      //Set read-only community string — snmp.d(웹 SNMP 카드), 미설정 시 "public"
+      snmpAgentCreateCommunity(&snmpAgentContext, snmpCfgActive()->community,
+         SNMP_ACCESS_READ_ONLY);
+
+      /* read-write("private") 커뮤니티는 두지 않는다 — SET 미지원(읽기전용+Trap).
+       * RW 권한이 없으면 BRIDGE/RSTP-MIB도 SET이 거부되어 RO로 노출된다
+       * (snmp_agent_pdu.c SET 경로의 access 검사). RSTP 동작 자체는 무관. */
+
+      //Start SNMP agent
+      error = snmpAgentStart(&snmpAgentContext);
+      //Failed to start SNMP agent?
+      if(error)
+      {
+         //Debug message
+         TRACE_ERROR("Failed to start SNMP agent!\r\n");
+      }
    }
-
-   //Load SNMPv2-MIB
-   snmpAgentLoadMib(&snmpAgentContext, &snmpMibModule);
-   //Load BRIDGE-MIB
-   snmpAgentLoadMib(&snmpAgentContext, &bridgeMibModule);
-   //Load RSTP-MIB
-   snmpAgentLoadMib(&snmpAgentContext, &rstpMibModule);
-
-   //Set read-only community string
-   snmpAgentCreateCommunity(&snmpAgentContext, "public",
-      SNMP_ACCESS_READ_ONLY);
-
-   //Set read-write community string
-   snmpAgentCreateCommunity(&snmpAgentContext, "private",
-      SNMP_ACCESS_READ_WRITE);
-
-   //Start SNMP agent
-   error = snmpAgentStart(&snmpAgentContext);
-   //Failed to start SNMP agent?
-   if(error)
+   else
    {
-      //Debug message
-      TRACE_ERROR("Failed to start SNMP agent!\r\n");
+      printf("[SNMP] disabled (snmpEn=0)\n");
    }
 
 #if   1  // modbus
