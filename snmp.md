@@ -770,4 +770,3 @@ SNMP 변경 후에도 RSTP 링 이중화가 정상 동작하는지 확인한다.
 
 ### 8.7 관련 항목 (SNMP 외, Trap 시험에 영향)
 - [ ] 알람 설정(Channel·Cond·Level)이 재부팅 후에만 적용되는 문제 — Save Set 시 판정값(`alarm.st[]`) 갱신 여부 결정
-- [ ] 메모리맵 엑셀 `memorymap/SV300 memory map_261008.xlsx` 커밋(SNMP 주소 7153·7155~7160 반영본)
