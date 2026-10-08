@@ -721,3 +721,53 @@ SNMP 변경 후에도 RSTP 링 이중화가 정상 동작하는지 확인한다.
 | TC-11 SNMP 설정 반영 | | |
 | 7.5 공존·부하 1시간 | | CPU __% |
 | 7.6 RSTP 링 절체/복구 | | 절체 __초 / 복구 __초 |
+
+
+---
+
+## 8. 추후 작업 (TODO)
+
+> 운영 규칙: SNMP 관련 남은 작업을 여기서 관리한다. **완료한 항목은 이 목록에서 삭제**하고, 결과는 해당 본문 절(§4~§7)과 FWUPDATE에 남긴다.
+> 기준: 2026-10-08, SV300 커밋 `7a761dd` / confWebApp `6513bab`
+
+### 8.1 SNMPv3 (§4.5-③) — 다음 개발 단계
+- [ ] `net_config.h`에 `SNMP_V3_SUPPORT ENABLED`, 빌드 크기·RAM 확인
+- [ ] USM 사용자 1개(RO): 사용자 이름 + 인증(HMAC-SHA-1) + 암호화(AES-128). 비밀번호는 저장 시 키(20B)로 변환해 `snmp.d`의 예약 필드(`v3User`·`v3AuthKey`·`v3PrivKey`)에 저장, 원문 미보관. 비밀번호 8자 이상 검사
+- [ ] engineID = RFC 3411 형식(`0x80000000|PEN` + MAC). PEN 발급 전 임시값
+- [ ] snmpEngineBoots 영구 저장(부팅마다 +1) — 미저장 시 NMS 시간창(notInTimeWindow) 문제
+- [ ] SNMP Version 선택 활성화: 장비 웹·confWebApp의 `v1/v2c/v3`·`v3 only` 항목 `(next FW)`·disabled 해제 (`web.c` OPTDIS, `channel_general.html`)
+- [ ] `v3 only`일 때 Community 칸 잠금 / v1·v2c일 때 v3 칸 잠금(웹 SNMP 카드)
+- [ ] v3 Trap: Version 설정에 따라 Trap도 v3(RO 사용자)로 송신
+- [ ] (선택) SHA-256 인증 — `sha256.c` 추가 + `SNMP_SHA256_SUPPORT`
+- [ ] §7에 v3 시험 항목 추가(TC-03 v3 기대값 변경 포함) → 자체 시험 완료 후 **FW_VER 상향**
+
+### 8.2 IANA PEN (§6)
+- [ ] 발급 확인(신청서 작성 2026-10-08, 확인 메일 답장 여부 확인)
+- [ ] 발급 후 교체: `snmp_trap.c` `SV_PEN_OID`(BER 바이트), sysObjectID(`1.3.6.1.4.1.<PEN>.1`), engineID, `SV300-MIB.mib`의 `enterprises` — **출하 전 필수**(현재 임시 32473)
+- [ ] snmp.md §5.4·§7의 `32473` 표기 갱신
+
+### 8.3 자사 MIB — 계측값 (§4.5-④, §5)
+- [ ] CycloneTCP MIB 모듈 확장(현재 `snmp_trap.c`의 SV300-MIB는 Trap 알림 객체만): `svCommon`, `svFeederTable`(미사용 피더 행 숨김), `svHarmTable`(1차 포함), `svAlarmTable`(Trap 유실 시 폴링 복구용)
+- [ ] 데이터 소스 `psmpMap` 스냅샷, 스케일 §5.2(U·Upp·I ×100, In ×1000 등), 전력량·고조파는 Modbus 원값
+- [ ] `SV300-MIB.mib`(SMIv2) 작성 + `smilint` 검사, Trap(NOTIFICATION-TYPE) 정의 포함
+- [ ] §7에 MIB 조회 시험 추가
+
+### 8.4 배포물 (§4.5-⑤)
+- [ ] MIB 파일 배포 경로(홈페이지·장비 웹 다운로드 등) 결정
+- [ ] 매뉴얼용 OID·스케일 표
+- [ ] (선택) Zabbix/PRTG 템플릿
+- [ ] 외부 연동 가이드(사용자 요청 시) — snmp.md의 사내 내용(구버전 취약점·소스 경로·라이선스·미확인 경쟁사 정보) 제외, §1·§5·§7 기반
+
+### 8.5 출하 전 결정·정리
+- [ ] `net_config.h` `SNMP_TRACE_LEVEL`(현재 INFO, 요청마다 콘솔 로그) 낮출지 결정
+- [ ] BRIDGE-MIB 포워딩 테이블(`dot1dTpFdbTable`) — 조회 시 행마다 스위치 칩 전체 재조회(O(n²)). 부하 시험(§7.5) 결과 보고 노출 유지/숨김 결정
+- [ ] 웹 SNMP 카드 `Community` 표기에 설명 추가 여부(예: `Community (password)`)
+- [ ] CycloneTCP 상용 라이선스 범위 확인(`GPL_LICENSE_TERMS_ACCEPTED`로 빌드 중)
+
+### 8.6 시험 (26/10/08 빌드)
+- [ ] TC-11 SNMP 설정 반영(Community 변경·Contact/Location·SNMP OFF·공장초기화·화면 잠금) 실기 확인
+- [ ] §7.5 공존·부하, §7.6 RSTP 링 — SNMP·Trap 추가 빌드로 재확인
+
+### 8.7 관련 항목 (SNMP 외, Trap 시험에 영향)
+- [ ] 알람 설정(Channel·Cond·Level)이 재부팅 후에만 적용되는 문제 — Save Set 시 판정값(`alarm.st[]`) 갱신 여부 결정
+- [ ] 메모리맵 엑셀 `memorymap/SV300 memory map_261008.xlsx` 커밋(SNMP 주소 7153·7155~7160 반영본)
