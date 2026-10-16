@@ -135,6 +135,13 @@ SlaacContext slaacContext;
 SnmpAgentSettings snmpAgentSettings;
 SnmpAgentContext snmpAgentContext;
 
+/* SNMPv3 USM 난수(AES salt 초기값 등) — 에이전트가 v3를 허용하면 필수 */
+static error_t snmpRandCallback(uint8_t *data, size_t length)
+{
+   netGetRandData(data, length);
+   return NO_ERROR;
+}
+
 extern uint16_t *getNtpIp();
 extern uint16_t getNtpInterval();
 extern int16_t  getTimeZone();
@@ -424,7 +431,7 @@ void init(void)
 
    /* system 그룹 — 데모 기본값("Description"/"Name"...) 대신 실제 장치 정보.
     * sysContact/sysLocation은 snmp.d(웹 SNMP 카드, 미설정 시 빈 문자열 — RFC 3418).
-    * sysObjectID는 IANA PEN 발급 후 설정. */
+    * sysObjectID(1.3.6.1.4.1.67140.1)는 SNMP 기동 시 snmpTrapInit()에서 설정(PEN 정의 일원화). */
    snmpCfgLoad();
    webGetSysDescr(snmpMibBase.sysGroup.sysDescr, sizeof(snmpMibBase.sysGroup.sysDescr));
    snmpMibBase.sysGroup.sysDescrLen = osStrlen(snmpMibBase.sysGroup.sysDescr);
@@ -669,6 +676,8 @@ void init(void)
       snmpAgentSettings.port = SNMP_PORT;
       //SNMP trap port number
       snmpAgentSettings.trapPort = SNMP_TRAP_PORT;
+      //Random data generation (SNMPv3 USM)
+      snmpAgentSettings.randCallback = snmpRandCallback;
 
       //SNMP agent initialization
       error = snmpAgentInit(&snmpAgentContext, &snmpAgentSettings);
@@ -678,6 +687,25 @@ void init(void)
          //Debug message
          TRACE_ERROR("Failed to initialize SNMP agent!\r\n");
       }
+
+#if (SNMP_V3_SUPPORT == ENABLED)
+      /* SNMPv3 — 순서 중요: engineBoots → engineID → USM 사용자(키를 engineID로 지역화).
+       * v1/v2c만 허용(snmpVer=0)이어도 engineID·boots는 설정해 둔다(무해) */
+      snmpAgentSetEngineBoots(&snmpAgentContext, (int32_t)snmpCfgNextBoots());
+      snmpSetEngineId(&snmpAgentContext, interface->macAddr.b);
+      if (snmpCfgActive()->v3Flags & SNMP_V3F_AUTH)
+      {
+         const SNMP_CFG *v3 = snmpCfgActive();
+         int priv = (v3->v3Flags & SNMP_V3F_PRIV) != 0;
+
+         //Read-only USM user — HMAC-SHA-1 (+ AES-128), raw keys (Ku) from snmp.d
+         error = snmpAgentCreateUser(&snmpAgentContext, v3->v3User, SNMP_ACCESS_READ_ONLY,
+            SNMP_KEY_FORMAT_RAW, SNMP_AUTH_PROTOCOL_SHA1, v3->v3AuthKey,
+            priv ? SNMP_PRIV_PROTOCOL_AES : SNMP_PRIV_PROTOCOL_NONE, priv ? v3->v3PrivKey : NULL);
+         printf("[SNMP] v3 user '%s' %s (%s, engineBoots=%u)\n", v3->v3User, error ? "FAILED" : "ok",
+            priv ? "authPriv" : "authNoPriv", (unsigned)v3->engineBoots);
+      }
+#endif
 
       //Load SNMPv2-MIB
       snmpAgentLoadMib(&snmpAgentContext, &snmpMibModule);

@@ -186,7 +186,7 @@ SNMP 에이전트 스택은 이미 링크되어 동작 중이다. 새로 만들 
    - `net_config.h`에 `SNMP_V3_SUPPORT ENABLED` 추가. `snmp_agent_usm.c`는 이미 프로젝트에 있다(현재 비활성이라 480B).
    - 사용자는 `snmpAgentCreateUser(…, SNMP_ACCESS_READ_ONLY, …)`로 **RO 전용** 생성. VACM(`SNMP_AGENT_VACM_SUPPORT`)은 1차에 끈다(사용자 단위 RO로 충분).
    - 기본 보안 수준은 **authPriv = HMAC-SHA-1 + AES-128**. 필요한 sha1/hmac/aes/cfb가 이미 링크되어 있다. SHA-256을 원하면 `sha256.c` 추가 + `SNMP_SHA256_SUPPORT ENABLED`.
-   - engineID는 RFC 3411 형식(`0x80000000 | PEN` + MAC)으로 장비마다 고유하게 만든다 → **PEN이 필요**하다. 발급 전에는 임시값으로 개발한다.
+   - engineID는 RFC 3411 형식(`0x80000000 | PEN` + MAC)으로 장비마다 고유하게 만든다 → **PEN이 필요**하다(67140 발급 완료).
    - 비밀번호→키 변환(1MB 해시)은 무겁다. 부팅 시와 설정 변경 시에만 1회 수행하고 키를 보관한다.
 4. **자사 MIB 구현**(§5): `SV300-MIB.mib` 텍스트 + CycloneTCP MIB 모듈(`sv300_mib_module.c`/`_impl.c`)
    → 검증: `smilint` 통과, `snmpwalk` 값이 Modbus 50000~ 맵을 읽은 값과 일치
@@ -316,15 +316,16 @@ varbind(두 Trap 공통):
 | 항목 | 내용 |
 |---|---|
 | 연결 지점 | `storeAlarmLog()` 끝(발생·복귀), 알람 리셋 처리 2곳(`meter.c`) → `snmpTrapAlarm()` / `snmpTrapAlarmReset()`는 큐(16건)에 넣기만 함 |
-| 송신 | 전용 태스크 `snmpTrap`(LOW 우선순위)가 큐를 비우며 `snmpAgentSendTrap()` 호출. SNMPv2c, 커뮤니티 `public`, UDP 162 |
+| 송신 | 전용 태스크 `snmpTrap`(LOW 우선순위)가 큐를 비우며 `snmpAgentSendTrap()` 호출, UDP 162. 버전은 부팅 시 확정: SNMP Version `v3 only`면 SNMPv3(USM v3 User, authPriv/authNoPriv), 그 외 SNMPv2c(설정 커뮤니티) |
+| SNMPv3 | `SNMP_V3_SUPPORT ENABLED`. 부팅 순서 engineBoots(snmp.d, +1) → engineID(`80 01 06 44` + `03` + MAC, RFC 3411) → USM 사용자 생성(RAW 키를 engineID로 지역화). 웹 저장 시 비밀번호를 `snmpGenerateKey()`(SHA-1 1MB 해시)로 Ku 변환해 저장, 원문 미보관. 난수 콜백 `netGetRandData()`(AES salt) |
 | 숫자형 설정 (COMM_CFG) | 구 DAQ 필드 삭제 후 예약 영역 재배치, 구조체 60워드(7110~7169) 불변 — 컴파일 타임 검사 `comm_cfg_layout_check`. SNMP 6워드는 구 DAQ 설정 자리에 연속 배치: **7155 `snmpEn`**(0:OFF, 1:ON, **부팅 시 반영**), **7156 `trapEn`**(0:OFF, 1:ON, 저장 즉시 반영), **7157~7160 `trap_ip`**. **7153 `snmpVer`**(0:v1/v2c, 1:v1/v2c/v3, 2:v3 only, 부팅 시 반영 — v3 미지원 FW는 값과 무관하게 v1/v2c, 웹에서 v3 항목은 비활성 표시, 2 초과 시 부팅 때 0으로 정리). 7150~7152·7162~7169 예약. **`dhcpEn`(7154, 제품군·confWebApp 공통)과 `layoutVer`(7161, 내부값)는 이동 금지**. Save Set 시 `layoutVer`는 펌웨어 값으로 강제 저장. 부팅 시 `snmpEn`/`trapEn`이 0/1이 아니면(구 DAQ 잔존값) SNMP 6워드를 0으로 정리 |
 | SNMP 사용 여부 | OFF면 에이전트·Trap 모두 기동하지 않음(UDP 161 닫힘). 값 그대로 운영하므로 **업데이트한 기존 기기·공장초기화 기기는 0 = OFF** — SNMP를 쓰려면 웹에서 ON 후 Save Set + Reboot |
-| 문자열 설정 (snmp.d) | `\system\snmp.d`(`src/snmp_cfg.c`): 읽기 커뮤니티(Trap 공용), sysContact, sysLocation(각 최대 32자, `"`·`\` 제외 ASCII) + SNMPv3 사용자·키 자리(§4.5-③에서 사용). Modbus 맵 밖이라 Modbus로 읽히지 않음. 파일 없으면 커뮤니티 `public`. **부팅 시 적용**. 웹 저장은 FS 큐로 기록(핸들러에서 FS 락 미보유). **공장초기화(INITDB) 시 파일 삭제** |
+| 문자열 설정 (snmp.d) | `\system\snmp.d`(`src/snmp_cfg.c`): 읽기 커뮤니티(Trap 공용), sysContact, sysLocation(각 최대 32자, `"`·`\` 제외 ASCII) + SNMPv3 USM 사용자 1명(이름, 인증·암호화 키 — 비밀번호 원문 대신 RFC 3414 키 Ku 20B만 저장) + `engineBoots`(SNMP 기동마다 +1). Modbus 맵 밖이라 Modbus로 읽히지 않음. 파일 없으면 커뮤니티 `public`. **부팅 시 적용**. 웹 저장은 FS 큐로 기록(핸들러에서 FS 락 미보유). **공장초기화(INITDB) 시 파일 삭제** |
 | 웹 화면 | Setup > General 탭 **"SNMP" 카드**: SNMP / SNMP Version / Trap / Trap Server(레지스터). SNMP가 OFF면 아래 항목 전부 잠금 + Community / sysContact / sysLocation(`/api/snmp`). 커뮤니티는 값을 내려주지 않고(기본값 여부만) 새로 입력할 때만 저장. 저장은 관리자만 |
 | 알림 전용 객체 | SV300-MIB `.<PEN>.1.5.1.{1..8}` = svAlmMeter, svAlmSlot, svAlmChan, svAlmChanName, svAlmCond, svAlmLevel, svAlmValue, svAlmTime (accessible-for-notify — GET으로는 읽히지 않음) |
 | Trap OID | `.<PEN>.1.5.0.1` svAlarmRaised, `.0.2` svAlarmCleared, `.0.3` svAlarmReset |
 | svAlmTime | 이벤트 시각 `alog.ts`(= `sysTick1s`, 알람 로그와 같은 시각값) |
-| 임시 PEN | **32473**(RFC 5612 문서용 예시 번호). `SV_PEN_OID`(BER 바이트) 매크로만 IANA 발급 번호로 교체 — **출하 전 필수** |
+| PEN | **67140**(IANA 발급, NTEKSYSTEM Co., Ltd.). `snmp_trap.c` `SV_PEN_OID` = BER `{0x84, 0x8C, 0x44}` 한 곳에서 정의 — Trap OID·SV300-MIB·sysObjectID(`1.3.6.1.4.1.67140.1`, `snmpTrapInit()`에서 설정)가 함께 사용 |
 | 메모리맵 | `memorymap` 최신 엑셀의 COMM 영역 갱신 필요: 7150~7153 DAQ server ip → 예약, 7155~7160 DAQ 설정 → SNMP(snmpEn, trapEn, trap_ip) |
 | sysORTable | SV300-MIB가 추가 로드되어 제공 MIB 목록이 4개(SNMPv2-MIB, BRIDGE-MIB, RSTP-MIB, SV300-MIB)가 된다 → §7 TC-02 기대값은 다음 FW 버전에서 갱신 |
 
@@ -352,8 +353,9 @@ PEN은 `1.3.6.1.4.1.<번호>` 아래의 자사 OID 트리를 쓰기 위한 번�
 - 등록 정보(담당자, 이메일 등)가 바뀌면 같은 사이트에서 수정을 요청할 수 있다.
 
 ### 6.3 발급 전후 개발 진행
-- 발급 전: 코드에서 PEN을 **매크로 하나**(`SV_ENTERPRISE_PEN`)로 두고 임시값으로 개발·시험한다. 임시값은 사내 시험망에서만 쓰고 **출하 펌웨어에는 절대 넣지 않는다.**
-- 발급 후: 매크로 값만 바꾸면 MIB OID, sysObjectID(`1.3.6.1.4.1.<PEN>.1`), engineID에 한꺼번에 반영된다. `SV300-MIB.mib`의 `enterprises <PEN>` 줄도 함께 수정한다.
+- **발급 완료(2026-10): PEN 67140** — IANA 등록부 `67140 / NTEKSYSTEM Co., Ltd. / KIM JINSEONG / ntek&nteksys.com`.
+- 코드: `snmp_trap.c`의 `SV_PEN_OID` 매크로 하나(BER `{0x84, 0x8C, 0x44}`)로 Trap OID·SV300-MIB·sysObjectID(`1.3.6.1.4.1.67140.1`)에 반영했다. 개발 중 쓰던 임시값 32473(RFC 5612 문서용)은 제거했다.
+- 남은 반영처: SNMPv3 engineID(§8.1), `SV300-MIB.mib`의 `enterprises 67140`(§8.3).
 
 > 참고: [IANA PEN 신청 페이지](https://www.iana.org/assignments/enterprise-numbers/assignment/apply), [RFC 9371 — PEN Registration](https://www.rfc-editor.org/rfc/rfc9371.html)
 
@@ -370,16 +372,17 @@ PEN은 `1.3.6.1.4.1.<번호>` 아래의 자사 OID 트리를 쓰기 위한 번�
 | 항목 | 현재 펌웨어 | 비고 |
 |---|---|---|
 | SNMP 사용 | **설정(기본 OFF)** | 웹 SNMP 카드 / Modbus 7155. 변경 후 재부팅 |
-| SNMP 버전 | **v1, v2c** | 버전 선택(7153)은 있으나 v3는 다음 FW에서 지원 |
+| SNMP 버전 | **v1, v2c, v3** (선택) | SNMP Version(7153): `v1/v2c`(기본) / `v1/v2c/v3` / `v3 only`. 재부팅 후 반영 |
+| SNMPv3 (USM) | **사용자 1명, 읽기 전용** | 인증 HMAC-SHA-1(필수) + 암호화 AES-128(선택) — authPriv / authNoPriv. engineID = `80 01 06 44 03` + MAC(PEN 67140) |
 | 포트 | **UDP 161**(조회), **UDP 162**(Trap 송신) | |
 | 커뮤니티 | **설정값(기본 `public`) — 읽기 전용** | 쓰기(SET) 가능한 커뮤니티 없음. Trap에도 같은 값 사용 |
 | SET(쓰기) | **미지원** | 모든 SET 요청은 응답 없이 폐기된다 |
 | 제공 MIB | SNMPv2-MIB(RFC 3418) system·snmp 그룹, BRIDGE-MIB(RFC 4188), RSTP-MIB(RFC 4318), SV300-MIB(Trap 알림 객체만) | 표준 MIB는 대부분의 NMS에 기본 내장 |
 | 계측값 MIB(SV300-MIB) | 미제공 | 이후 버전에서 제공 예정(§5) |
-| Trap | **SNMPv2c, 알람 발생/복귀/리셋 3종** | 수신지 1곳(웹 SNMP 카드 / Modbus 7156~7160). 저장 즉시 반영 |
+| Trap | **알람 발생/복귀/리셋 3종** — SNMPv2c(커뮤니티), SNMP Version `v3 only`면 SNMPv3(v3 User) | 수신지 1곳(웹 SNMP 카드 / Modbus 7156~7160). 저장 즉시 반영 |
 | sysContact / sysLocation | **설정** | 웹 SNMP 카드, 최대 32자 ASCII. 재부팅 후 반영 |
 | sysName / 호스트명 | `sv300-<SN>` | mDNS(`sv300-<SN>.local`)·LLMNR·DHCP 호스트명과 같은 값 |
-| 임시 Enterprise 번호 | **32473** | RFC 5612 문서용 예시 번호. IANA PEN 발급 후 교체 |
+| Enterprise 번호(PEN) | **67140** | IANA 발급(NTEKSYSTEM Co., Ltd.). 자사 OID `1.3.6.1.4.1.67140`, sysObjectID `1.3.6.1.4.1.67140.1` |
 
 `<SN>`은 장비 시리얼 번호에서 만든 9자리 숫자다(예: `sv300-250102003`). 부팅 콘솔 로그 `[WEB] mDNS: http://sv300-xxxxxxxxx.local/` 줄이나 웹 화면에서 확인한다.
 
@@ -495,7 +498,7 @@ SV300은 허용되지 않은 요청(잘못된 커뮤니티, 지원하지 않는 
 - 올바른 응답:
   ```
   1.3.6.1.2.1.1.1.0 = "SV300 FW V00.04 (26/10/08)" [ASN_OCTET_STR]   ← sysDescr
-  1.3.6.1.2.1.1.2.0 = "0.0" [ASN_OBJECT_ID]                          ← sysObjectID (자사 OID 발급 후 변경 예정)
+  1.3.6.1.2.1.1.2.0 = "1.3.6.1.4.1.67140.1" [ASN_OBJECT_ID]          ← sysObjectID (PEN 67140 반영 전 빌드는 "0.0")
   1.3.6.1.2.1.1.3.0 = "<숫자>" [ASN_TIMETICKS]                       ← sysUpTime (다시 조회하면 증가)
   1.3.6.1.2.1.1.4.0 = "<설정한 sysContact>" [ASN_OCTET_STR]         ← sysContact (미설정 시 "")
   1.3.6.1.2.1.1.5.0 = "sv300-<SN>" [ASN_OCTET_STR]                   ← sysName
@@ -515,10 +518,11 @@ SV300은 허용되지 않은 요청(잘못된 커뮤니티, 지원하지 않는 
 |---|---|---|---|
 | 1 | `SNMP v1` / public | Custom OID `1.3.6.1.2.1.1.5.0` | `1.3.6.1.2.1.1.5.0 = "sv300-<SN>"` |
 | 2 | `SNMP v2c` / public | Custom OID `1.3.6.1.2.1.1.5.0` | `1.3.6.1.2.1.1.5.0 = "sv300-<SN>"` |
-| 3 | `SNMP v3` / 아무 사용자명(예: `test`), Authentication `MD5`, Password `12345678` | Custom OID `1.3.6.1.2.1.1.5.0` | **응답 없음(timeout)** — V00.04는 v3 미지원 |
+| 3 | `SNMP v3` / 아무 사용자명(예: `test`), Authentication `MD5`, Password `12345678` | Custom OID `1.3.6.1.2.1.1.5.0` | **응답 없음(timeout)** — SNMP Version `v1/v2c`에서는 v3 거부 |
 | 4 | `SNMP v2c` / public | Custom OID `1.3.6.1.2.1.1.5.0` | 다시 `sv300-<SN>` 응답(3번의 무응답이 네트워크 문제가 아님을 확인) |
 
 - 판정: 위 4단계가 모두 맞으면 합격.
+- 위 표는 SNMP Version이 기본값 `v1/v2c`일 때 기준이다. v3 응답 시험은 TC-12.
 
 #### TC-04 잘못된 커뮤니티 거부
 
@@ -614,20 +618,20 @@ Paessler에는 SET 기능이 없으므로 다음 세 가지가 모두 확인되�
 | version / community | `v2c (1)` / `<COMM>` |
 | PDU | `snmpV2-trap` |
 | varbind 1 | `1.3.6.1.2.1.1.3.0` (sysUpTime) |
-| varbind 2 | `1.3.6.1.6.3.1.1.4.1.0` (snmpTrapOID) = `1.3.6.1.4.1.32473.1.5.0.`**1**(발생) / **2**(복귀) / **3**(리셋) |
+| varbind 2 | `1.3.6.1.6.3.1.1.4.1.0` (snmpTrapOID) = `1.3.6.1.4.1.67140.1.5.0.`**1**(발생) / **2**(복귀) / **3**(리셋) |
 
 발생·복귀 Trap의 나머지 varbind(리셋은 미터·시각 2개만):
 
 | OID | 항목 | 예 |
 |---|---|---|
-| `1.3.6.1.4.1.32473.1.5.1.1.0` | 미터 번호(1~3) | `1` |
-| `1.3.6.1.4.1.32473.1.5.1.2.0` | 알람 슬롯(1~32) | `1` |
-| `1.3.6.1.4.1.32473.1.5.1.3.0` | 알람 채널 번호 | `3` |
-| `1.3.6.1.4.1.32473.1.5.1.4.0` | 알람 채널 이름 | `U1` |
-| `1.3.6.1.4.1.32473.1.5.1.5.0` | 조건 (0:under, 1:over, 2:equal) | `1` |
-| `1.3.6.1.4.1.32473.1.5.1.6.0` | 설정값(문자열) | `"50.00"` |
-| `1.3.6.1.4.1.32473.1.5.1.7.0` | 측정값(문자열) | `"110.12"` |
-| `1.3.6.1.4.1.32473.1.5.1.8.0` | 이벤트 시각(초) | 장비 알람 로그 시각과 같음 |
+| `1.3.6.1.4.1.67140.1.5.1.1.0` | 미터 번호(1~3) | `1` |
+| `1.3.6.1.4.1.67140.1.5.1.2.0` | 알람 슬롯(1~32) | `1` |
+| `1.3.6.1.4.1.67140.1.5.1.3.0` | 알람 채널 번호 | `3` |
+| `1.3.6.1.4.1.67140.1.5.1.4.0` | 알람 채널 이름 | `U1` |
+| `1.3.6.1.4.1.67140.1.5.1.5.0` | 조건 (0:under, 1:over, 2:equal) | `1` |
+| `1.3.6.1.4.1.67140.1.5.1.6.0` | 설정값(문자열) | `"50.00"` |
+| `1.3.6.1.4.1.67140.1.5.1.7.0` | 측정값(문자열) | `"110.12"` |
+| `1.3.6.1.4.1.67140.1.5.1.8.0` | 이벤트 시각(초) | 장비 알람 로그 시각과 같음 |
 
 - 판정: TR-01~05가 표대로 나오고 varbind 값이 장비 웹 Alarm Log와 일치하면 합격.
 - 보조 확인: 장비 콘솔에 송신마다 `Sending SNMP message to <PC IP> port 162`, 실패 시 `[SNMP] trap(N) M1 send failed (...)`가 출력된다.
@@ -642,6 +646,33 @@ Paessler에는 SET 기능이 없으므로 다음 세 가지가 모두 확인되�
 | 3 | SNMP OFF → Save → Reboot | 모든 SNMP 요청 응답 없음, Trap 없음 |
 | 4 | 공장초기화(Init Settings) | SNMP OFF, 재부팅 후 다시 ON하면 Community `public`·Contact/Location 빈 값(설정 파일 삭제 확인) |
 | 5 | SNMP OFF 상태에서 SNMP 카드 확인 | Version·Trap·Trap Server·Community·sysContact·sysLocation 칸이 잠김 |
+
+#### TC-12 SNMPv3
+
+**준비 (장비 웹 SNMP 카드)**
+1. SNMP Version **`v1/v2c/v3`** 선택
+2. **v3 User** 예: `ntekv3` / **v3 Auth Password (SHA-1)** 예: `authpass1` / **v3 Priv Password (AES-128)** 예: `privpass1` (각 8~32자)
+3. Save → **Reboot**
+4. 콘솔 확인: `[SNMP] v3 user 'ntekv3' ok (authPriv, engineBoots=N)` — 재부팅할 때마다 N이 1씩 증가
+
+- 화면 잠금: Version이 `v1/v2c`면 v3 칸 잠금, `v3 only`면 Community 칸 잠금.
+- 비밀번호는 저장 후 다시 보이지 않는다("(set)" 표시). 바꿀 때만 새로 입력한다.
+
+**Paessler 설정 (v3)**: SNMP Version `SNMP v3`, Community 칸 = **v3 User**, Authentication `SHA`, Password = Auth 비밀번호, Encryption `AES`, Encryption Key = Priv 비밀번호, Context 비움
+
+| # | 방법 | 올바른 결과 |
+|---|---|---|
+| 1 | 위 설정으로 Custom OID `1.3.6.1.2.1.1.5.0` | `sv300-<SN>` 응답 |
+| 2 | Password(인증)만 틀리게 | 값 없음 — 인증 실패 오류(장비가 USM Report로 거부) |
+| 3 | Encryption Key(암호화)만 틀리게 | 값 없음 — 복호화 실패 오류 |
+| 4 | 등록되지 않은 사용자 이름 | 값 없음 — unknown user 오류 |
+| 5 | Version `v1/v2c/v3`에서 v2c / `<COMM>` 조회 | 응답(v2c와 v3 모두 허용) |
+| 6 | SNMP Version **`v3 only`** → Save → Reboot 후 v2c / `<COMM>` 조회 | **응답 없음(timeout)**. v3(1번 설정)은 응답 |
+| 7 | `v3 only`에서 알람 발생(TC-10 준비 동일) | Wireshark에 Trap 수신: `msgVersion: snmpv3 (3)`, `msgUserName` = v3 User, PDU는 암호화(`encryptedPDU`) |
+| 8 | 장비 재부팅 2회 | 콘솔 `engineBoots`가 매번 1씩 증가. Paessler 조회는 재부팅 후에도 정상 |
+
+- Wireshark에서 v3 Trap 내용(varbind)을 보려면 **Edit → Preferences → Protocols → SNMP → Users Table**에 Username·Authentication model `SHA1`·Password·Privacy protocol `AES`·Privacy password를 등록한다(Engine ID는 비워 둠).
+- `v3 only`인데 v3 사용자를 설정하지 않으면 Trap을 보내지 않는다(콘솔 `[SNMP] v3 only but no v3 user — trap disabled`).
 
 ### 7.5 공존·부하 시험
 
@@ -719,6 +750,7 @@ SNMP 변경 후에도 RSTP 링 이중화가 정상 동작하는지 확인한다.
 | TC-09 재부팅 후 복귀 | | 복귀 시간 __초 |
 | TC-10 Trap (TR-01~05) | | 수신 Trap 수·varbind 일치 |
 | TC-11 SNMP 설정 반영 | | |
+| TC-12 SNMPv3 | | authPriv / v3 only / engineBoots 증가 |
 | 7.5 공존·부하 1시간 | | CPU __% |
 | 7.6 RSTP 링 절체/복구 | | 절체 __초 / 복구 __초 |
 
@@ -728,28 +760,17 @@ SNMP 변경 후에도 RSTP 링 이중화가 정상 동작하는지 확인한다.
 ## 8. 추후 작업 (TODO)
 
 > 운영 규칙: SNMP 관련 남은 작업을 여기서 관리한다. **완료한 항목은 이 목록에서 삭제**하고, 결과는 해당 본문 절(§4~§7)과 FWUPDATE에 남긴다.
-> 기준: 2026-10-08, SV300 커밋 `7a761dd` / confWebApp `6513bab`
+> 기준: 2026-10-12 (SV300 `79d0891` 이후 PEN 67140·SNMPv3 미커밋 / confWebApp `6513bab` 이후 미커밋)
 
-### 8.1 SNMPv3 (§4.5-③) — 다음 개발 단계
-- [ ] `net_config.h`에 `SNMP_V3_SUPPORT ENABLED`, 빌드 크기·RAM 확인
-- [ ] USM 사용자 1개(RO): 사용자 이름 + 인증(HMAC-SHA-1) + 암호화(AES-128). 비밀번호는 저장 시 키(20B)로 변환해 `snmp.d`의 예약 필드(`v3User`·`v3AuthKey`·`v3PrivKey`)에 저장, 원문 미보관. 비밀번호 8자 이상 검사
-- [ ] engineID = RFC 3411 형식(`0x80000000|PEN` + MAC). PEN 발급 전 임시값
-- [ ] snmpEngineBoots 영구 저장(부팅마다 +1) — 미저장 시 NMS 시간창(notInTimeWindow) 문제
-- [ ] SNMP Version 선택 활성화: 장비 웹·confWebApp의 `v1/v2c/v3`·`v3 only` 항목 `(next FW)`·disabled 해제 (`web.c` OPTDIS, `channel_general.html`)
-- [ ] `v3 only`일 때 Community 칸 잠금 / v1·v2c일 때 v3 칸 잠금(웹 SNMP 카드)
-- [ ] v3 Trap: Version 설정에 따라 Trap도 v3(RO 사용자)로 송신
+### 8.1 SNMPv3 (§4.5-③) — 구현·빌드 완료(2026-10-12), 실기 시험 남음
+- [ ] 실기 TC-12(authPriv·오류 3종·v2c 병행·`v3 only`·v3 Trap·engineBoots 증가) + TC-11 재확인
+- [ ] 실기 확인 후 **FW_VER 상향** (현재 0004)
 - [ ] (선택) SHA-256 인증 — `sha256.c` 추가 + `SNMP_SHA256_SUPPORT`
-- [ ] §7에 v3 시험 항목 추가(TC-03 v3 기대값 변경 포함) → 자체 시험 완료 후 **FW_VER 상향**
-
-### 8.2 IANA PEN (§6)
-- [ ] 발급 확인(신청서 작성 2026-10-08, 확인 메일 답장 여부 확인)
-- [ ] 발급 후 교체: `snmp_trap.c` `SV_PEN_OID`(BER 바이트), sysObjectID(`1.3.6.1.4.1.<PEN>.1`), engineID, `SV300-MIB.mib`의 `enterprises` — **출하 전 필수**(현재 임시 32473)
-- [ ] snmp.md §5.4·§7의 `32473` 표기 갱신
 
 ### 8.3 자사 MIB — 계측값 (§4.5-④, §5)
 - [ ] CycloneTCP MIB 모듈 확장(현재 `snmp_trap.c`의 SV300-MIB는 Trap 알림 객체만): `svCommon`, `svFeederTable`(미사용 피더 행 숨김), `svHarmTable`(1차 포함), `svAlarmTable`(Trap 유실 시 폴링 복구용)
 - [ ] 데이터 소스 `psmpMap` 스냅샷, 스케일 §5.2(U·Upp·I ×100, In ×1000 등), 전력량·고조파는 Modbus 원값
-- [ ] `SV300-MIB.mib`(SMIv2) 작성 + `smilint` 검사, Trap(NOTIFICATION-TYPE) 정의 포함
+- [ ] `SV300-MIB.mib`(SMIv2) 작성 + `smilint` 검사, `enterprises 67140`, Trap(NOTIFICATION-TYPE) 정의 포함
 - [ ] §7에 MIB 조회 시험 추가
 
 ### 8.4 배포물 (§4.5-⑤)

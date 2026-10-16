@@ -23,6 +23,7 @@
 
 #include "core/net.h"
 #include "http/http_server.h"
+#include "snmp/snmp_agent.h"
 #include "mdns/mdns_responder.h"
 #include "hash/sha1.h"
 #include "mac/hmac.h"
@@ -1362,17 +1363,25 @@ static error_t apiSnmpGet(HttpConnection *c)
 	snprintf(b, sizeof(b), "{\"ok\":true,\"commDefault\":%s,\"contact\":\"%s\",",
 		strcmp(s->community, "public") ? "false" : "true", s->contact);
 	w(c, b);
-	snprintf(b, sizeof(b), "\"location\":\"%s\"}", s->location);
+	snprintf(b, sizeof(b), "\"location\":\"%s\",", s->location);
+	w(c, b);
+	/* v3 비밀번호는 값 대신 설정 여부만 */
+	snprintf(b, sizeof(b), "\"v3user\":\"%s\",\"v3auth\":%s,\"v3priv\":%s}", s->v3User,
+		(s->v3Flags & SNMP_V3F_AUTH) ? "true" : "false", (s->v3Flags & SNMP_V3F_PRIV) ? "true" : "false");
 	w(c, b);
 	return httpCloseStream(c);
 }
 
-/* POST /api/snmp {community?,contact?,location?} — admin. 파일 저장(FS 큐), 다음 부팅부터 적용 */
+/* POST /api/snmp {community?,contact?,location?,v3user?,v3auth?,v3priv?} — admin.
+ * 파일 저장(FS 큐), 다음 부팅부터 적용. v3 비밀번호는 여기서 RFC 3414 키(Ku, SHA-1 1MB 해시)로
+ * 바꿔 저장하고 원문은 버린다(부팅마다 해시하지 않도록 저장 시 1회) */
 static error_t apiSnmpSet(HttpConnection *c)
 {
-	char body[200];
+	char body[320];		/* 6항목×32자 + 키·따옴표 ≈ 270B — HTTP 태스크 스택(2.5KB) 고려해 최소화 */
 	char comm[SNMP_CFG_STR_LEN + 1], cont[SNMP_CFG_STR_LEN + 1], loc[SNMP_CFG_STR_LEN + 1];
-	int rc, rt, rl;
+	char v3u[SNMP_CFG_STR_LEN + 1], v3a[SNMP_CFG_STR_LEN + 1], v3p[SNMP_CFG_STR_LEN + 1];
+	int rc, rt, rl, ru, ra, rp;
+	SnmpKey ka, kp;
 
 	if (webRole(c) != ROLE_ADMIN)
 		return webJsonStatus(c, 403, "{\"ok\":false,\"error\":\"admin only\"}");
@@ -1381,12 +1390,34 @@ static error_t apiSnmpSet(HttpConnection *c)
 	rc = jsonStr(body, "community", comm, sizeof(comm));
 	rt = jsonStr(body, "contact",   cont, sizeof(cont));
 	rl = jsonStr(body, "location",  loc,  sizeof(loc));
-	if (rc < 0 || rt < 0 || rl < 0)
+	ru = jsonStr(body, "v3user",    v3u,  sizeof(v3u));
+	ra = jsonStr(body, "v3auth",    v3a,  sizeof(v3a));
+	rp = jsonStr(body, "v3priv",    v3p,  sizeof(v3p));
+	if (rc < 0 || rt < 0 || rl < 0 || ru < 0 || ra < 0 || rp < 0)
 		return webJsonStatus(c, 400, "{\"ok\":false,\"error\":\"ASCII only, max 32, no \\\" or \\\\\"}");
 	if (rc > 0 && (comm[0] == 0 || strchr(comm, ' ')))
 		return webJsonStatus(c, 400, "{\"ok\":false,\"error\":\"community: 1~32 chars, no space\"}");
+	if (ru > 0 && (v3u[0] == 0 || strchr(v3u, ' ')))
+		return webJsonStatus(c, 400, "{\"ok\":false,\"error\":\"v3 user: 1~32 chars, no space\"}");
+	if ((ra > 0 && strlen(v3a) < 8) || (rp > 0 && strlen(v3p) < 8))
+		return webJsonStatus(c, 400, "{\"ok\":false,\"error\":\"v3 password: 8~32 chars\"}");
+	if ((ra > 0 || rp > 0) && (ru > 0 ? v3u[0] : snmpCfgGet()->v3User[0]) == 0)
+		return webJsonStatus(c, 400, "{\"ok\":false,\"error\":\"v3 user required\"}");
+	if (rp > 0 && ra <= 0 && !(snmpCfgGet()->v3Flags & SNMP_V3F_AUTH))
+		return webJsonStatus(c, 400, "{\"ok\":false,\"error\":\"v3 auth password required before priv\"}");
 
-	snmpCfgSave(rc > 0 ? comm : NULL, rt > 0 ? cont : NULL, rl > 0 ? loc : NULL);
+	if (ra > 0 && snmpGenerateKey(SNMP_AUTH_PROTOCOL_SHA1, v3a, &ka))
+		return webJsonStatus(c, 500, "{\"ok\":false,\"error\":\"v3 key\"}");
+	/* RFC 3826: AES 프라이버시 키도 인증 해시(SHA-1)로 생성 */
+	if (rp > 0 && snmpGenerateKey(SNMP_AUTH_PROTOCOL_SHA1, v3p, &kp))
+		return webJsonStatus(c, 500, "{\"ok\":false,\"error\":\"v3 key\"}");
+	memset(v3a, 0, sizeof(v3a));
+	memset(v3p, 0, sizeof(v3p));
+
+	if (rc > 0 || rt > 0 || rl > 0)
+		snmpCfgSave(rc > 0 ? comm : NULL, rt > 0 ? cont : NULL, rl > 0 ? loc : NULL);
+	if (ru > 0 || ra > 0 || rp > 0)
+		snmpCfgSaveV3(ru > 0 ? v3u : NULL, ra > 0 ? ka.b : NULL, rp > 0 ? kp.b : NULL);
 
 	if (beginJson(c)) return ERROR_WRITE_FAILED;
 	w(c, "{\"ok\":true}");
@@ -1854,8 +1885,8 @@ static const char INDEX_HTML[] =
 " jp('/api/sv300/command',{cmd:cmd}).then(function(r){\n"
 "  if(r.s===403){alert('Admin only');return}if(!r.d.ok){alert('Command failed');return}loadEvents();});}\n"
 /* setup */
-"var OPTDIS={snmp_ver:{1:1,2:1}};\n"
-"var OPT={snmp_ver:{0:'v1/v2c',1:'v1/v2c/v3 (next FW)',2:'v3 only (next FW)'},freq:{0:'60 Hz',1:'50 Hz'},va_type:{0:'RMS (S=VA)',1:'Vector'},pf_sign:{0:'IEC',1:'IEEE'},demand_interval:{0:'1 min',1:'5 min',2:'15 min',3:'30 min',4:'60 min'},minmax_reset:{0:'Daily',1:'Weekly',2:'Monthly'},timezone:{'-720':'UTC-12:00','-600':'Hawaii -10:00','-540':'Alaska -09:00','-480':'Pacific -08:00','-420':'Mountain -07:00','-360':'Central -06:00','-300':'Eastern -05:00','-180':'-03:00','0':'UTC +00:00','60':'Berlin +01:00','120':'Athens +02:00','180':'Moscow +03:00','210':'Tehran +03:30','240':'Dubai +04:00','300':'Karachi +05:00','330':'India +05:30','345':'Nepal +05:45','360':'Dhaka +06:00','420':'Bangkok +07:00','480':'Shanghai +08:00','540':'Seoul +09:00','570':'Adelaide +09:30','600':'Sydney +10:00','720':'Auckland +12:00'}};\n"
+"var OPTDIS={};\n"
+"var OPT={snmp_ver:{0:'v1/v2c',1:'v1/v2c/v3',2:'v3 only'},freq:{0:'60 Hz',1:'50 Hz'},va_type:{0:'RMS (S=VA)',1:'Vector'},pf_sign:{0:'IEC',1:'IEEE'},demand_interval:{0:'1 min',1:'5 min',2:'15 min',3:'30 min',4:'60 min'},minmax_reset:{0:'Daily',1:'Weekly',2:'Monthly'},timezone:{'-720':'UTC-12:00','-600':'Hawaii -10:00','-540':'Alaska -09:00','-480':'Pacific -08:00','-420':'Mountain -07:00','-360':'Central -06:00','-300':'Eastern -05:00','-180':'-03:00','0':'UTC +00:00','60':'Berlin +01:00','120':'Athens +02:00','180':'Moscow +03:00','210':'Tehran +03:30','240':'Dubai +04:00','300':'Karachi +05:00','330':'India +05:30','345':'Nepal +05:45','360':'Dhaka +06:00','420':'Bangkok +07:00','480':'Shanghai +08:00','540':'Seoul +09:00','570':'Adelaide +09:30','600':'Sydney +10:00','720':'Auckland +12:00'}};\n"
 "var CARDN=['Device Information','Communication','ETC','Status','SNMP'],setCur='general';\n"
 "var WM={0:'not used',1:'3P4W',2:'3P3W(2CT)',3:'3P3W(3CT)',4:'1P2W(L1)',5:'1P2W(L2)',6:'1P2W(L3)',7:'1P3W',8:'SIM'};\n"
 "var CT2M={0:'5A',1:'100mA/333mV',2:'Rogowski'},ZCTM={1:'200mV:100mV',2:'200mV:1.5mA',3:'200mV:0.1mA'},DIM={0:'DI',1:'PI'},DIRM={0:'+',1:'-'};\n"
@@ -1898,7 +1929,7 @@ static const char INDEX_HTML[] =
 "function togDeps(root){if(!root)return;root.querySelectorAll('button.tog[data-dep]').forEach(function(b){\n"
 " var on=(b.value==='1'),inv=b.getAttribute('data-inv')==='1',hid=b.getAttribute('data-hide')==='1',lock=b.disabled||(inv?on:!on);\n"
 " b.getAttribute('data-dep').split(',').forEach(function(k){root.querySelectorAll(\"[data-k='\"+k.trim()+\"']\").forEach(function(el){\n"
-"  if(hid){var r=el.closest('.srow');if(r)r.style.display=lock?'none':'';}else el.disabled=lock;});});});}\n"
+"  if(hid){var r=el.closest('.srow');if(r)r.style.display=lock?'none':'';}else el.disabled=lock;});});});if(window.snmpVerDeps)snmpVerDeps();}\n"
 "var GDEP={dhcp:['ip,subnet,gateway,dns',1],sntp:['sntp_ip,sntp_interval',0],snmp:['snmp_ver,snmp_trap,trap_ip,snmp_community,snmp_contact,snmp_location',0],snmp_trap:['trap_ip',0]};\n"
 "function ctlOf(f){var d=\"data-addr='\"+f.addr+\"' data-type='\"+f.type+\"' data-orig='\"+esc(f.val)+\"' data-k='\"+f.k+\"'\",dis=IS_ADMIN?'':'disabled';\n"
 " if(f.ro)return \"<span class='sv' data-k='\"+f.k+\"'>\"+fmtV(f)+\"</span><span class='rtag'>R</span>\";\n"
@@ -1921,7 +1952,15 @@ static const char INDEX_HTML[] =
 " function row(l,k,v,tp,ph){return \"<div class='srow'><span class='sk'>\"+l+\"</span><input type='\"+tp+\"' data-snmp='\"+k+\"' data-k='snmp_\"+k+\"' data-orig='\"+escA(v)+\"' value='\"+escA(v)+\"' maxlength='32' placeholder='\"+ph+\"' \"+dis+\" oninput='setMark(this)'></div>\";}\n"
 " c.insertAdjacentHTML('beforeend',row('Community','community','','password',r.d.commDefault?'public (default) - change!':'(unchanged)')\n"
 "  +row('sysContact','contact',r.d.contact,'text','')+row('sysLocation','location',r.d.location,'text','e.g. Bldg-B 2F MCC-3')\n"
-"  +\"<div class='srow'><span class='sk'></span><span style='color:var(--muted);font-size:12px'>ASCII only, max 32 &middot; SNMP / Community / Contact / Location: applied after reboot</span></div>\");togDeps($('setBody'));});}\n"
+"  +row('v3 User','v3user',r.d.v3user,'text','')\n"
+"  +row('v3 Auth Password (SHA-1)','v3auth','','password',r.d.v3auth?'(set) - type to change':'(not set) 8~32 chars')\n"
+"  +row('v3 Priv Password (AES-128)','v3priv','','password',r.d.v3priv?'(set) - type to change':'(not set) optional, 8~32 chars')\n"
+"  +\"<div class='srow'><span class='sk'></span><span style='color:var(--muted);font-size:12px'>ASCII only, max 32 &middot; v3 password 8~32 &middot; all SNMP settings applied after reboot</span></div>\");\n"
+" var vs=document.querySelector(\"#setBody select[data-k='snmp_ver']\");if(vs)vs.addEventListener('change',snmpVerDeps);togDeps($('setBody'));});}\n"
+/* SNMP Version에 따른 잠금: v1/v2c → v3 칸 잠금, v3 only → Community 잠금 (SNMP OFF면 모두 잠금) */
+"function snmpVerDeps(){var t=document.querySelector(\"#setBody button.tog[data-k='snmp']\"),s=document.querySelector(\"#setBody select[data-k='snmp_ver']\");if(!t||!s)return;\n"
+" var on=IS_ADMIN&&t.value==='1',v=s.value;function lk(k,l){var e=document.querySelector(\"#setBody [data-k='\"+k+\"']\");if(e)e.disabled=l;}\n"
+" lk('snmp_community',!on||v==='2');['snmp_v3user','snmp_v3auth','snmp_v3priv'].forEach(function(k){lk(k,!on||v==='0');});}\n"
 "function loadStatus(){if(!STN||setCur!=='general')return Promise.resolve();\n"
 " return j('/api/regs?addr='+STLO+'&n='+STN).then(function(r){if(!r.d||!r.d.ok)return;\n"
 "  STF.forEach(function(f){var e=document.querySelector(\"#setBody .sv[data-k='\"+f.k+\"']\");if(e)e.textContent=r.d.words[f.addr-STLO];});});}\n"

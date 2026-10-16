@@ -184,6 +184,8 @@
 #define SNMP_AGENT_SUPPORT ENABLED
 //SNMP MIB module support
 #define SNMP_MIB_SUPPORT ENABLED
+//SNMPv3 (USM: HMAC-SHA-1 인증 + AES-128 암호화) — 허용 여부는 COMM_CFG.snmpVer(7153)
+#define SNMP_V3_SUPPORT ENABLED
 //system 그룹 버퍼 — 기본 16은 sysDescr("SV300 FW Vxx.xx (YY/MM/DD)")에 부족
 #define SNMP_MIB_SYS_DESCR_SIZE 48
 //sysName = 호스트명 "sv300-<SN>"(15자) — NET_MAX_HOSTNAME_LEN(24)에 맞춤

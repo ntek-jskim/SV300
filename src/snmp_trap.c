@@ -4,7 +4,8 @@
  *    계측 태스크가 SNMP 에이전트 뮤텍스(요청 처리 중 점유)를 기다리지 않게 하기 위함.
  *  - 수신지: COMM_CFG.trapEn / trap_ip (Modbus 7156~7160, 웹 SNMP 카드). 저장 즉시 반영.
  *  - COMM_CFG.snmpEn(7155)=0이면 main.c가 에이전트와 함께 이 모듈도 기동하지 않는다(큐 입력 무시).
- *  - Trap 커뮤니티 = 부팅 시 적용된 읽기 커뮤니티(snmp_cfg.c, 에이전트와 동일 값).
+ *  - Trap 버전·인증(부팅 시 확정): SNMP Version이 v3 only면 v3(snmp.d의 USM 사용자),
+ *    그 외는 v2c(부팅 시 적용된 읽기 커뮤니티 — 에이전트와 동일 값).
  *  - varbind 값은 SV300-MIB의 accessible-for-notify 객체로 실린다(GET으로는 읽히지 않음).
  *----------------------------------------------------------------------------*/
 #include <stdio.h>
@@ -13,15 +14,17 @@
 #include "core/net.h"
 #include "snmp/snmp_agent.h"
 #include "mibs/mib_common.h"
+#include "mibs/snmp_mib_module.h"
 #include "encoding/asn1.h"
 #include "meter.h"
 #include "snmp_trap.h"
 #include "snmp_cfg.h"
 
-/* 자사 Enterprise OID 1.3.6.1.4.1.<PEN> — IANA PEN 발급 전 임시값.
- * 32473 = RFC 5612 문서용 예시 PEN(실제 출하 금지). 발급 후 아래 BER 바이트만 교체(snmp.md §6.3) */
-#define SV_PEN_OID			0x81, 0xFD, 0x59	/* 32473 의 BER base-128 인코딩 */
+/* 자사 Enterprise OID 1.3.6.1.4.1.67140 — IANA PEN 67140(NTEKSYSTEM Co., Ltd., 2026-10 발급).
+ * 67140 = 4·128² + 12·128 + 68 → BER base-128 {0x84, 0x8C, 0x44} */
+#define SV_PEN_OID			0x84, 0x8C, 0x44
 #define SV_PEN_OID_LEN		3
+#define SV_PEN				67140UL		/* 위 BER과 같은 값 — SNMPv3 engineID용 */
 
 /* sv300(.<PEN>.1) > svNotifications(.5) > 0(알림) / 1(알림 전용 객체) */
 #define SV_ENT_OID_LEN		(5 + SV_PEN_OID_LEN + 2)	/* 1.3.6.1.4.1.<PEN>.1.5 */
@@ -32,7 +35,6 @@
 #define TRAP_ALARM_CLEARED	2
 #define TRAP_ALARM_RESET	3
 
-#define TRAP_COMMUNITY		(snmpCfgActive()->community)	/* main.c의 RO 커뮤니티와 동일 */
 #define TRAP_Q_SIZE			16
 
 /*---------------------------- 알림 전용 객체 값 ----------------------------*/
@@ -92,6 +94,9 @@ static const MibModule sv300MibModule =
 
 static const uint8_t svEnterpriseOid[] = {43, 6, 1, 4, 1, SV_PEN_OID, 1, 5};
 
+/* sysObjectID = 1.3.6.1.4.1.67140.1 (sv300) — NMS 장비 종류 자동 인식용 */
+static const uint8_t svSysObjectId[] = {43, 6, 1, 4, 1, SV_PEN_OID, 1};
+
 /* 알람 발생/복귀 varbind: meter, slot, chan, chanName, cond, level, value, time */
 static const SnmpTrapObject almTrapObjs[] =
 {
@@ -125,6 +130,9 @@ static TRAP_EVT trapQ[TRAP_Q_SIZE];
 static uint16_t trapQr, trapQw, trapQn;
 static OsEvent  trapEvent;
 static SnmpAgentContext *trapCtx;
+/* 부팅 시 확정 — snmpVer=2(v3 only)면 v3(USM 사용자), 그 외 v2c(커뮤니티). NULL이면 송신 불가 */
+static SnmpVersion trapVersion = SNMP_VERSION_2C;
+static const char *trapUser;
 
 /* 생산자는 계측 태스크(들), 소비자는 송신 태스크 — 짧은 구간이라 스케줄러 정지로 보호 */
 static void trapPush(const TRAP_EVT *e)
@@ -174,7 +182,7 @@ static void trapSend(const TRAP_EVT *e)
 	error_t err;
 
 	/* 에이전트 미기동(시작 실패)이면 소켓이 없으므로 보내지 않는다 */
-	if (!trapCtx->running || !pdb->comm.trapEn || ip[0] == 0)
+	if (!trapCtx->running || trapUser == NULL || !pdb->comm.trapEn || ip[0] == 0)
 		return;
 
 	almMeter = e->meter;
@@ -192,10 +200,10 @@ static void trapSend(const TRAP_EVT *e)
 	dst.ipv4Addr = IPV4_ADDR(ip[0], ip[1], ip[2], ip[3]);
 
 	if (e->code == TRAP_ALARM_RESET)
-		err = snmpAgentSendTrap(trapCtx, &dst, SNMP_VERSION_2C, TRAP_COMMUNITY,
+		err = snmpAgentSendTrap(trapCtx, &dst, trapVersion, trapUser,
 			SNMP_TRAP_ENTERPRISE_SPECIFIC, e->code, rstTrapObjs, arraysize(rstTrapObjs));
 	else
-		err = snmpAgentSendTrap(trapCtx, &dst, SNMP_VERSION_2C, TRAP_COMMUNITY,
+		err = snmpAgentSendTrap(trapCtx, &dst, trapVersion, trapUser,
 			SNMP_TRAP_ENTERPRISE_SPECIFIC, e->code, almTrapObjs, arraysize(almTrapObjs));
 
 	if (err)
@@ -220,6 +228,10 @@ void snmpTrapInit(void *ctx)
 	OsTaskParameters params;
 	error_t err;
 
+	/* sysObjectID — PEN 정의를 이 파일 하나로 유지하기 위해 여기서 설정(main.c snmpMibInit 이후 호출) */
+	memcpy(snmpMibBase.sysGroup.sysObjectID, svSysObjectId, sizeof(svSysObjectId));
+	snmpMibBase.sysGroup.sysObjectIDLen = sizeof(svSysObjectId);
+
 	err = snmpAgentLoadMib((SnmpAgentContext *)ctx, &sv300MibModule);
 	if (!err)
 		err = snmpAgentSetEnterpriseOid((SnmpAgentContext *)ctx,
@@ -235,7 +247,37 @@ void snmpTrapInit(void *ctx)
 		printf("[SNMP] trap task create failed\n");
 		return;
 	}
+
+	/* Trap 버전·인증 확정(부팅 시 설정 기준 — 에이전트 허용 버전과 함께 재부팅으로만 바뀜) */
+	trapVersion = SNMP_VERSION_2C;
+	trapUser    = snmpCfgActive()->community;
+#if (SNMP_V3_SUPPORT == ENABLED)
+	if (pdb->comm.snmpVer == 2) {	/* v3 only */
+		trapVersion = SNMP_VERSION_3;
+		trapUser    = (snmpCfgActive()->v3Flags & SNMP_V3F_AUTH) ? snmpCfgActive()->v3User : NULL;
+		if (trapUser == NULL)
+			printf("[SNMP] v3 only but no v3 user — trap disabled\n");
+	}
+#endif
 	trapCtx = (SnmpAgentContext *)ctx;
+}
+
+void snmpSetEngineId(void *ctx, const uint8_t *mac)
+{
+#if (SNMP_V3_SUPPORT == ENABLED)
+	/* RFC 3411 snmpEngineID: 0x80000000|PEN(4B) + format 3(MAC) + MAC(6B) = 11B, 장비마다 고유 */
+	uint8_t id[11];
+
+	id[0] = (uint8_t)(0x80 | ((SV_PEN >> 24) & 0x7F));
+	id[1] = (uint8_t)(SV_PEN >> 16);
+	id[2] = (uint8_t)(SV_PEN >> 8);
+	id[3] = (uint8_t)SV_PEN;
+	id[4] = 3;
+	memcpy(&id[5], mac, 6);
+	snmpAgentSetContextEngine((SnmpAgentContext *)ctx, id, sizeof(id));
+#else
+	(void)ctx; (void)mac;
+#endif
 }
 
 void snmpTrapAlarm(int id, int slot, int status, int chan, int cond,

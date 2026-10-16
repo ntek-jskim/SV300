@@ -56,6 +56,10 @@ void snmpCfgLoad(void)
 	cfgTerminate(&snmpCfg);
 	if (snmpCfg.community[0] == '\0')
 		strcpy(snmpCfg.community, "public");
+	/* v3: 인증 키 없는 암호화 단독은 USM상 불가 */
+	snmpCfg.v3Flags &= (SNMP_V3F_AUTH | SNMP_V3F_PRIV);
+	if (!(snmpCfg.v3Flags & SNMP_V3F_AUTH))
+		snmpCfg.v3Flags = 0;
 
 	snmpCfgRun = snmpCfg;
 }
@@ -71,13 +75,11 @@ static void setField(char *dst, const char *src)
 	dst[SNMP_CFG_STR_LEN] = '\0';
 }
 
-void snmpCfgSave(const char *community, const char *contact, const char *location)
+/* 현재 RAM 설정을 FS 큐로 기록(웹 핸들러용 — FS 락 미보유) */
+static void cfgQueueWrite(void)
 {
 	FS_MSG msg;
 
-	setField(snmpCfg.community, community);
-	setField(snmpCfg.contact, contact);
-	setField(snmpCfg.location, location);
 	snmpCfg.magic = SNMP_CFG_MAGIC;
 	snmpCfg.ver   = SNMP_CFG_VER;
 
@@ -88,6 +90,53 @@ void snmpCfgSave(const char *community, const char *contact, const char *locatio
 	msg.pbuf = &snmpCfgWr;
 	msg.size = sizeof(snmpCfgWr);
 	putFsQ(&msg);
+}
+
+void snmpCfgSave(const char *community, const char *contact, const char *location)
+{
+	setField(snmpCfg.community, community);
+	setField(snmpCfg.contact, contact);
+	setField(snmpCfg.location, location);
+	cfgQueueWrite();
+}
+
+void snmpCfgSaveV3(const char *user, const uint8_t *authKey, const uint8_t *privKey)
+{
+	setField(snmpCfg.v3User, user);
+	if (authKey != NULL) {
+		memcpy(snmpCfg.v3AuthKey, authKey, sizeof(snmpCfg.v3AuthKey));
+		snmpCfg.v3Flags |= SNMP_V3F_AUTH;
+	}
+	if (privKey != NULL) {
+		memcpy(snmpCfg.v3PrivKey, privKey, sizeof(snmpCfg.v3PrivKey));
+		snmpCfg.v3Flags |= SNMP_V3F_PRIV;
+	}
+	cfgQueueWrite();
+}
+
+uint32_t snmpCfgNextBoots(void)
+{
+	FILE *fp;
+
+	/* RFC 3414: snmpEngineBoots는 재기동마다 증가해야 한다(재생 공격 방지 시간창).
+	 * 부팅 초기(FS_task 기동 전)라 FS 큐 대신 직접 기록 */
+	if (snmpCfg.engineBoots < 0x7FFFFFFFu)
+		snmpCfg.engineBoots++;
+	snmpCfg.magic = SNMP_CFG_MAGIC;
+	snmpCfg.ver   = SNMP_CFG_VER;
+
+	fsFileLock();
+	fp = fopen(SNMP_CFG_FILE, "wb");
+	if (fp != NULL) {
+		fwrite(&snmpCfg, sizeof(snmpCfg), 1, fp);
+		fclose(fp);
+	}
+	fsFileUnlock();
+	if (fp == NULL)
+		printf("[SNMP] %s write failed (engineBoots=%u)\n", SNMP_CFG_FILE, (unsigned)snmpCfg.engineBoots);
+
+	snmpCfgRun.engineBoots = snmpCfg.engineBoots;
+	return snmpCfg.engineBoots;
 }
 
 void snmpCfgFactoryReset(void)
