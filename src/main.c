@@ -84,6 +84,7 @@
 #include "web.h"
 #include "snmp_trap.h"
 #include "snmp_cfg.h"
+#include "mqtt_app.h"
 
 extern volatile uint8_t g_meterReady;   /* 계측 준비완료(Modbus 통신 허용) — meter.c 정의. 웹은 게이트 없음 */
 
@@ -142,10 +143,11 @@ static error_t snmpRandCallback(uint8_t *data, size_t length)
    return NO_ERROR;
 }
 
-extern uint16_t *getNtpIp();
+extern const char *getNtpServer(void);
 extern uint16_t getNtpInterval();
 extern int16_t  getTimeZone();
 extern uint16_t getModbusPort();
+extern int mbTcpEnGet(void);
 extern void     setMeterIpAddr(uint32_t);
 extern OsTaskId getW5500TaskId();
 extern void Sntp_Set(int v);
@@ -338,7 +340,6 @@ void sntpTask(void *arg)
 #endif
    int interval = 0, errcnt=0;
    error_t error;
-   uint16_t *ntp_addr = getNtpIp();
 	uint16_t ntpInterval = getNtpInterval();
 
    //Point to the network interface
@@ -358,7 +359,9 @@ void sntpTask(void *arg)
 #endif
       if (++interval >= ntpInterval) {
          interval = 0;
-         sprintf(buffer, "%d.%d.%d.%d", ntp_addr[0], ntp_addr[1], ntp_addr[2], ntp_addr[3]);
+         /* 서버 = IP 또는 도메인(comm.sntpServer) — sntpGetTime이 getHostByName으로 해석 */
+         strncpy(buffer, getNtpServer(), sizeof(buffer) - 1);
+         buffer[sizeof(buffer) - 1] = '\0';
          error = sntpGetTime(buffer);
          if (error == NO_ERROR) {
             Sntp_Set(0);
@@ -430,7 +433,7 @@ void init(void)
    }
 
    /* system 그룹 — 데모 기본값("Description"/"Name"...) 대신 실제 장치 정보.
-    * sysContact/sysLocation은 snmp.d(웹 SNMP 카드, 미설정 시 빈 문자열 — RFC 3418).
+    * sysContact/sysLocation은 통신 설정(comm.snmpContact/Location, Modbus 7316~7347). 미설정 시 빈 문자열(RFC 3418).
     * sysObjectID(1.3.6.1.4.1.67140.1)는 SNMP 기동 시 snmpTrapInit()에서 설정(PEN 정의 일원화). */
    snmpCfgLoad();
    webGetSysDescr(snmpMibBase.sysGroup.sysDescr, sizeof(snmpMibBase.sysGroup.sysDescr));
@@ -654,13 +657,13 @@ void init(void)
 #endif
 #endif
 
-   /* SNMP 사용 여부(COMM_CFG.snmpEn, 7155) — 부팅 시에만 반영(변경 후 Reboot 필요).
+   /* SNMP 사용 여부(comm.snmpEn, 7290) — 부팅 시에만 반영(변경 후 Reboot 필요).
     * OFF면 에이전트·Trap 모두 기동하지 않는다(UDP 161 닫힘). */
    if (snmpEnGet())
    {
       //Get default settings
       snmpAgentGetDefaultSettings(&snmpAgentSettings);
-      //Minimum/Maximum version accepted by the SNMP agent — COMM_CFG.snmpVer(7153)
+      //Minimum/Maximum version accepted by the SNMP agent — comm.snmpVer(7291)
       snmpAgentSettings.versionMin = SNMP_VERSION_1;
       snmpAgentSettings.versionMax = SNMP_VERSION_2C;
 #if (SNMP_V3_SUPPORT == ENABLED)
@@ -739,6 +742,12 @@ void init(void)
    }
 
 #if   1  // modbus
+   /* Modbus TCP 사용 여부(comm.mbTcpEn, 7150) — 부팅 시에만 반영. OFF면 서버를 띄우지 않는다
+    * (다시 켜려면 웹 설정 또는 콘솔 INITDB 공장초기화) */
+   if (!mbTcpEnGet()) {
+      printf("[MODBUS] TCP disabled (mbTcpEn=0)\n");
+   }
+   else {
 //Get default settings
    modbusServerGetDefaultSettings(&modbusServerSettings);
    //Bind Modbus/TCP server to the desired interface
@@ -773,8 +782,12 @@ void init(void)
       //Debug message
       TRACE_ERROR("Failed to start Modbus/TCP server!\r\n");
    }
+   }
 #endif
-   
+
+   /* MQTT 계측값 전송(comm.mqttEn, 7160) — 부팅 시에만 반영. 브로커 미설정이면 기동 안 함 */
+   mqttAppStart();
+
 #ifdef _FTP_SERVER	
    //Get default settings
    ftpServerGetDefaultSettings(&ftpServerSettings);

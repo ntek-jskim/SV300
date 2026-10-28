@@ -85,8 +85,9 @@ uint32_t sysTick32, sysTick1s, sysTick10s, sysTick10m, sysTick15m, sysTickDemand
 volatile uint64_t sysTick64;
 uint32_t et1, et2;
 
-uint16_t *getNtpIp(void) {
-	return pdb->comm.sntp;
+/* NTP 서버 — IP 또는 도메인 문자열(sntpGetTime이 getHostByName으로 해석) */
+const char *getNtpServer(void) {
+	return pdb->comm.sntpServer;
 }
 
 uint16_t getNtpInterval(void) {
@@ -97,7 +98,7 @@ uint16_t getNtpInterval(void) {
 }
 
 int16_t getTimeZone() {
-	return pdb->etc.timezone;
+	return pdb->comm.timezone;
 }
 
 uint32_t fs_get_date (void) {
@@ -430,6 +431,10 @@ uint16_t getModbusPort() {
 	return pdb->comm.tcpPort;
 }
 
+int mbTcpEnGet(void) {
+	return pdb->comm.mbTcpEn;
+}
+
 int dhcpModeGet() {
    return pdb->comm.dhcpEn;
 }
@@ -532,10 +537,10 @@ void app_init(void *params) {
     *  사용자 방침: 최대카운트를 쓰레드 생성 전 미리 계산. 이후 shell 'CPU'가 이 기준으로 부하율 산출. */
    cpuCalibIdle(200);
 
-   // SNTP Task
-   if (pdb->comm.useSntp)
+   // SNTP Task — 서버(IP 또는 도메인)가 비어 있으면 기동하지 않는다
+   if (pdb->comm.useSntp && pdb->comm.sntpServer[0] != '\0')
    {
-      	tid_sntp = osCreateTask("SNTP", sntpTask, pdb->comm.sntp, &taskParams);
+      	tid_sntp = osCreateTask("SNTP", sntpTask, NULL, &taskParams);
       	if(tid_sntp == OS_INVALID_TASK_ID)
       	{
          	//Debug message

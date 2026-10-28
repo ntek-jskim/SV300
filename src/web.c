@@ -1032,10 +1032,10 @@ static error_t apiCommand(HttpConnection *c)
 		if (p) { p++; while (*p && *p != '"' && o < (int)sizeof(cmd) - 1) cmd[o++] = *p++; cmd[o] = 0; }
 	}
 
-	if      (!strcmp(cmd, "clear_alarm")) addr = 7478;   /* clear alarm ALL (260812 맵: +1 시프트) */
-	else if (!strcmp(cmd, "clear_event")) addr = 7482;   /* clear event ALL */
-	else if (!strcmp(cmd, "ack_alarm"))   addr = 7494;   /* alarm ack ALL */
-	else if (!strcmp(cmd, "ack_event"))   addr = 7498;   /* event ack ALL */
+	if      (!strcmp(cmd, "clear_alarm")) addr = MBAD_SET_CMD + 30;   /* clear alarm ALL (7828) */
+	else if (!strcmp(cmd, "clear_event")) addr = MBAD_SET_CMD + 34;   /* clear event ALL (7832) */
+	else if (!strcmp(cmd, "ack_alarm"))   addr = MBAD_SET_CMD + 46;   /* alarm ack ALL (7844) */
+	else if (!strcmp(cmd, "ack_event"))   addr = MBAD_SET_CMD + 50;   /* event ack ALL (7848) */
 	else return webJsonStatus(c, 400, "{\"ok\":false,\"error\":\"bad cmd\"}");
 
 	writeMemCb(addr, 0x1234);   /* ALL 대상(offset 0) */
@@ -1190,7 +1190,9 @@ typedef struct {
 	uint8_t     type, card, ro, nw;
 } GField;
 
-/* card: 0=Device Information, 1=Communication, 2=ETC, 3=Status, 4=SNMP */
+/* card: 0=Device Information, 1=Communication, 2=ETC, 3=Status, 4=SNMP, 5=MQTT
+ * 설정 영역 주소는 MBAD_SET_FIELD()로 구조체에서 계산(2026-10-28 통신 설정 410워드 재배치). nw=문자열 워드 수 */
+#define SF(f)	MBAD_SET_FIELD(f)
 static const GField GEN[] = {
 	{ "serial",          "Serial Number",        7070, WT_SERIAL, 0, 1, 0 },
 	{ "mac",             "MAC Address",          7076, WT_MAC,    0, 1, 0 },
@@ -1199,7 +1201,6 @@ static const GField GEN[] = {
 	{ "hw_version",      "HW Version",           7087, WT_U16,    0, 1, 0 },
 	{ "fw_version",      "FW Version",           7088, WT_FWVER,  0, 1, 0 },
 	{ "fw_build",        "FW Build Date",        7089, WT_FWDATE, 0, 1, 0 },
-	{ "timezone",        "Timezone",             7401, WT_I16,    0, 0, 0 },
 	{ "heartbit",        "Heart Bit",            7092, WT_U16,  3, 1, 0 },
 	{ "mbus_rx",         "Modbus RX",            7093, WT_U16,  3, 1, 0 },
 	{ "alarm_sts",       "Alarm STS",            7094, WT_U16,  3, 1, 0 },
@@ -1210,37 +1211,53 @@ static const GField GEN[] = {
 	{ "dev_sts",         "DEV STS",              7099, WT_U16,  3, 1, 0 },
 	{ "net_sts",         "NET STS",              7100, WT_U16,  3, 1, 0 },
 	{ "tot_sts",         "TOT STS",              7101, WT_U16,  3, 1, 0 },
-	{ "device_id",       "Device ID",            7110, WT_U16,  1, 0, 0 },
-	{ "tcp_port",        "TCP Port",             7111, WT_U16,  1, 0, 0 },
-	{ "dhcp",            "DHCP",                 7154, WT_BOOL, 1, 0, 0 },
-	{ "ip",              "IP Address",           7114, WT_IP,   1, 0, 0 },
-	{ "subnet",          "Subnet Mask",          7118, WT_IP,   1, 0, 0 },
-	{ "gateway",         "Gateway",              7122, WT_IP,   1, 0, 0 },
-	{ "dns",             "DNS Server",           7126, WT_IP,   1, 0, 0 },
-	{ "sntp",            "SNTP",                 7112, WT_BOOL, 1, 0, 0 },
-	{ "sntp_ip",         "SNTP Server",          7130, WT_IP,   1, 0, 0 },
-	{ "sntp_interval",   "SNTP Interval (min)",  7113, WT_U16,  1, 0, 0 },
-	/* card 4 = SNMP — 숫자형(COMM_CFG 7153, 7155~7160). 문자열은 /api/snmp(snmp.d)로 카드에 덧붙임 */
-	{ "snmp",            "SNMP",                 7155, WT_BOOL, 4, 0, 0 },
-	{ "snmp_ver",        "SNMP Version",         7153, WT_U16,  4, 0, 0 },
-	{ "snmp_trap",       "Trap",                 7156, WT_BOOL, 4, 0, 0 },
-	{ "trap_ip",         "Trap Server",          7157, WT_IP,   4, 0, 0 },
-	{ "freq",            "Frequency (Hz)",       7170, WT_U16,  2, 0, 0 },
-	{ "va_type",         "VA Type",              7388, WT_U16,  2, 0, 0 },
-	{ "pf_sign",         "PF Sign",              7389, WT_U16,  2, 0, 0 },
-	{ "demand_interval", "Demand Interval (min)",7390, WT_U16,  2, 0, 0 },
-	{ "target_demand",   "Target Demand (W)",    7392, WT_U32,  2, 0, 0 },
-	/* Auto Rotation(7400)은 미사용이라 UI에서 제거 — 레지스터 자체는 그대로 둔다 */
-	{ "test_mode",       "Test Mode",            7403, WT_BOOL, 2, 0, 0 },
-	{ "update_interval", "Update Interval (sec)",7404, WT_U16,  2, 0, 0 },
-	{ "minmax_reset",    "Max/Min Reset",        7402, WT_U16,  2, 0, 0 },
+	/* card 1 = Communication — Ethernet → Modbus → SNTP */
+	{ "dhcp",            "DHCP",                 SF(comm.dhcpEn),       WT_BOOL, 1, 0, 0 },
+	{ "ip",              "IP Address",           SF(comm.ip0),          WT_IP,   1, 0, 0 },
+	{ "subnet",          "Subnet Mask",          SF(comm.sm0),          WT_IP,   1, 0, 0 },
+	{ "gateway",         "Gateway",              SF(comm.gw0),          WT_IP,   1, 0, 0 },
+	{ "dns",             "DNS Server",           SF(comm.dns0),         WT_IP,   1, 0, 0 },
+	{ "mb_tcp",          "Modbus TCP",           SF(comm.mbTcpEn),      WT_BOOL, 1, 0, 0 },
+	{ "tcp_port",        "TCP Port",             SF(comm.tcpPort),      WT_U16,  1, 0, 0 },
+	{ "device_id",       "Device ID",            SF(comm.devId),        WT_U16,  1, 0, 0 },
+	{ "sntp",            "SNTP",                 SF(comm.useSntp),      WT_BOOL, 1, 0, 0 },
+	{ "sntp_server",     "SNTP Server",          SF(comm.sntpServer),   WT_STR,  1, 0, COMM_STR_S / 2 },
+	{ "sntp_interval",   "SNTP Interval (min)",  SF(comm.sntpInterval), WT_U16,  1, 0, 0 },
+	{ "timezone",        "Timezone",             SF(comm.timezone),     WT_I16,  1, 0, 0 },
+	/* card 4 = SNMP — 숫자형. 문자열(커뮤니티·Contact/Location·v3)은 /api/snmp로 카드에 덧붙임 */
+	{ "snmp",            "SNMP",                 SF(comm.snmpEn),       WT_BOOL, 4, 0, 0 },
+	{ "snmp_ver",        "SNMP Version",         SF(comm.snmpVer),      WT_U16,  4, 0, 0 },
+	{ "snmp_trap",       "Trap",                 SF(comm.trapEn),       WT_BOOL, 4, 0, 0 },
+	{ "trap_ip",         "Trap Server",          SF(comm.trap_ip),      WT_IP,   4, 0, 0 },
+	/* card 5 = MQTT — 부팅 시 반영 */
+	{ "mqtt",            "MQTT",                 SF(comm.mqttEn),       WT_BOOL, 5, 0, 0 },
+	{ "mqtt_host",       "Broker",               SF(comm.mqttHost),     WT_STR,  5, 0, COMM_STR_L / 2 },
+	{ "mqtt_port",       "Port",                 SF(comm.mqttPort),     WT_U16,  5, 0, 0 },
+	{ "mqtt_interval",   "Interval (sec)",       SF(comm.mqttInterval), WT_U16,  5, 0, 0 },
+	{ "mqtt_qos",        "QoS",                  SF(comm.mqttQos),      WT_U16,  5, 0, 0 },
+	{ "mqtt_retain",     "Retain",               SF(comm.mqttRetain),   WT_BOOL, 5, 0, 0 },
+	{ "mqtt_keepalive",  "Keep Alive (sec)",     SF(comm.mqttKeepAlive),WT_U16,  5, 0, 0 },
+	{ "mqtt_client",     "Client ID",            SF(comm.mqttClientId), WT_STR,  5, 0, COMM_STR_S / 2 },
+	{ "mqtt_user",       "User",                 SF(comm.mqttUser),     WT_STR,  5, 0, COMM_STR_S / 2 },
+	{ "mqtt_pass",       "Password",             SF(comm.mqttPass),     WT_STR,  5, 0, COMM_STR_S / 2 },
+	{ "mqtt_topic",      "Topic",                SF(comm.mqttTopic),    WT_STR,  5, 0, COMM_STR_L / 2 },
+	/* card 2 = ETC */
+	{ "freq",            "Frequency (Hz)",       SF(freq),              WT_U16,  2, 0, 0 },
+	{ "va_type",         "VA Type",              SF(etc.VA_type),       WT_U16,  2, 0, 0 },
+	{ "pf_sign",         "PF Sign",              SF(etc.PF_sign),       WT_U16,  2, 0, 0 },
+	{ "demand_interval", "Demand Interval (min)",SF(etc.interval),      WT_U16,  2, 0, 0 },
+	{ "target_demand",   "Target Demand (W)",    SF(etc.P_target),      WT_U32,  2, 0, 0 },
+	/* Auto Rotation은 미사용이라 UI에서 제거 — 레지스터 자체는 그대로 둔다 */
+	{ "test_mode",       "Test Mode",            SF(etc.testMode),      WT_BOOL, 2, 0, 0 },
+	{ "update_interval", "Update Interval (sec)",SF(etc.testMode_Period),WT_U16, 2, 0, 0 },
+	{ "minmax_reset",    "Max/Min Reset",        SF(etc.maxminItv),     WT_U16,  2, 0, 0 },
 };
 #define GEN_N ((int)(sizeof(GEN) / sizeof(GEN[0])))
 
 /* GET /api/general — 설정 필드 배열(값 포함) */
 static error_t apiGeneral(HttpConnection *c)
 {
-	char b[200], val[72];
+	char b[280], val[80];
 	int i, k;
 
 	if (beginJson(c)) return ERROR_WRITE_FAILED;
@@ -1269,9 +1286,9 @@ static error_t apiGeneral(HttpConnection *c)
 			snprintf(val, sizeof(val), "\"%u.%u.%u.%u\"",
 				rdReg(f->addr), rdReg(f->addr + 1), rdReg(f->addr + 2), rdReg(f->addr + 3));
 		} else if (f->type == WT_STR) {
-			char s[40];
+			char s[COMM_STR_L + 2];		/* 최장 문자열(MQTT 브로커·토픽 64자) */
 			int o = 0;
-			for (k = 0; k < f->nw && o < 38; k++) {
+			for (k = 0; k < f->nw && o < (int)sizeof(s) - 2; k++) {
 				uint16_t wd = rdReg(f->addr + k);
 				char c0 = (char)(wd & 0xff), c1 = (char)((wd >> 8) & 0xff);
 				if (c0 < 0x20 || c0 > 0x7e || c0 == '"' || c0 == '\\') { if (c0 == 0) break; c0 = ' '; }
@@ -1290,8 +1307,8 @@ static error_t apiGeneral(HttpConnection *c)
 			snprintf(val, sizeof(val), "%u", rdReg(f->addr));
 		}
 		snprintf(b, sizeof(b),
-			"%s{\"k\":\"%s\",\"label\":\"%s\",\"addr\":%u,\"type\":\"%s\",\"card\":%u,\"ro\":%u,\"val\":%s}",
-			i ? "," : "", f->k, f->label, f->addr, wtName(f->type), f->card, f->ro, val);
+			"%s{\"k\":\"%s\",\"label\":\"%s\",\"addr\":%u,\"type\":\"%s\",\"card\":%u,\"ro\":%u,\"nw\":%u,\"val\":%s}",
+			i ? "," : "", f->k, f->label, f->addr, wtName(f->type), f->card, f->ro, f->nw, val);
 		w(c, b);
 	}
 	w(c, "]}");
@@ -1353,35 +1370,35 @@ static error_t apiSetReg(HttpConnection *c)
 	return httpCloseStream(c);
 }
 
-/* GET /api/snmp — SNMP 문자열 설정(snmp.d). 커뮤니티는 비밀값이라 값 대신 기본값 여부만 */
+/* GET /api/snmp — SNMP 문자열(통신 설정 comm, Modbus 7300~7395). 화면 표시는 종전대로 —
+ * 커뮤니티는 기본값 여부만, v3 비밀번호는 설정 여부만 내려준다(Modbus로는 읽을 수 있음) */
 static error_t apiSnmpGet(HttpConnection *c)
 {
-	const SNMP_CFG *s = snmpCfgGet();
+	const COMM_CFG *s = &meter[0].setting.comm;		/* 저장 대기값 포함(Modbus 쓰기와 같은 곳) */
 	char b[160];
 
 	if (beginJson(c)) return ERROR_WRITE_FAILED;
 	snprintf(b, sizeof(b), "{\"ok\":true,\"commDefault\":%s,\"contact\":\"%s\",",
-		strcmp(s->community, "public") ? "false" : "true", s->contact);
+		strcmp(s->snmpCommunity, "public") ? "false" : "true", s->snmpContact);
 	w(c, b);
-	snprintf(b, sizeof(b), "\"location\":\"%s\",", s->location);
+	snprintf(b, sizeof(b), "\"location\":\"%s\",", s->snmpLocation);
 	w(c, b);
-	/* v3 비밀번호는 값 대신 설정 여부만 */
-	snprintf(b, sizeof(b), "\"v3user\":\"%s\",\"v3auth\":%s,\"v3priv\":%s}", s->v3User,
-		(s->v3Flags & SNMP_V3F_AUTH) ? "true" : "false", (s->v3Flags & SNMP_V3F_PRIV) ? "true" : "false");
+	snprintf(b, sizeof(b), "\"v3user\":\"%s\",\"v3auth\":%s,\"v3priv\":%s}", s->snmpV3User,
+		s->snmpV3AuthPass[0] ? "true" : "false", s->snmpV3PrivPass[0] ? "true" : "false");
 	w(c, b);
 	return httpCloseStream(c);
 }
 
 /* POST /api/snmp {community?,contact?,location?,v3user?,v3auth?,v3priv?} — admin.
- * 파일 저장(FS 큐), 다음 부팅부터 적용. v3 비밀번호는 여기서 RFC 3414 키(Ku, SHA-1 1MB 해시)로
- * 바꿔 저장하고 원문은 버린다(부팅마다 해시하지 않도록 저장 시 1회) */
+ * 통신 설정(meter[0].setting.comm)에 기록 — 화면의 Save가 이어서 /api/savecfg(7799)로 영속화.
+ * 적용은 다음 부팅(v3 키는 부팅 시 비밀번호로 계산) */
 static error_t apiSnmpSet(HttpConnection *c)
 {
-	char body[320];		/* 6항목×32자 + 키·따옴표 ≈ 270B — HTTP 태스크 스택(2.5KB) 고려해 최소화 */
-	char comm[SNMP_CFG_STR_LEN + 1], cont[SNMP_CFG_STR_LEN + 1], loc[SNMP_CFG_STR_LEN + 1];
-	char v3u[SNMP_CFG_STR_LEN + 1], v3a[SNMP_CFG_STR_LEN + 1], v3p[SNMP_CFG_STR_LEN + 1];
+	char body[320];		/* 6항목×31자 + 키·따옴표 ≈ 270B — HTTP 태스크 스택(2.5KB) 고려해 최소화 */
+	char comm[COMM_STR_S], cont[COMM_STR_S], loc[COMM_STR_S];
+	char v3u[COMM_STR_S], v3a[COMM_STR_S], v3p[COMM_STR_S];
+	COMM_CFG *s = &meter[0].setting.comm;
 	int rc, rt, rl, ru, ra, rp;
-	SnmpKey ka, kp;
 
 	if (webRole(c) != ROLE_ADMIN)
 		return webJsonStatus(c, 403, "{\"ok\":false,\"error\":\"admin only\"}");
@@ -1394,42 +1411,36 @@ static error_t apiSnmpSet(HttpConnection *c)
 	ra = jsonStr(body, "v3auth",    v3a,  sizeof(v3a));
 	rp = jsonStr(body, "v3priv",    v3p,  sizeof(v3p));
 	if (rc < 0 || rt < 0 || rl < 0 || ru < 0 || ra < 0 || rp < 0)
-		return webJsonStatus(c, 400, "{\"ok\":false,\"error\":\"ASCII only, max 32, no \\\" or \\\\\"}");
+		return webJsonStatus(c, 400, "{\"ok\":false,\"error\":\"ASCII only, max 31, no \\\" or \\\\\"}");
 	if (rc > 0 && (comm[0] == 0 || strchr(comm, ' ')))
-		return webJsonStatus(c, 400, "{\"ok\":false,\"error\":\"community: 1~32 chars, no space\"}");
+		return webJsonStatus(c, 400, "{\"ok\":false,\"error\":\"community: 1~31 chars, no space\"}");
 	if (ru > 0 && (v3u[0] == 0 || strchr(v3u, ' ')))
-		return webJsonStatus(c, 400, "{\"ok\":false,\"error\":\"v3 user: 1~32 chars, no space\"}");
+		return webJsonStatus(c, 400, "{\"ok\":false,\"error\":\"v3 user: 1~31 chars, no space\"}");
 	if ((ra > 0 && strlen(v3a) < 8) || (rp > 0 && strlen(v3p) < 8))
-		return webJsonStatus(c, 400, "{\"ok\":false,\"error\":\"v3 password: 8~32 chars\"}");
-	if ((ra > 0 || rp > 0) && (ru > 0 ? v3u[0] : snmpCfgGet()->v3User[0]) == 0)
+		return webJsonStatus(c, 400, "{\"ok\":false,\"error\":\"v3 password: 8~31 chars\"}");
+	if ((ra > 0 || rp > 0) && (ru > 0 ? v3u[0] : s->snmpV3User[0]) == 0)
 		return webJsonStatus(c, 400, "{\"ok\":false,\"error\":\"v3 user required\"}");
-	if (rp > 0 && ra <= 0 && !(snmpCfgGet()->v3Flags & SNMP_V3F_AUTH))
+	if (rp > 0 && ra <= 0 && s->snmpV3AuthPass[0] == 0)
 		return webJsonStatus(c, 400, "{\"ok\":false,\"error\":\"v3 auth password required before priv\"}");
 
-	if (ra > 0 && snmpGenerateKey(SNMP_AUTH_PROTOCOL_SHA1, v3a, &ka))
-		return webJsonStatus(c, 500, "{\"ok\":false,\"error\":\"v3 key\"}");
-	/* RFC 3826: AES 프라이버시 키도 인증 해시(SHA-1)로 생성 */
-	if (rp > 0 && snmpGenerateKey(SNMP_AUTH_PROTOCOL_SHA1, v3p, &kp))
-		return webJsonStatus(c, 500, "{\"ok\":false,\"error\":\"v3 key\"}");
-	memset(v3a, 0, sizeof(v3a));
-	memset(v3p, 0, sizeof(v3p));
-
-	if (rc > 0 || rt > 0 || rl > 0)
-		snmpCfgSave(rc > 0 ? comm : NULL, rt > 0 ? cont : NULL, rl > 0 ? loc : NULL);
-	if (ru > 0 || ra > 0 || rp > 0)
-		snmpCfgSaveV3(ru > 0 ? v3u : NULL, ra > 0 ? ka.b : NULL, rp > 0 ? kp.b : NULL);
+	if (rc > 0) strcpy(s->snmpCommunity, comm);
+	if (rt > 0) strcpy(s->snmpContact, cont);
+	if (rl > 0) strcpy(s->snmpLocation, loc);
+	if (ru > 0) strcpy(s->snmpV3User, v3u);
+	if (ra > 0) strcpy(s->snmpV3AuthPass, v3a);
+	if (rp > 0) strcpy(s->snmpV3PrivPass, v3p);
 
 	if (beginJson(c)) return ERROR_WRITE_FAILED;
 	w(c, "{\"ok\":true}");
 	return httpCloseStream(c);
 }
 
-/* POST /api/savecfg — admin, save settings(7449) 명령으로 설정 영속화 */
+/* POST /api/savecfg — admin, save settings(7799) 명령으로 설정 영속화 */
 static error_t apiSaveCfg(HttpConnection *c)
 {
 	if (webRole(c) != ROLE_ADMIN)
 		return webJsonStatus(c, 403, "{\"ok\":false,\"error\":\"admin only\"}");
-	writeMemCb(7449, 0x1234);
+	writeMemCb(MBAD_SET_CMD + 1, 0x1234);	/* save settings (7799) */
 	if (beginJson(c)) return ERROR_WRITE_FAILED;
 	w(c, "{\"ok\":true}");
 	return httpCloseStream(c);
@@ -1535,7 +1546,7 @@ static const char INDEX_HTML[] =
 ".st{font-size:10px;font-weight:800;padding:1px 6px;border-radius:5px}.st.set{color:#fff;background:var(--bad)}.st.clr{color:var(--muted);background:var(--panel2)}\n"
 ".evt{font-size:11px;font-weight:700;padding:1px 7px;border-radius:5px;white-space:nowrap}\n"
 ".evt.sag{color:#fbbf24;background:rgba(251,191,36,.14)}.evt.swell{color:#f87171;background:rgba(248,113,113,.14)}\n"
-".evt.tr{color:#a78bfa;background:rgba(167,139,250,.14)}.evt.oc{color:#22d3ee;background:rgba(34,211,238,.14)}.evt.intr{color:#fb7185;background:rgba(251,113,133,.14)}\n"
+".evt.tr{color:#a78bfa;background:rgba(167,139,250,.14)}.evt.oc{color:#22d3ee;background:rgba(34,211,238,.14)}.evt.intr{color:#fb7535;background:rgba(251,113,133,.14)}\n"
 ".esum{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:14px;border-top:1px solid var(--line);padding-top:14px}\n"
 ".esum .sb{background:var(--panel2);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:3px}\n"
 ".esum .sb span{font-size:11px;color:var(--muted)}.esum .sb b{font-size:18px;font-weight:800;font-family:'Consolas',monospace}\n"
@@ -1857,7 +1868,7 @@ static const char INDEX_HTML[] =
 "function loadIom(){return j('/api/dashboard').then(function(r){if(!r.d.ok)return;var d=r.d.data;if(d&&d.iom){iomDat=d.iom;if(!ioEd)renderIom();}}).catch(function(){});}\n"
 "var ioEd=0,iomDat=null;\n"
 "function renderIom(){var io=iomDat;if(!io)return;var k,ed=ioEd&&IS_ADMIN,di=\"<div class='hsub'>DI</div><table class='ctbl hsm'><tr><th>P</th><th>Type</th><th>Deb</th><th>Scale</th><th>St</th><th>Pulse</th></tr>\";\n"
-" for(k=0;k<4;k++){var ty,de,sc;if(ed){ty=\"<select data-addr='\"+(7412+k)+\"' data-type='u16' data-orig='\"+io.dt[k]+\"'><option value='0'\"+(io.dt[k]==0?' selected':'')+\">DI</option><option value='1'\"+(io.dt[k]==1?' selected':'')+\">PI</option></select>\";de=\"<input type='number' min='4' max='64' data-addr='\"+(7416+k)+\"' data-type='u16' data-orig='\"+io.db[k]+\"' value='\"+io.db[k]+\"' style='width:50px'>\";sc=\"<input type='number' data-addr='\"+(7420+k)+\"' data-type='u16' data-orig='\"+io.sc[k]+\"' value='\"+io.sc[k]+\"' style='width:50px'>\";}else{ty=(io.dt[k]==1?'PI':'DI');de=io.db[k];sc=io.sc[k];}di+=\"<tr><td class='rk'>#\"+k+\"</td><td>\"+ty+\"</td><td>\"+de+\"</td><td>\"+sc+\"</td><td>\"+io.di[k]+\"</td><td>\"+io.pi[k]+\"</td></tr>\";}di+='</table>';\n"
+" for(k=0;k<4;k++){var ty,de,sc;if(ed){ty=\"<select data-addr='\"+(7762+k)+\"' data-type='u16' data-orig='\"+io.dt[k]+\"'><option value='0'\"+(io.dt[k]==0?' selected':'')+\">DI</option><option value='1'\"+(io.dt[k]==1?' selected':'')+\">PI</option></select>\";de=\"<input type='number' min='4' max='64' data-addr='\"+(7766+k)+\"' data-type='u16' data-orig='\"+io.db[k]+\"' value='\"+io.db[k]+\"' style='width:50px'>\";sc=\"<input type='number' data-addr='\"+(7770+k)+\"' data-type='u16' data-orig='\"+io.sc[k]+\"' value='\"+io.sc[k]+\"' style='width:50px'>\";}else{ty=(io.dt[k]==1?'PI':'DI');de=io.db[k];sc=io.sc[k];}di+=\"<tr><td class='rk'>#\"+k+\"</td><td>\"+ty+\"</td><td>\"+de+\"</td><td>\"+sc+\"</td><td>\"+io.di[k]+\"</td><td>\"+io.pi[k]+\"</td></tr>\";}di+='</table>';\n"
 " var hasPI=(io.dt[0]==1||io.dt[1]==1||io.dt[2]==1||io.dt[3]==1);\n"
 " if(IS_ADMIN)di+=ed?\"<div class='pgctl'><button class='btn primary' onclick='ioSave()'>Save</button><button class='btn' onclick='ioEd=0;renderIom()'>Cancel</button></div>\":\"<div class='pgctl'><button class='btn' onclick='ioEd=1;renderIom()'>Edit</button><button class='btn warn' onclick='clearPI()'\"+(hasPI?'':' disabled')+\">Clear PI</button></div>\";\n"
 " var tp='';if(NCH!==3){tp=\"<div class='hsub'>Temperature</div><table class='ctbl hsm'><tr><th>P</th><th>Temp(&#8451;)</th></tr>\";for(k=0;k<4;k++)tp+=\"<tr><td class='rk'>#\"+k+\"</td><td>\"+n(io.temp[k],1)+\"</td></tr>\";tp+='</table>';}\n"
@@ -1887,12 +1898,12 @@ static const char INDEX_HTML[] =
 /* setup */
 "var OPTDIS={};\n"
 "var OPT={snmp_ver:{0:'v1/v2c',1:'v1/v2c/v3',2:'v3 only'},freq:{0:'60 Hz',1:'50 Hz'},va_type:{0:'RMS (S=VA)',1:'Vector'},pf_sign:{0:'IEC',1:'IEEE'},demand_interval:{0:'1 min',1:'5 min',2:'15 min',3:'30 min',4:'60 min'},minmax_reset:{0:'Daily',1:'Weekly',2:'Monthly'},timezone:{'-720':'UTC-12:00','-600':'Hawaii -10:00','-540':'Alaska -09:00','-480':'Pacific -08:00','-420':'Mountain -07:00','-360':'Central -06:00','-300':'Eastern -05:00','-180':'-03:00','0':'UTC +00:00','60':'Berlin +01:00','120':'Athens +02:00','180':'Moscow +03:00','210':'Tehran +03:30','240':'Dubai +04:00','300':'Karachi +05:00','330':'India +05:30','345':'Nepal +05:45','360':'Dhaka +06:00','420':'Bangkok +07:00','480':'Shanghai +08:00','540':'Seoul +09:00','570':'Adelaide +09:30','600':'Sydney +10:00','720':'Auckland +12:00'}};\n"
-"var CARDN=['Device Information','Communication','ETC','Status','SNMP'],setCur='general';\n"
+"var CARDN=['Device Information','Communication','ETC','Status','SNMP','MQTT'],setCur='general';\n"
 "var WM={0:'not used',1:'3P4W',2:'3P3W(2CT)',3:'3P3W(3CT)',4:'1P2W(L1)',5:'1P2W(L2)',6:'1P2W(L3)',7:'1P3W',8:'SIM'};\n"
 "var CT2M={0:'5A',1:'100mA/333mV',2:'Rogowski'},ZCTM={1:'200mV:100mV',2:'200mV:1.5mA',3:'200mV:0.1mA'},DIM={0:'DI',1:'PI'},DIRM={0:'+',1:'-'};\n"
 "var PT_F=[{o:0,l:'Wiring Mode',t:'u16',opt:WM},{o:2,l:'V Nominal',t:'u32'},{o:4,l:'PT1',t:'u32'},{o:6,l:'PT2',t:'u16'}];\n"
 "var CT_F=[{o:0,l:'I Nominal (%)',t:'u16'},{o:1,l:'CT1',t:'u16'},{o:2,l:'CT2',t:'u16',opt:CT2M},{o:3,l:'Turns',t:'u16'},{o:4,l:'Start I',t:'u16',sc:1000},{o:5,l:'CT1 Dir',t:'u16',opt:DIRM},{o:6,l:'CT2 Dir',t:'u16',opt:DIRM},{o:7,l:'CT3 Dir',t:'u16',opt:DIRM},{o:8,l:'Rogowski',t:'u16'},{o:9,l:'Phase Ofs 1',t:'i16'},{o:10,l:'Phase Ofs 2',t:'i16'},{o:11,l:'Phase Ofs 3',t:'i16'},{o:12,l:'ZCT Type',t:'u16',opt:ZCTM},{o:13,l:'ZCT Scale',t:'u16'}];\n"
-"var CMDS=[{g:'System',l:'Reboot',addr:7448,danger:1,note:'reboot'},{g:'System',l:'Save Set',addr:7449},{g:'System',l:'Init Settings',addr:7464,danger:2},{g:'System',l:'Set Time',addr:7438,utc:1}];\n"
+"var CMDS=[{g:'System',l:'Reboot',addr:7798,danger:1,note:'reboot'},{g:'System',l:'Save Set',addr:7799},{g:'System',l:'Init Settings',addr:7814,danger:2},{g:'System',l:'Set Time',addr:7788,utc:1}];\n"
 /* 'Command' 탭은 사이드바 Maintenance 페이지로 옮겼다 (loadCommand) */
 "var MAIN_TABS=[['general','General'],['pt','PT'],['ct','CT']];\n"
 "var CHAN_TABS=[['pqevent','PQ Event'],['transient','Transient'],['waveform','Waveform'],['disturb','Disturbance'],['trend','Trend'],['pqreport','PQ Report'],['almdef','Alarm Def'],['alarm','Alarm Settings']];\n"
@@ -1930,13 +1941,13 @@ static const char INDEX_HTML[] =
 " var on=(b.value==='1'),inv=b.getAttribute('data-inv')==='1',hid=b.getAttribute('data-hide')==='1',lock=b.disabled||(inv?on:!on);\n"
 " b.getAttribute('data-dep').split(',').forEach(function(k){root.querySelectorAll(\"[data-k='\"+k.trim()+\"']\").forEach(function(el){\n"
 "  if(hid){var r=el.closest('.srow');if(r)r.style.display=lock?'none':'';}else el.disabled=lock;});});});if(window.snmpVerDeps)snmpVerDeps();}\n"
-"var GDEP={dhcp:['ip,subnet,gateway,dns',1],sntp:['sntp_ip,sntp_interval',0],snmp:['snmp_ver,snmp_trap,trap_ip,snmp_community,snmp_contact,snmp_location',0],snmp_trap:['trap_ip',0]};\n"
+"var GDEP={dhcp:['ip,subnet,gateway,dns',1],mb_tcp:['tcp_port,device_id',0],sntp:['sntp_server,sntp_interval',0],mqtt:['mqtt_host,mqtt_port,mqtt_interval,mqtt_qos,mqtt_retain,mqtt_keepalive,mqtt_client,mqtt_user,mqtt_pass,mqtt_topic',0],snmp:['snmp_ver,snmp_trap,trap_ip,snmp_community,snmp_contact,snmp_location',0],snmp_trap:['trap_ip',0]};\n"
 "function ctlOf(f){var d=\"data-addr='\"+f.addr+\"' data-type='\"+f.type+\"' data-orig='\"+esc(f.val)+\"' data-k='\"+f.k+\"'\",dis=IS_ADMIN?'':'disabled';\n"
 " if(f.ro)return \"<span class='sv' data-k='\"+f.k+\"'>\"+fmtV(f)+\"</span><span class='rtag'>R</span>\";\n"
 " if(OPT[f.k]){var o=OPT[f.k],s=\"<select \"+d+' '+dis+\" onchange='setMark(this)'>\";for(var k in o)s+=\"<option value='\"+k+\"'\"+((''+k)===(''+f.val)?' selected':'')+((OPTDIS[f.k]&&OPTDIS[f.k][k])?' disabled':'')+'>'+esc(o[k])+'</option>';return s+'</select>';}\n"
 " if(f.type==='bool'){var g=GDEP[f.k];return togBtn(d,!!f.val,dis,g?g[0]:'',g?g[1]:0,0);}\n"
-" var tp=(f.type==='ip'||f.type==='str')?'text':'number';\n"
-" return \"<input type='\"+tp+\"' \"+d+\" value='\"+esc(f.val)+\"' \"+dis+\" oninput='setMark(this)'>\";}\n"
+" var tp=(f.type==='ip'||f.type==='str')?'text':'number',ml=(f.type==='str'&&f.nw)?(\" data-nw='\"+f.nw+\"' maxlength='\"+(f.nw*2-1)+\"'\"):'';\n"
+" return \"<input type='\"+tp+\"' \"+d+ml+\" value='\"+esc(f.val)+\"' \"+dis+\" oninput='setMark(this)'>\";}\n"
 /* Status 카드(Heart Bit·Modbus RX 등)는 실시간 값 — 카드 전체를 다시 그리면 편집 중인
    다른 카드가 날아가므로, 해당 워드블록만 1초마다 읽어 값 span 만 교체한다. */
 "var STF=[],STLO=0,STN=0;\n"
@@ -1971,9 +1982,10 @@ static const char INDEX_HTML[] =
 " document.querySelectorAll('#setBody [data-snmp]').forEach(function(el){if(el.value!==el.getAttribute('data-orig')){sc[el.getAttribute('data-snmp')]=el.value;ns++;}});\n"
 " if(!chg.length&&!ns){setRes('No changes');return;}if(!confirm((chg.length+ns)+' change(s). Save?'))return;setRes('Writing...');\n"
 " var i=0;function wr(a,t,v){return jp('/api/setreg',{addr:a,type:t,val:v});}\n"
-" function next(){if(i>=chg.length){if(!chg.length){setRes('Saved ('+ns+')');reloadSet();return;}j('/api/savecfg',{method:'POST'}).then(function(){setRes('Saved ('+(chg.length+ns)+')');reloadSet();});return;}\n"
+" function next(){if(i>=chg.length){j('/api/savecfg',{method:'POST'}).then(function(){setRes('Saved ('+(chg.length+ns)+')');reloadSet();});return;}\n"
 "  var it=chg[i++],addr=+it.el.getAttribute('data-addr'),type=it.el.getAttribute('data-type');\n"
-"  if(type==='ip'){var p=(it.v||'0.0.0.0').split('.'),k=0;(function nip(){if(k>=4){next();return;}wr(addr+k,'u16',+(p[k]||0)).then(function(){k++;nip();});})();}\n"
+"  if(type==='str'){var nw=+(it.el.getAttribute('data-nw')||0),sv=it.v||'',k3=0;(function ns2(){if(k3>=nw){next();return;}var c0=sv.charCodeAt(k3*2)||0,c1=sv.charCodeAt(k3*2+1)||0;wr(addr+k3,'u16',(c0&255)|((c1&255)<<8)).then(function(){k3++;ns2();});})();}\n"
+"  else if(type==='ip'){var p=(it.v||'0.0.0.0').split('.'),k=0;(function nip(){if(k>=4){next();return;}wr(addr+k,'u16',+(p[k]||0)).then(function(){k++;nip();});})();}\n"
 "  else if(type==='float'){var wf=fToU16(+it.v||0),k2=0;(function nf(){if(k2>=2){next();return;}wr(addr+k2,'u16',wf[k2]).then(function(){k2++;nf();});})();}\n"
 "  else{var scl=+(it.el.getAttribute('data-scale')||1);wr(addr,type,Math.round((+it.v||0)*scl)).then(function(rr){if(rr.s===403){setRes('Admin only');return;}next();});}}\n"
 " if(!ns){next();return;}\n"
@@ -1983,7 +1995,7 @@ static const char INDEX_HTML[] =
 "function grpCtl(f,addr,val){var sc=f.sc||1,dv=(sc!==1)?(val/sc):val,d=\"data-addr='\"+addr+\"' data-type='\"+f.t+\"' data-scale='\"+sc+\"' data-orig='\"+dv+\"'\",dis=IS_ADMIN?'':'disabled';\n"
 " if(f.opt){var s=\"<select \"+d+' '+dis+\" onchange='setMark(this)'>\";for(var k in f.opt)s+=\"<option value='\"+k+\"'\"+((''+k)===(''+val)?' selected':'')+'>'+esc(f.opt[k])+'</option>';return s+'</select>';}\n"
 " return \"<input type='number' \"+(sc!==1?(\"step='\"+(1/sc)+\"' \"):'')+d+\" value='\"+dv+\"' \"+dis+\" oninput='setMark(this)'>\";}\n"
-"function loadGroup(kind){var cfg=(kind==='pt')?{base:7172,step:8,fields:PT_F,ti:'PT'}:{base:7244,step:16,fields:CT_F,ti:'CT'};\n"
+"function loadGroup(kind){var cfg=(kind==='pt')?{base:7522,step:8,fields:PT_F,ti:'PT'}:{base:7594,step:16,fields:CT_F,ti:'CT'};\n"
 " var _npt=NCH*3;\n"
 " return j('/api/regs?addr='+cfg.base+'&n='+(cfg.step*_npt)).then(function(r){if(!r.d.ok){$('setBody').innerHTML=\"<p class='stub'>load error</p>\";return;}var wds=r.d.words,s,sb,so;\n"
 "  var h;\n"
@@ -2138,21 +2150,21 @@ static const char INDEX_HTML[] =
 " h+=\"<table class='ctbl'><tr><th>Type</th><th>Start Time</th><th>Dur(ms)</th><th>Phase</th><th>Level</th></tr>\";\n"
 " if(!el.length)h+=\"<tr><td colspan='5' class='empty'>No events</td></tr>\";el.forEach(function(e){var t=ET[e.type]||['#'+e.type,'oc'],ph=[];if(e.mask&1)ph.push('L1');if(e.mask&2)ph.push('L2');if(e.mask&4)ph.push('L3');h+=`<tr><td><span class='evt ${t[1]}'>${t[0]}</span></td><td class='ts'>${ts2(e.ts)}</td><td>${e.dur}</td><td>${ph.join(',')||'-'}</td><td>${n(e.level,2)}</td></tr>`;});return h+'</table>';}\n"
 "function wrCmd(a,v){if(!IS_ADMIN){alert('Admin only');return;}jp('/api/setreg',{addr:a,type:'u16',val:v}).then(function(){setTimeout(pollLoop,300);});}\n"
-"function pgAlarm(n,c){wrCmd(7490+n,c);}\n"
-"function clrAlarm(n){if(confirm('Clear Alarm CH'+n+'?'))wrCmd(7478+n,4660);}\n"
-"function pgEvent(n,c){wrCmd(7486+n,c);}\n"
-"function clrEvent(n){if(confirm('Clear Event CH'+n+'?'))wrCmd(7482+n,4660);}\n"
-"function pgItic2(n,c){wrCmd(7503,c);}\n"
+"function pgAlarm(n,c){wrCmd(7840+n,c);}\n"
+"function clrAlarm(n){if(confirm('Clear Alarm CH'+n+'?'))wrCmd(7828+n,4660);}\n"
+"function pgEvent(n,c){wrCmd(7836+n,c);}\n"
+"function clrEvent(n){if(confirm('Clear Event CH'+n+'?'))wrCmd(7832+n,4660);}\n"
+"function pgItic2(n,c){wrCmd(7853,c);}\n"
 "function clrBtn(fn,n){return IS_ADMIN?\"<div class='pgctl'><button class='btn warn' onclick='\"+fn+\"(\"+n+\")'>Clear</button></div>\":'';}\n"
-"function clrMinmax(n){if(confirm('Clear Min/Max CH'+n+'?'))wrCmd(7470+n,4660);}\n"
-"function clrEnergy(n){if(confirm('Clear Energy CH'+n+'?'))wrCmd(7474+n,4660);}\n"
-"function clrDemand(n){if(confirm('Clear Demand CH'+n+'?'))wrCmd(7466+n,4660);}\n"
-"function ackAlarm(n){wrCmd(7494+n,4660);}\n"
-"function ackEvent(n){wrCmd(7498+n,4660);}\n"
-"function clearPI(){if(confirm('Clear PI?'))wrCmd(7465,4660);}\n"
+"function clrMinmax(n){if(confirm('Clear Min/Max CH'+n+'?'))wrCmd(7820+n,4660);}\n"
+"function clrEnergy(n){if(confirm('Clear Energy CH'+n+'?'))wrCmd(7824+n,4660);}\n"
+"function clrDemand(n){if(confirm('Clear Demand CH'+n+'?'))wrCmd(7816+n,4660);}\n"
+"function ackAlarm(n){wrCmd(7844+n,4660);}\n"
+"function ackEvent(n){wrCmd(7848+n,4660);}\n"
+"function clearPI(){if(confirm('Clear PI?'))wrCmd(7815,4660);}\n"
 "var egyEd=0,egyD=null;\n"
 "function egyRender(){if(!egyD)return;var b=IS_ADMIN?(egyEd?\"<div class='pgctl'><button class='btn primary' onclick='egyWr()'>Write</button><button class='btn' onclick='egyEd=0;egyRender()'>Cancel</button></div>\":\"<div class='pgctl'><button class='btn' onclick='egyEd=1;egyRender()'>Edit</button></div>\"):'';$('chbody').innerHTML=chCards(egyD.now,function(x){var lg=egyD.log.filter(function(e){return e.n===x.n;})[0];return b+(egyEd?'':clrBtn('clrEnergy',x.n))+bEgyNow(x,egyEd)+(lg?bEgyLog(lg):'');});}\n"
-"function egyWr(){var els=document.querySelectorAll('#chbody .ein'),c=[],i=0,chs={};els.forEach(function(e){if(e.value!==e.getAttribute('data-o'))c.push(e);});if(!c.length){egyEd=0;egyRender();return;}(function w(){if(i>=c.length){Object.keys(chs).forEach(function(ch){wrCmd(7474+parseInt(ch),0x5678);});if(confirm('Save energy edit to FLASH now? (OK=persist via Save Set / Cancel=RAM only, revert on reboot)'))setTimeout(function(){wrCmd(7449,0x1234);},1200);egyEd=0;setTimeout(pollLoop,400);return;}var e=c[i++],v=Math.round(parseFloat(e.value)*10);if(!isFinite(v)||v<0)v=0;var a=+e.getAttribute('data-a');chs[Math.floor(a/10000)+1]=1;jp('/api/setreg',{addr:a,type:'u32',val:v}).then(w).catch(w);})();}\n"
+"function egyWr(){var els=document.querySelectorAll('#chbody .ein'),c=[],i=0,chs={};els.forEach(function(e){if(e.value!==e.getAttribute('data-o'))c.push(e);});if(!c.length){egyEd=0;egyRender();return;}(function w(){if(i>=c.length){Object.keys(chs).forEach(function(ch){wrCmd(7824+parseInt(ch),0x5678);});if(confirm('Save energy edit to FLASH now? (OK=persist via Save Set / Cancel=RAM only, revert on reboot)'))setTimeout(function(){wrCmd(7799,0x1234);},1200);egyEd=0;setTimeout(pollLoop,400);return;}var e=c[i++],v=Math.round(parseFloat(e.value)*10);if(!isFinite(v)||v<0)v=0;var a=+e.getAttribute('data-a');chs[Math.floor(a/10000)+1]=1;jp('/api/setreg',{addr:a,type:'u32',val:v}).then(w).catch(w);})();}\n"
 "function pbar(fn,n,cf,af){if(!IS_ADMIN)return '';var s=\"<div class='pgctl'>\",L=[[3,'&#8593;&#8593; Top'],[2,'&#8593; Up'],[1,'&#8595; Down'],[4,'&#8595;&#8595; Bottom']];L.forEach(function(t){s+=\"<button class='btn' onclick='\"+fn+\"(\"+n+\",\"+t[0]+\")'>\"+t[1]+\"</button>\";});if(af)s+=\"<button class='btn' onclick='\"+af+\"(\"+n+\")'>Ack</button>\";if(cf)s+=\"<button class='btn warn' onclick='\"+cf+\"(\"+n+\")'>Clear</button>\";return s+'</div>';}\n"
 "function bItic(list,title,fn){var h=\"<div class='hsub'>\"+title+\"</div>\"+pbar(fn,1)+\"<table class='ctbl'><tr><th>Type</th><th>Start Time</th><th>Dur(ms)</th><th>Phase</th><th>Level</th></tr>\";\n"
 " if(!list||!list.length)h+=\"<tr><td colspan='5' class='empty'>No data</td></tr>\";(list||[]).forEach(function(e){var t=ET[e.type]||['#'+e.type,'oc'],ph=[];if(e.mask&1)ph.push('L1');if(e.mask&2)ph.push('L2');if(e.mask&4)ph.push('L3');h+=\"<tr><td><span class='evt \"+t[1]+\"'>\"+t[0]+\"</span></td><td class='ts'>\"+ts2(e.ts)+\"</td><td>\"+e.dur+\"</td><td>\"+(ph.join(',')||'-')+\"</td><td>\"+n(e.level,2)+\"</td></tr>\";});return h+'</table>';}\n"

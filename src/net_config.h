@@ -52,21 +52,21 @@
 #define BSD_SOCKET_TRACE_LEVEL   TRACE_LEVEL_OFF
 #define WEB_SOCKET_TRACE_LEVEL   TRACE_LEVEL_OFF
 #define AUTO_IP_TRACE_LEVEL      TRACE_LEVEL_INFO
-#define SLAAC_TRACE_LEVEL        TRACE_LEVEL_INFO
+#define SLAAC_TRACE_LEVEL        TRACE_LEVEL_WARNING
 #define DHCP_TRACE_LEVEL         TRACE_LEVEL_INFO
 #define DHCPV6_TRACE_LEVEL       TRACE_LEVEL_INFO
-#define DNS_TRACE_LEVEL          TRACE_LEVEL_INFO
+#define DNS_TRACE_LEVEL          TRACE_LEVEL_WARNING
 #define MDNS_TRACE_LEVEL         TRACE_LEVEL_OFF
 #define NBNS_TRACE_LEVEL         TRACE_LEVEL_OFF
 #define LLMNR_TRACE_LEVEL        TRACE_LEVEL_OFF
 #define ECHO_TRACE_LEVEL         TRACE_LEVEL_INFO
 #define COAP_TRACE_LEVEL         TRACE_LEVEL_INFO
-#define FTP_TRACE_LEVEL          TRACE_LEVEL_INFO
+#define FTP_TRACE_LEVEL          TRACE_LEVEL_WARNING
 #define HTTP_TRACE_LEVEL         TRACE_LEVEL_OFF   // 요청 폴링 스팸 억제(진단 시 INFO)
-#define MQTT_TRACE_LEVEL         TRACE_LEVEL_INFO
+#define MQTT_TRACE_LEVEL         TRACE_LEVEL_WARNING
 #define MQTT_SN_TRACE_LEVEL      TRACE_LEVEL_INFO
 #define SMTP_TRACE_LEVEL         TRACE_LEVEL_INFO
-#define SNMP_TRACE_LEVEL         TRACE_LEVEL_INFO
+#define SNMP_TRACE_LEVEL         TRACE_LEVEL_WARNING
 #define SNTP_TRACE_LEVEL         TRACE_LEVEL_WARNING
 #define NTP_TRACE_LEVEL          TRACE_LEVEL_WARNING
 #define NTS_TRACE_LEVEL          TRACE_LEVEL_INFO
@@ -184,15 +184,28 @@
 #define SNMP_AGENT_SUPPORT ENABLED
 //SNMP MIB module support
 #define SNMP_MIB_SUPPORT ENABLED
-//SNMPv3 (USM: HMAC-SHA-1 인증 + AES-128 암호화) — 허용 여부는 COMM_CFG.snmpVer(7153)
+//SNMPv3 (USM: HMAC-SHA-1 인증 + AES-128 암호화) — 허용 여부는 comm.snmpVer(7291)
 #define SNMP_V3_SUPPORT ENABLED
+//v3는 HMAC-SHA-1 + AES-128만 사용 — 미사용 MD5 인증·DES 암호화 제외(코드 약 7KB, 필드 타깃 플래시 확보)
+#define SNMP_MD5_SUPPORT DISABLED
+#define SNMP_DES_SUPPORT DISABLED
 //system 그룹 버퍼 — 기본 16은 sysDescr("SV300 FW Vxx.xx (YY/MM/DD)")에 부족
 #define SNMP_MIB_SYS_DESCR_SIZE 48
 //sysName = 호스트명 "sv300-<SN>"(15자) — NET_MAX_HOSTNAME_LEN(24)에 맞춤
 #define SNMP_MIB_SYS_NAME_SIZE 24
-//sysContact/sysLocation — snmp.d 문자열 최대 길이(SNMP_CFG_STR_LEN=32)에 맞춤
+//sysContact/sysLocation — 통신 설정 문자열(COMM_STR_S=32바이트, 31자)에 맞춤
 #define SNMP_MIB_SYS_CONTACT_SIZE 32
 #define SNMP_MIB_SYS_LOCATION_SIZE 32
+
+//MQTT client — 통신 설정 MQTT 묶음(comm.mqtt*, 7160~7289), mqtt_app.c. TLS 1차 미지원
+#define MQTT_CLIENT_SUPPORT ENABLED
+#define MQTT_CLIENT_TLS_SUPPORT DISABLED
+//Client ID·사용자·비밀번호 = 통신 설정 문자열 31자(기본 23/16/16)
+#define MQTT_CLIENT_MAX_ID_LEN 31
+#define MQTT_CLIENT_MAX_USERNAME_LEN 31
+#define MQTT_CLIENT_MAX_PASSWORD_LEN 31
+//송수신 버퍼 — JSON 페이로드(공통+9피더 ≈ 3.6KB) + 토픽·헤더
+#define MQTT_CLIENT_BUFFER_SIZE 4608
 
 //HTTP server support (web dashboard) — 정적자산은 S0:(SPI Flash) FS에서 서빙
 #define HTTP_SERVER_SUPPORT ENABLED

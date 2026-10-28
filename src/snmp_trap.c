@@ -2,9 +2,9 @@
  * SV300 SNMP Trap — alarmProc 알람 발생/복귀·알람 리셋 통보 (snmp.md §5.4)
  *  - storeAlarmLog()/알람 리셋 경로는 큐에 넣기만 하고, 송신은 전용 LOW 태스크가 한다.
  *    계측 태스크가 SNMP 에이전트 뮤텍스(요청 처리 중 점유)를 기다리지 않게 하기 위함.
- *  - 수신지: COMM_CFG.trapEn / trap_ip (Modbus 7156~7160, 웹 SNMP 카드). 저장 즉시 반영.
- *  - COMM_CFG.snmpEn(7155)=0이면 main.c가 에이전트와 함께 이 모듈도 기동하지 않는다(큐 입력 무시).
- *  - Trap 버전·인증(부팅 시 확정): SNMP Version이 v3 only면 v3(snmp.d의 USM 사용자),
+ *  - 수신지: COMM_CFG.trapEn / trap_ip (Modbus 7292~7296, 웹 SNMP 카드). 저장 즉시 반영.
+ *  - comm.snmpEn(7290)=0이면 main.c가 에이전트와 함께 이 모듈도 기동하지 않는다(큐 입력 무시).
+ *  - Trap 버전·인증(부팅 시 확정): SNMP Version이 v3 only면 v3(통신 설정의 USM 사용자),
  *    그 외는 v2c(부팅 시 적용된 읽기 커뮤니티 — 에이전트와 동일 값).
  *  - varbind 값은 SV300-MIB의 accessible-for-notify 객체로 실린다(GET으로는 읽히지 않음).
  *----------------------------------------------------------------------------*/

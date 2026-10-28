@@ -317,16 +317,16 @@ varbind(두 Trap 공통):
 |---|---|
 | 연결 지점 | `storeAlarmLog()` 끝(발생·복귀), 알람 리셋 처리 2곳(`meter.c`) → `snmpTrapAlarm()` / `snmpTrapAlarmReset()`는 큐(16건)에 넣기만 함 |
 | 송신 | 전용 태스크 `snmpTrap`(LOW 우선순위)가 큐를 비우며 `snmpAgentSendTrap()` 호출, UDP 162. 버전은 부팅 시 확정: SNMP Version `v3 only`면 SNMPv3(USM v3 User, authPriv/authNoPriv), 그 외 SNMPv2c(설정 커뮤니티) |
-| SNMPv3 | `SNMP_V3_SUPPORT ENABLED`. 부팅 순서 engineBoots(snmp.d, +1) → engineID(`80 01 06 44` + `03` + MAC, RFC 3411) → USM 사용자 생성(RAW 키를 engineID로 지역화). 웹 저장 시 비밀번호를 `snmpGenerateKey()`(SHA-1 1MB 해시)로 Ku 변환해 저장, 원문 미보관. 난수 콜백 `netGetRandData()`(AES salt) |
-| 숫자형 설정 (COMM_CFG) | 구 DAQ 필드 삭제 후 예약 영역 재배치, 구조체 60워드(7110~7169) 불변 — 컴파일 타임 검사 `comm_cfg_layout_check`. SNMP 6워드는 구 DAQ 설정 자리에 연속 배치: **7155 `snmpEn`**(0:OFF, 1:ON, **부팅 시 반영**), **7156 `trapEn`**(0:OFF, 1:ON, 저장 즉시 반영), **7157~7160 `trap_ip`**. **7153 `snmpVer`**(0:v1/v2c, 1:v1/v2c/v3, 2:v3 only, 부팅 시 반영 — v3 미지원 FW는 값과 무관하게 v1/v2c, 웹에서 v3 항목은 비활성 표시, 2 초과 시 부팅 때 0으로 정리). 7150~7152·7162~7169 예약. **`dhcpEn`(7154, 제품군·confWebApp 공통)과 `layoutVer`(7161, 내부값)는 이동 금지**. Save Set 시 `layoutVer`는 펌웨어 값으로 강제 저장. 부팅 시 `snmpEn`/`trapEn`이 0/1이 아니면(구 DAQ 잔존값) SNMP 6워드를 0으로 정리 |
+| SNMPv3 | `SNMP_V3_SUPPORT ENABLED`. 부팅 순서 engineBoots(snmp.d, +1) → engineID(`80 01 06 44` + `03` + MAC, RFC 3411) → USM 사용자 생성(RAW 키를 engineID로 지역화). **2026-10-28부터** v3 비밀번호는 통신 설정(Modbus 7364~7395)에 저장하고 부팅 시 `snmpGenerateKey()`(SHA-1 1MB 해시)로 Ku 계산. 인증은 HMAC-SHA-1, 암호화는 AES-128만 지원(MD5·DES는 빌드에서 제외 — `SNMP_MD5_SUPPORT`/`SNMP_DES_SUPPORT DISABLED`). 난수 콜백 `netGetRandData()`(AES salt) |
+| 통신 설정 (COMM_CFG) | **2026-10-28 410워드 재배치(메모리맵 261028)** — Ethernet 7110 → Modbus 7150 → MQTT 7160 → **SNMP 7290** → SNTP 7400 → 예약 7420~7519, DAQ 삭제. SNMP: **7290 `snmpEn`**(0:OFF, 1:ON, **부팅 시 반영**), **7291 `snmpVer`**(0:v1/v2c, 1:v1/v2c/v3, 2:v3 only, 부팅 시 반영, 2 초과 시 0으로 정리), **7292 `trapEn`**(저장 즉시 반영), **7293~7296 `trap_ip`**, 7297~7299 예약, **문자열 7300~7395**(아래). 크기·묶음 시작은 컴파일 타임 검사(`comm_cfg_*_check`). `layoutVer`는 7159(내부값, Save Set 시 펌웨어 값 강제). 부팅 시 `snmpEn`/`trapEn`이 0/1이 아니면 SNMP 숫자형을 0으로 정리. 구 60워드 배치(7153·7155~7160)는 FW V00.04 web 브랜치 10/12 빌드까지 |
 | SNMP 사용 여부 | OFF면 에이전트·Trap 모두 기동하지 않음(UDP 161 닫힘). 값 그대로 운영하므로 **업데이트한 기존 기기·공장초기화 기기는 0 = OFF** — SNMP를 쓰려면 웹에서 ON 후 Save Set + Reboot |
-| 문자열 설정 (snmp.d) | `\system\snmp.d`(`src/snmp_cfg.c`): 읽기 커뮤니티(Trap 공용), sysContact, sysLocation(각 최대 32자, `"`·`\` 제외 ASCII) + SNMPv3 USM 사용자 1명(이름, 인증·암호화 키 — 비밀번호 원문 대신 RFC 3414 키 Ku 20B만 저장) + `engineBoots`(SNMP 기동마다 +1). Modbus 맵 밖이라 Modbus로 읽히지 않음. 파일 없으면 커뮤니티 `public`. **부팅 시 적용**. 웹 저장은 FS 큐로 기록(핸들러에서 FS 락 미보유). **공장초기화(INITDB) 시 파일 삭제** |
-| 웹 화면 | Setup > General 탭 **"SNMP" 카드**: SNMP / SNMP Version / Trap / Trap Server(레지스터). SNMP가 OFF면 아래 항목 전부 잠금 + Community / sysContact / sysLocation(`/api/snmp`). 커뮤니티는 값을 내려주지 않고(기본값 여부만) 새로 입력할 때만 저장. 저장은 관리자만 |
+| 문자열 설정 | **2026-10-28부터 통신 설정(Modbus)으로 이동** — 7300 커뮤니티(Trap 공용, 빈 값이면 `public`) · 7316 sysContact · 7332 sysLocation · 7348 v3 사용자 · 7364 v3 인증 비밀번호 · 7380 v3 암호화 비밀번호(각 16워드, 최대 31자, 1워드=2글자·하위 바이트 먼저). **Modbus로 읽고 쓸 수 있다**(사용자 결정). Save Set(7799)로 settings.dat에 저장, **부팅 시 적용**. `\system\snmp.d`에는 `engineBoots`만 남김(SNMP 기동마다 +1, 공장초기화 시 삭제). 구 `snmp.d`(문자열 포함, magic 'SNMP')는 더 이상 읽지 않음 → 업데이트 후 문자열 재설정 필요 |
+| 웹 화면 | Setup > General 탭 **"SNMP" 카드**: SNMP / SNMP Version / Trap / Trap Server(레지스터). SNMP가 OFF면 아래 항목 전부 잠금 + Community / sysContact / sysLocation / v3(`/api/snmp` → 통신 설정에 기록, 카드 Save가 Save Set까지 수행). 커뮤니티·v3 비밀번호는 화면에 값을 내려주지 않음(기본값·설정 여부만). 저장은 관리자만. confWebApp Main Setting은 같은 항목을 Modbus로 직접 읽고 씀 |
 | 알림 전용 객체 | SV300-MIB `.<PEN>.1.5.1.{1..8}` = svAlmMeter, svAlmSlot, svAlmChan, svAlmChanName, svAlmCond, svAlmLevel, svAlmValue, svAlmTime (accessible-for-notify — GET으로는 읽히지 않음) |
 | Trap OID | `.<PEN>.1.5.0.1` svAlarmRaised, `.0.2` svAlarmCleared, `.0.3` svAlarmReset |
 | svAlmTime | 이벤트 시각 `alog.ts`(= `sysTick1s`, 알람 로그와 같은 시각값) |
 | PEN | **67140**(IANA 발급, NTEKSYSTEM Co., Ltd.). `snmp_trap.c` `SV_PEN_OID` = BER `{0x84, 0x8C, 0x44}` 한 곳에서 정의 — Trap OID·SV300-MIB·sysObjectID(`1.3.6.1.4.1.67140.1`, `snmpTrapInit()`에서 설정)가 함께 사용 |
-| 메모리맵 | `memorymap` 최신 엑셀의 COMM 영역 갱신 필요: 7150~7153 DAQ server ip → 예약, 7155~7160 DAQ 설정 → SNMP(snmpEn, trapEn, trap_ip) |
+| 메모리맵 | `memorymap/SV300 memory map_261028.xlsx` (통신 설정 410워드, 명령 7788~) |
 | sysORTable | SV300-MIB가 추가 로드되어 제공 MIB 목록이 4개(SNMPv2-MIB, BRIDGE-MIB, RSTP-MIB, SV300-MIB)가 된다 → §7 TC-02 기대값은 다음 FW 버전에서 갱신 |
 
 ---
@@ -371,15 +371,15 @@ PEN은 `1.3.6.1.4.1.<번호>` 아래의 자사 OID 트리를 쓰기 위한 번�
 
 | 항목 | 현재 펌웨어 | 비고 |
 |---|---|---|
-| SNMP 사용 | **설정(기본 OFF)** | 웹 SNMP 카드 / Modbus 7155. 변경 후 재부팅 |
-| SNMP 버전 | **v1, v2c, v3** (선택) | SNMP Version(7153): `v1/v2c`(기본) / `v1/v2c/v3` / `v3 only`. 재부팅 후 반영 |
+| SNMP 사용 | **설정(기본 OFF)** | 웹 SNMP 카드 / Modbus 7290. 변경 후 재부팅 |
+| SNMP 버전 | **v1, v2c, v3** (선택) | SNMP Version(7291): `v1/v2c`(기본) / `v1/v2c/v3` / `v3 only`. 재부팅 후 반영 |
 | SNMPv3 (USM) | **사용자 1명, 읽기 전용** | 인증 HMAC-SHA-1(필수) + 암호화 AES-128(선택) — authPriv / authNoPriv. engineID = `80 01 06 44 03` + MAC(PEN 67140) |
 | 포트 | **UDP 161**(조회), **UDP 162**(Trap 송신) | |
 | 커뮤니티 | **설정값(기본 `public`) — 읽기 전용** | 쓰기(SET) 가능한 커뮤니티 없음. Trap에도 같은 값 사용 |
 | SET(쓰기) | **미지원** | 모든 SET 요청은 응답 없이 폐기된다 |
 | 제공 MIB | SNMPv2-MIB(RFC 3418) system·snmp 그룹, BRIDGE-MIB(RFC 4188), RSTP-MIB(RFC 4318), SV300-MIB(Trap 알림 객체만) | 표준 MIB는 대부분의 NMS에 기본 내장 |
 | 계측값 MIB(SV300-MIB) | 미제공 | 이후 버전에서 제공 예정(§5) |
-| Trap | **알람 발생/복귀/리셋 3종** — SNMPv2c(커뮤니티), SNMP Version `v3 only`면 SNMPv3(v3 User) | 수신지 1곳(웹 SNMP 카드 / Modbus 7156~7160). 저장 즉시 반영 |
+| Trap | **알람 발생/복귀/리셋 3종** — SNMPv2c(커뮤니티), SNMP Version `v3 only`면 SNMPv3(v3 User) | 수신지 1곳(웹 SNMP 카드 / Modbus 7292~7296). 저장 즉시 반영 |
 | sysContact / sysLocation | **설정** | 웹 SNMP 카드, 최대 32자 ASCII. 재부팅 후 반영 |
 | sysName / 호스트명 | `sv300-<SN>` | mDNS(`sv300-<SN>.local`)·LLMNR·DHCP 호스트명과 같은 값 |
 | Enterprise 번호(PEN) | **67140** | IANA 발급(NTEKSYSTEM Co., Ltd.). 자사 OID `1.3.6.1.4.1.67140`, sysObjectID `1.3.6.1.4.1.67140.1` |
@@ -691,7 +691,7 @@ SNMP 폴링이 계측·Modbus·웹 기능에 영향을 주지 않는지 확인�
    - 콘솔 `CPU` 명령의 부하율이 평소(약 25%)와 비교해 크게 늘지 않았는지
 - 판정: 리셋·통신 오류가 없고 계측 갱신이 유지되면 합격.
 
-> 참고(사내): 현재 `net_config.h`의 `SNMP_TRACE_LEVEL`이 INFO라서 SNMP 요청마다 콘솔에 디버그 로그가 찍힌다. 부하 시험 중 콘솔 출력이 많아지는 것은 정상이며, 출하 전에 로그 레벨을 낮출지 검토한다.
+> 참고(사내): 2026-10-28부터 `net_config.h`의 `SNMP_TRACE_LEVEL`을 WARNING으로 낮췄다(MQTT 추가로 필드 타깃 플래시 확보). 요청마다 찍히던 디버그 로그는 나오지 않고 경고·오류만 출력된다.
 
 ### 7.6 RSTP 링 시험
 
@@ -780,7 +780,6 @@ SNMP 변경 후에도 RSTP 링 이중화가 정상 동작하는지 확인한다.
 - [ ] 외부 연동 가이드(사용자 요청 시) — snmp.md의 사내 내용(구버전 취약점·소스 경로·라이선스·미확인 경쟁사 정보) 제외, §1·§5·§7 기반
 
 ### 8.5 출하 전 결정·정리
-- [ ] `net_config.h` `SNMP_TRACE_LEVEL`(현재 INFO, 요청마다 콘솔 로그) 낮출지 결정
 - [ ] BRIDGE-MIB 포워딩 테이블(`dot1dTpFdbTable`) — 조회 시 행마다 스위치 칩 전체 재조회(O(n²)). 부하 시험(§7.5) 결과 보고 노출 유지/숨김 결정
 - [ ] 웹 SNMP 카드 `Community` 표기에 설명 추가 여부(예: `Community (password)`)
 - [ ] CycloneTCP 상용 라이선스 범위 확인(`GPL_LICENSE_TERMS_ACCEPTED`로 빌드 중)

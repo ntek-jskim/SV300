@@ -423,6 +423,63 @@ int loadPqeDef(void) {
 	return 0;
 }
 
+/* 문자열 필드 NUL 종단 보장(Modbus로 끝까지 채워 쓰면 종단이 없을 수 있다) */
+static void commStrTerm(char *s, int size)
+{
+	s[size - 1] = '\0';
+}
+
+/* 통신 설정 범위 정규화 — 부팅(loadSettings)·buildSettings에서 호출. 범위 밖/미설정(0)은 기본값 */
+void commCfgNormalize(COMM_CFG *c)
+{
+	commStrTerm(c->host, sizeof(c->host));
+	commStrTerm(c->mqttHost, sizeof(c->mqttHost));
+	commStrTerm(c->mqttClientId, sizeof(c->mqttClientId));
+	commStrTerm(c->mqttUser, sizeof(c->mqttUser));
+	commStrTerm(c->mqttPass, sizeof(c->mqttPass));
+	commStrTerm(c->mqttTopic, sizeof(c->mqttTopic));
+	commStrTerm(c->snmpCommunity, sizeof(c->snmpCommunity));
+	commStrTerm(c->snmpContact, sizeof(c->snmpContact));
+	commStrTerm(c->snmpLocation, sizeof(c->snmpLocation));
+	commStrTerm(c->snmpV3User, sizeof(c->snmpV3User));
+	commStrTerm(c->snmpV3AuthPass, sizeof(c->snmpV3AuthPass));
+	commStrTerm(c->snmpV3PrivPass, sizeof(c->snmpV3PrivPass));
+	commStrTerm(c->sntpServer, sizeof(c->sntpServer));
+
+	if (c->host[0] == '\0') strcpy(c->host, "SV300");
+	if (c->dhcpEn > 1)      c->dhcpEn = 1;
+
+	/* Modbus — TCP를 끄면 Modbus로는 다시 켤 수 없으므로 0/1 이외는 ON */
+	if (c->mbTcpEn > 1)     c->mbTcpEn = 1;
+	if (c->tcpPort == 0)    c->tcpPort = 502;
+	if (c->devId == 0)      c->devId = 1;
+
+	/* MQTT */
+	if (c->mqttEn > 1)      c->mqttEn = 0;
+	if (c->mqttPort == 0)   c->mqttPort = 1883;
+	if (c->mqttInterval == 0) c->mqttInterval = 30;
+	else if (c->mqttInterval < 10)  c->mqttInterval = 10;
+	else if (c->mqttInterval > 300) c->mqttInterval = 300;
+	if (c->mqttQos > 1)     c->mqttQos = 0;
+	if (c->mqttRetain > 1)  c->mqttRetain = 0;
+	if (c->mqttKeepAlive == 0) c->mqttKeepAlive = 60;
+	c->mqttTls = 0;			/* 1차 미지원 */
+	c->mqttFormat = 0;		/* JSON */
+
+	/* SNMP */
+	if (c->snmpEn > 1 || c->trapEn > 1) {
+		c->snmpEn = 0;
+		c->trapEn = 0;
+		memset(c->trap_ip, 0, sizeof(c->trap_ip));
+	}
+	if (c->snmpVer > 2)     c->snmpVer = 0;
+	if (c->snmpCommunity[0] == '\0') strcpy(c->snmpCommunity, "public");
+
+	/* SNTP — Timezone UTC-12:00 ~ +14:00 */
+	if (c->useSntp > 1)     c->useSntp = 0;
+	if (c->timezone < -720 || c->timezone > 840) c->timezone = 540;
+}
+
 int initSettings(int id)
 {
 	if (id < 0 || id >= METER_CH_COUNT)
@@ -461,18 +518,24 @@ int initSettings(int id)
 		db.comm.dns0[2] = 63;
 		db.comm.dns0[3] = 1;
 
-		db.comm.sntp[0] = 0;
-		db.comm.sntp[1] = 0;
-		db.comm.sntp[2] = 0;
-		db.comm.sntp[3] = 0;
-
 		strcpy((char *)db.comm.host, "SV300");
 		db.comm.tcpPort = 502;
 		db.comm.dhcpEn = 1;
+		db.comm.mbTcpEn = 1;
+
+		/* MQTT — 기본 OFF, 브로커/계정/토픽 빈 값(빈 Client ID·토픽은 SN 기반 기본값) */
+		db.comm.mqttPort = 1883;
+		db.comm.mqttInterval = 30;
+		db.comm.mqttKeepAlive = 60;
+
+		/* SNMP — 기본 OFF, 커뮤니티 public(구 snmp.d 기본값과 동일) */
+		strcpy(db.comm.snmpCommunity, "public");
+
+		/* SNTP — 기본 OFF, 서버 빈 값, Timezone 서울 */
+		db.comm.timezone = 540;
 
 		db.etc.backlightTime = 1;
 		db.etc.brightness = 2;
-		db.etc.timezone = 540;
 		db.etc.interval = 2;
 		db.etc.Iload = 50;
 		db.etc.autorotation = 2;
@@ -529,8 +592,7 @@ int buildSettings(int id)
 			printf("*** Invalid devId = %d\n", db.comm.devId);
 			ret = -1;
 		}
-		if (strlen(db.comm.host) == 0)
-			strcpy(db.comm.host, "SV300");
+		commCfgNormalize(&db.comm);
 	}
 
 	if (db.pt[id].wiring > SIMULATION) {
@@ -748,7 +810,7 @@ int buildSettings(int id)
 
 #ifdef METER_TEST_DATA
 	// alarm db
-	db.etc.timezone = 540;
+	db.comm.timezone = 540;
 #endif	
 	
 
@@ -1172,17 +1234,7 @@ int loadSettings(SETTINGS	*pdb)
 		}
 	}
 
-	/* SNMP 숫자형(7155~7160)은 구 DAQ 설정 자리 — DAQ 빌드를 거친 기기의 잔존값
-	 * (srate/length 등)이 SNMP ON·엉뚱한 Trap IP로 읽히지 않도록 0/1 이외면 SNMP 블록 초기화 */
-	if (db.comm.snmpEn > 1 || db.comm.trapEn > 1) {
-		printf("{{SNMP settings invalid (en=%u trap=%u) — cleared}}\n",
-		       db.comm.snmpEn, db.comm.trapEn);
-		db.comm.snmpEn = 0;
-		db.comm.trapEn = 0;
-		memset(db.comm.trap_ip, 0, sizeof(db.comm.trap_ip));
-	}
-	if (db.comm.snmpVer > 2)
-		db.comm.snmpVer = 0;
+	commCfgNormalize(&db.comm);
 
 	memcpy(&meter[0].setting, &db, sizeof(SETTINGS));
 
@@ -3034,7 +3086,7 @@ void FS_task(void *arg)
 		else if (meter[id].cntl.saveSetting == 0x1234) {
 			/* 파일: SETTINGS 단일(db). PT/CT는 db.pt[id]/ct[id], PQE는 meter[] */
 			memcpy(&db, &meter[0].setting, sizeof(SETTINGS));
-			/* layoutVer는 내부값 — Modbus(7161)·설정 백업복원으로 쓰인 값이 저장되면
+			/* layoutVer는 내부값 — Modbus(7159)·설정 백업복원으로 쓰인 값이 저장되면
 			 * 다음 부팅에 레이아웃 불일치로 설정 전체가 초기화되므로 펌웨어 값으로 고정 */
 			db.comm.layoutVer = SETTINGS_LAYOUT_VER;
 			saveSettings(&db);
@@ -3045,7 +3097,7 @@ void FS_task(void *arg)
 			meter[id].cntl.saveSetting = 0;
 			/* 재부팅 없이 설정 저장(웹 설정 저장 지원) — 기존 runFlag=0(→taskMonitor 재부팅)·
 			 * osDelayTask(2000) 제거. 저장(settings.dat)만 수행. 재초기화가 필요한 설정
-			 * (네트워크/PT·CT 등)은 별도 reboot 명령(7456)으로 반영한다. */
+			 * (네트워크/PT·CT 등)은 별도 reboot 명령(7798)으로 반영한다. */
 			printf("... save settings, ip=%d.%d.%d.%d\n",
 				pdbk->comm.ip0[0], pdbk->comm.ip0[1], pdbk->comm.ip0[2], pdbk->comm.ip0[3]);
 		}

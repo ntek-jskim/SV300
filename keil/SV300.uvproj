@@ -1434,6 +1434,26 @@
               <FilePath>..\cyclone_driver\cyclone_tcp\snmp\snmp_agent_usm.c</FilePath>
             </File>
             <File>
+              <FileName>mqtt_client.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_tcp\mqtt\mqtt_client.c</FilePath>
+            </File>
+            <File>
+              <FileName>mqtt_client_misc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_tcp\mqtt\mqtt_client_misc.c</FilePath>
+            </File>
+            <File>
+              <FileName>mqtt_client_packet.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_tcp\mqtt\mqtt_client_packet.c</FilePath>
+            </File>
+            <File>
+              <FileName>mqtt_client_transport.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_tcp\mqtt\mqtt_client_transport.c</FilePath>
+            </File>
+            <File>
               <FileName>snmp_agent_vacm.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\cyclone_driver\cyclone_tcp\snmp\snmp_agent_vacm.c</FilePath>
@@ -1952,6 +1972,11 @@
               <FileName>snmp_trap.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\src\snmp_trap.c</FilePath>
+            </File>
+            <File>
+              <FileName>mqtt_app.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\mqtt_app.c</FilePath>
             </File>
             <File>
               <FileName>snmp_cfg.c</FileName>
@@ -3480,6 +3505,26 @@
               <FilePath>..\cyclone_driver\cyclone_tcp\snmp\snmp_agent_usm.c</FilePath>
             </File>
             <File>
+              <FileName>mqtt_client.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_tcp\mqtt\mqtt_client.c</FilePath>
+            </File>
+            <File>
+              <FileName>mqtt_client_misc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_tcp\mqtt\mqtt_client_misc.c</FilePath>
+            </File>
+            <File>
+              <FileName>mqtt_client_packet.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_tcp\mqtt\mqtt_client_packet.c</FilePath>
+            </File>
+            <File>
+              <FileName>mqtt_client_transport.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_tcp\mqtt\mqtt_client_transport.c</FilePath>
+            </File>
+            <File>
               <FileName>snmp_agent_vacm.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\cyclone_driver\cyclone_tcp\snmp\snmp_agent_vacm.c</FilePath>
@@ -3998,6 +4043,11 @@
               <FileName>snmp_trap.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\src\snmp_trap.c</FilePath>
+            </File>
+            <File>
+              <FileName>mqtt_app.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\mqtt_app.c</FilePath>
             </File>
             <File>
               <FileName>snmp_cfg.c</FileName>
@@ -5526,6 +5576,26 @@
               <FilePath>..\cyclone_driver\cyclone_tcp\snmp\snmp_agent_usm.c</FilePath>
             </File>
             <File>
+              <FileName>mqtt_client.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_tcp\mqtt\mqtt_client.c</FilePath>
+            </File>
+            <File>
+              <FileName>mqtt_client_misc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_tcp\mqtt\mqtt_client_misc.c</FilePath>
+            </File>
+            <File>
+              <FileName>mqtt_client_packet.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_tcp\mqtt\mqtt_client_packet.c</FilePath>
+            </File>
+            <File>
+              <FileName>mqtt_client_transport.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_tcp\mqtt\mqtt_client_transport.c</FilePath>
+            </File>
+            <File>
               <FileName>snmp_agent_vacm.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\cyclone_driver\cyclone_tcp\snmp\snmp_agent_vacm.c</FilePath>
@@ -6044,6 +6114,11 @@
               <FileName>snmp_trap.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\src\snmp_trap.c</FilePath>
+            </File>
+            <File>
+              <FileName>mqtt_app.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\src\mqtt_app.c</FilePath>
             </File>
             <File>
               <FileName>snmp_cfg.c</FileName>

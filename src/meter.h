@@ -895,34 +895,72 @@ typedef struct {
 	uint16_t r1[6];
 } MAXMIN;
 
+/* 통신 설정 블록 — Modbus 7110~7519 (410워드). 순서: Ethernet → Modbus → MQTT → SNMP → SNTP → 예약(100).
+ * 2026-10-28 신규 레이아웃: DAQ 삭제, Modbus TCP Enable·MQTT 추가, SNMP 문자열(구 snmp.d)·SNTP 서버명·
+ * Timezone(구 ETC 7401) 편입. 문자열은 1워드=2글자(바이트 순서는 host 와 같음), NUL 종단(최대 길이-1 글자).
+ * 비밀번호도 Modbus로 읽고 쓸 수 있다(사용자 결정 2026-10-28). */
+#define COMM_STR_S	32		/* 짧은 문자열 바이트(16워드) */
+#define COMM_STR_L	64		/* 긴 문자열 바이트(32워드) — MQTT 브로커·토픽 */
 typedef struct {
-	uint16_t	devId;	//1~250
-	uint16_t tcpPort;		// std modbus port, ext modbus port
-	uint16_t useSntp;
-	uint16_t sntpInterval;
-
-	//
-	uint16_t ip0[4], sm0[4], gw0[4], dns0[4], sntp[4];
-	char     host[32];
-
-	uint16_t r0[3];			/* 7150~7152 예약(구 DAQ server ip — DAQ 기능 삭제) */
-	uint16_t snmpVer;		/* 7153 SNMP 허용 버전 (0:v1/v2c, 1:v1/v2c/v3, 2:v3 only) — 부팅 시 반영.
-							 *      SNMPv3 미지원 펌웨어는 값과 무관하게 v1/v2c로 동작 */
-	uint16_t dhcpEn;		/* 7154 (제품군 공통 주소·confWebApp 사용 — 이동 금지) */
-	/* SNMP 숫자형 설정 = 구 DAQ 설정 자리(7155~7160). 문자열·비밀값(커뮤니티·sysContact/Location·v3)은
-	 * Modbus 노출 방지 위해 snmp.d 파일(snmp_cfg.c). 구 DAQ 잔존값은 loadSettings()에서 정리 */
-	uint16_t snmpEn;		/* 7155 SNMP 에이전트 사용 (0:OFF, 1:ON) — 부팅 시 반영 */
-	uint16_t trapEn;		/* 7156 SNMP Trap 사용 (0:OFF, 1:ON) — 저장 즉시 반영 */
-	uint16_t trap_ip[4];	/* 7157~7160 SNMP Trap 수신지(NMS) IP */
-	uint16_t layoutVer;		/* 7161 settings.dat 레이아웃 버전(내부값) — 이동 금지 */
-	uint16_t r1[8];			/* 7162~7169 예약 */
+	/* ── Ethernet 7110~7149 ── */
+	uint16_t dhcpEn;					/* 7110 DHCP (0:OFF, 1:ON) */
+	uint16_t ip0[4], sm0[4], gw0[4], dns0[4];	/* 7111~7126 IP·Subnet·Gateway·DNS */
+	char     host[COMM_STR_S];			/* 7127~7142 호스트명 */
+	uint16_t _rEth[7];					/* 7143~7149 예약 */
+	/* ── Modbus 7150~7159 ── */
+	uint16_t mbTcpEn;					/* 7150 Modbus TCP 서버 (0:OFF, 1:ON, 기본 1) — 부팅 시 반영 */
+	uint16_t tcpPort;					/* 7151 Modbus TCP 포트 (기본 502) */
+	uint16_t devId;						/* 7152 Unit ID (1~247) */
+	uint16_t _rMb[6];					/* 7153~7158 예약 */
+	uint16_t layoutVer;					/* 7159 settings.dat 레이아웃 버전(내부값) */
+	/* ── MQTT 7160~7289 ── */
+	uint16_t mqttEn;					/* 7160 MQTT (0:OFF, 1:ON) — 부팅 시 반영 */
+	uint16_t mqttPort;					/* 7161 브로커 포트 (기본 1883) */
+	uint16_t mqttInterval;				/* 7162 전송 주기(초) 10~300, 기본 30 */
+	uint16_t mqttQos;					/* 7163 QoS 0/1 */
+	uint16_t mqttRetain;				/* 7164 Retain 0/1 */
+	uint16_t mqttKeepAlive;				/* 7165 Keep-alive(초), 기본 60 */
+	uint16_t mqttTls;					/* 7166 TLS 0/1 (1차 미지원 — 0) */
+	uint16_t mqttFormat;				/* 7167 페이로드 형식 (0:JSON) */
+	char     mqttHost[COMM_STR_L];		/* 7168~7199 브로커 IP 또는 도메인 */
+	char     mqttClientId[COMM_STR_S];	/* 7200~7215 빈 값이면 sv300-<SN> */
+	char     mqttUser[COMM_STR_S];		/* 7216~7231 */
+	char     mqttPass[COMM_STR_S];		/* 7232~7247 */
+	char     mqttTopic[COMM_STR_L];		/* 7248~7279 빈 값이면 sv300/<SN>/data */
+	uint16_t _rMqtt[10];				/* 7280~7289 예약 */
+	/* ── SNMP 7290~7399 ── */
+	uint16_t snmpEn;					/* 7290 SNMP 에이전트 (0:OFF, 1:ON) — 부팅 시 반영 */
+	uint16_t snmpVer;					/* 7291 허용 버전 (0:v1/v2c, 1:v1/v2c/v3, 2:v3 only) — 부팅 시 반영 */
+	uint16_t trapEn;					/* 7292 Trap (0:OFF, 1:ON) — 저장 즉시 반영 */
+	uint16_t trap_ip[4];				/* 7293~7296 Trap 수신지(NMS) IP */
+	uint16_t _rSnmp0[3];				/* 7297~7299 예약 */
+	char     snmpCommunity[COMM_STR_S];	/* 7300~7315 읽기 커뮤니티(Trap 공용), 빈 값이면 public */
+	char     snmpContact[COMM_STR_S];	/* 7316~7331 sysContact */
+	char     snmpLocation[COMM_STR_S];	/* 7332~7347 sysLocation */
+	char     snmpV3User[COMM_STR_S];	/* 7348~7363 v3 USM 사용자 */
+	char     snmpV3AuthPass[COMM_STR_S];/* 7364~7379 v3 인증 비밀번호(SHA-1, 8자 이상) */
+	char     snmpV3PrivPass[COMM_STR_S];/* 7380~7395 v3 암호화 비밀번호(AES-128, 선택) */
+	uint16_t _rSnmp1[4];				/* 7396~7399 예약 */
+	/* ── SNTP 7400~7419 ── */
+	uint16_t useSntp;					/* 7400 SNTP (0:OFF, 1:ON) */
+	uint16_t sntpInterval;				/* 7401 동기 주기(분) */
+	int16_t  timezone;					/* 7402 Timezone(분, 서울 540) */
+	char     sntpServer[COMM_STR_S];	/* 7403~7418 NTP 서버 IP 또는 도메인 */
+	uint16_t _rSntp;					/* 7419 예약 */
+	/* ── 예약 7420~7519 ── */
+	uint16_t _rsv[100];
 } COMM_CFG;
 
-/* COMM_CFG = Modbus 7110~7169(60워드) 고정 — 크기가 바뀌면 뒤 레지스터·settings.dat가 밀리므로 컴파일 에러 */
-typedef char comm_cfg_layout_check[(sizeof(COMM_CFG) == 60 * 2) ? 1 : -1];
+/* COMM_CFG = Modbus 7110~7519(410워드) 고정 — 크기·묶음 시작이 바뀌면 뒤 레지스터·settings.dat가 밀리므로 컴파일 에러 */
+typedef char comm_cfg_layout_check[(sizeof(COMM_CFG) == 410 * 2) ? 1 : -1];
+typedef char comm_cfg_mb_check  [(offsetof(COMM_CFG, mbTcpEn) ==  40 * 2) ? 1 : -1];
+typedef char comm_cfg_mqtt_check[(offsetof(COMM_CFG, mqttEn)  ==  50 * 2) ? 1 : -1];
+typedef char comm_cfg_snmp_check[(offsetof(COMM_CFG, snmpEn)  == 180 * 2) ? 1 : -1];
+typedef char comm_cfg_sntp_check[(offsetof(COMM_CFG, useSntp) == 290 * 2) ? 1 : -1];
+typedef char comm_cfg_rsv_check [(offsetof(COMM_CFG, _rsv)    == 310 * 2) ? 1 : -1];
 
 /* COMM_CFG/SETTINGS 필드 배치가 바뀔 때마다 값을 올린다(연/월). 크기가 같아도 재초기화 유도 */
-#define SETTINGS_LAYOUT_VER		0x2606u
+#define SETTINGS_LAYOUT_VER		0x2610u
 
 typedef struct {
 	uint16_t	wiring;	// 0:3p4w(3LN,3CT), 1:3p3W(2CT):2LL,2CT, 2:3P3W(3CT):2LL,3CT, 3:1P2W, 4: 1P3W 5 : Simulation
@@ -962,7 +1000,7 @@ typedef struct {
 	uint16_t  	backlightTime;		// 0: always, 1 ~ 15분
 	uint16_t  	brightness;		// 0 ~ 9
 	uint16_t  	autorotation;	// 0: hold, 1: auto rotation
-	int16_t 	timezone;			// 분 단위로 환산한 시간, seoul(9h, 540m)
+	int16_t 	_rTz;				/* 예약 — Timezone은 통신 설정 SNTP 묶음(comm.timezone)으로 이동(2026-10-28) */
 	uint16_t  	maxminItv;
 	uint16_t  	testMode;
 	uint16_t  	testMode_Period;
@@ -2148,13 +2186,18 @@ typedef struct {
 #define MBAD_SETTING			MB_FIELD_OFF(pqevt)		/* P2~P4 설정(pmset) 베이스 = 6700 */
 #define MBAD_SETTING_END		MBAD_RW_OFF_END			/* P2~P4 설정 끝 = iom(7050) */
 /* P1 설정: device id/comm/PT/CT/ETC/IOM (SETTINGS 구조체) — R/W, save settings로 db 반영 */
-#define MBAD_P1_SETTING			MB_FIELD_OFF(setting)	/* = 7110 (device id) */
-#define MBAD_P1_SETTING_END		MB_FIELD_OFF(cmds)		/* = 7438 (cmds 시작 = UTC) */
-/* 260810 맵: ETC Target Demand 9→3ch 축소로 iom(7410)·cmds 블록 -8 이동.
- *   cmds[0..1] = UTC Time(7438), cmds[10] = reboot(7448) ... */
-#define MBAD_SET_TS				MB_FIELD_OFF(cmds)			/* UTC Time  = 7438 */
-#define MBAD_SET_CMD			(MBAD_SET_TS + 10u)			/* 명령 시작 = 7448 */
-#define MBAD_SET_END			(MBAD_SET_TS + 127u)		/* 명령 끝   = 7565 */
+#define MBAD_P1_SETTING			MB_FIELD_OFF(setting)	/* = 7110 (통신 설정 블록 시작 = DHCP) */
+#define MBAD_P1_SETTING_END		MB_FIELD_OFF(cmds)		/* = 7788 (cmds 시작 = UTC) */
+/* 설정 필드 → Modbus 주소(CH1 base). 예: MBAD_SET_FIELD(comm.mqttEn) = 7160 */
+#define MBAD_SET_FIELD(f)		((uint16_t)(MBAD_P1_SETTING + (offsetof(SETTINGS, f) / sizeof(uint16_t))))
+/* 2026-10-28 통신 설정 410워드화로 freq(7520)~iom(7760)·cmds 블록 +350 이동.
+ *   cmds[0..1] = UTC Time(7788), cmds[10] = reboot(7798) ... */
+#define MBAD_SET_TS				MB_FIELD_OFF(cmds)			/* UTC Time  = 7788 */
+#define MBAD_SET_CMD			(MBAD_SET_TS + 10u)			/* 명령 시작 = 7798 */
+#define MBAD_SET_END			(MBAD_SET_TS + 127u)		/* 명령 끝   = 7915 */
+/* 메모리맵(2026-10-28) 기준 주소 고정 — 구조체가 바뀌어 주소가 밀리면 컴파일 에러 */
+typedef char mbad_setting_check[(MBAD_P1_SETTING == 7110) ? 1 : -1];
+typedef char mbad_cmds_check   [(MBAD_SET_TS == 7788) ? 1 : -1];
 #define MBAD_CMD_FETCH_EVENT		(MBAD_SET_CMD + 38)		/* load event ALL,#1~3 = 7486 (260812: Temp-ref 삽입 +1) */
 #define MBAD_CMD_FETCH_ALARM		(MBAD_SET_CMD + 42)		/* load alarm ALL,#1~3 = 7490 */
 #define MBAD_CMD_FETCH_ITIC			(MBAD_SET_CMD + 54)		/* load itic  = 7502 (단일 레지스터) */
@@ -2311,6 +2354,7 @@ extern DAQ_BUF	daq;
 
 extern void copySummary(void);
 extern int  buildFeederMap(FEEDER_MAP map[MAX_CH]);	/* returns 배정된 유효 피더 수 */
+extern void commCfgNormalize(COMM_CFG *c);			/* 통신 설정 범위·문자열 종단 정규화 */
 extern uint16_t countFeeders(PT_DEF *pt);			/* wiring != NOT_USED 개수 → feeder_cnt */
 extern void copySimpleMap(void);					/* SMP_MAP(psmpMap) 갱신 */
 extern void publishMeterSnap(int id);				/* METERING 스냅샷 발행(Modbus torn read 방지) */
