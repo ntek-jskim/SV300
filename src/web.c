@@ -1952,7 +1952,7 @@ static const char INDEX_HTML[] =
    다른 카드가 날아가므로, 해당 워드블록만 1초마다 읽어 값 span 만 교체한다. */
 "var STF=[],STLO=0,STN=0;\n"
 "function loadGeneral(){return j('/api/general').then(function(r){if(!r.d.ok){$('setBody').innerHTML=\"<p class='stub'>load error</p>\";return;}\n"
-" var cs=[[],[],[],[],[]];r.d.fields.forEach(function(f){cs[f.card].push(f)});var h=\"<div class='setgrid'>\";\n"
+" var cs=CARDN.map(function(){return [];});r.d.fields.forEach(function(f){cs[f.card].push(f)});var h=\"<div class='setgrid'>\";\n"
 " STF=cs[3];STLO=0;STN=0;STF.forEach(function(f){if(!STLO||f.addr<STLO)STLO=f.addr;});\n"
 " STF.forEach(function(f){if(f.addr-STLO+1>STN)STN=f.addr-STLO+1;});\n"
 " cs.forEach(function(fs,ci){h+=\"<div class='setcard'\"+(ci===4?\" id='snmpCard'\":'')+\"><h3>\"+CARDN[ci]+'</h3>';fs.forEach(function(f){h+=\"<div class='srow'><span class='sk'>\"+esc(f.label)+'</span>'+ctlOf(f)+'</div>';});h+='</div>';});\n"

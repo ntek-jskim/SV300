@@ -17,3 +17,7 @@ _meter_patches/
 _apply_patches.py
 _extract_patches.py
 _extract_patches2.py
+
+# clangd 컴파일 DB (tools/gen_compile_commands.py 로 생성, PC 경로 포함)
+compile_commands.json
+.cache/

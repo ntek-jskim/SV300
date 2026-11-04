@@ -12,7 +12,7 @@
 - **보안상 바로 조치할 항목이 있다.** 현재 `private` 커뮤니티로 BRIDGE/RSTP-MIB를 쓸 수 있어서(`dot1dStpPortEnable` 등 15개 RW 객체), 원격에서 스위치 포트를 비활성화해 장비를 네트워크에서 끊을 수 있다.
 - 결론: **적용 가능하다(리소스·스택 모두 충분).** 필요한 작업은 ① 기본 설정 정리와 보안 조치, ② 자사 Enterprise MIB(계측값) 작성, ③ Trap(알람/이벤트) 연동, ④ 웹 설정 UI, ⑤ SNMPv3이다.
 - **1차 범위 확정(2026-10-08)**: 읽기 전용 + Trap(SET 없음), SNMPv3 포함, BRIDGE/RSTP-MIB는 RO로 유지, 계측 항목은 Modbus Simple 맵(50000~) 기준, IANA PEN은 신규 신청. → §4.6, §5, §6 참고
-- **진행 상황**: FW V00.04(26/10/08)에 §4.5-①(private 삭제, sysDescr/sysName 실값, 호스트명 `sv300-<SN>` 통일)을 반영했다. 위 첫 세 항목은 V00.03 이하 펌웨어 기준이다. 26/10/08 빌드에 SNMP 설정(사용 여부·버전·커뮤니티·sysContact/Location, 웹 SNMP 카드)과 알람 Trap(§5.4)을 추가했고 실기 Trap 수신을 확인했다. FW_VER는 SNMPv3 시험 후 올린다. 시험 방법은 §7 참고
+- **진행 상황**: FW V00.04(26/10/08)에 §4.5-①(private 삭제, sysDescr/sysName 실값, 호스트명 `sv300-<SN>` 통일)을 반영했다. 위 첫 세 항목은 V00.03 이하 펌웨어 기준이다. 26/10/08 빌드에 SNMP 설정(사용 여부·버전·커뮤니티·sysContact/Location, 웹 SNMP 카드)과 알람 Trap(§5.4)을 추가했고 실기 Trap 수신을 확인했다. SNMPv3 실기 시험(TC-11·TC-12)은 2026-11-04 합격했고, FW_VER는 0004로 유지한다(다음 작업 때 상향). 시험 방법은 §7 참고
 
 ---
 
@@ -365,7 +365,7 @@ PEN은 `1.3.6.1.4.1.<번호>` 아래의 자사 OID 트리를 쓰기 위한 번�
 
 이 장은 SV300 SNMP 기능을 시험하거나 NMS(감시 시스템)에 연동하는 사람이 그대로 따라 할 수 있도록 작성했다. 조회 시험은 **Paessler SNMP Tester**(무료), Trap 시험은 **Wireshark**(무료) 기준이다.
 
-> FW_VER는 SNMPv3 시험 완료 후 올릴 예정이라 V00.04 그대로다. 아래 내용은 **26/10/08 빌드**(SNMP 설정 카드·Trap 포함) 기준이며, 그 이전 V00.04 빌드에는 SNMP 설정·Trap이 없다.
+> FW_VER는 V00.04 그대로다(다음 작업 때 상향). 아래 내용은 **26/10/08 빌드**(SNMP 설정 카드·Trap 포함) 기준이며, 그 이전 V00.04 빌드에는 SNMP 설정·Trap이 없다.
 
 ### 7.1 SNMP 기능 범위
 
@@ -483,8 +483,11 @@ SV300은 허용되지 않은 요청(잘못된 커뮤니티, 지원하지 않는 
 
 ### 7.4 시험 항목
 
+각 TC의 **장비** 줄은 장비 웹 Setup → General → SNMP 카드 설정이고, **Paessler** 줄은 §7.3.1의 "1. Set SNMP Settings" 값이다(Local IP·Device IP/Port `161`·Timeout `2`는 모든 TC 공통이라 생략). 장비 설정을 바꾸면 SNMP·Version·Community·sysContact·sysLocation·v3 항목은 **Save → Reboot** 해야 반영되고, Trap·Trap Server는 Save만으로 반영된다.
+
 #### TC-01 기본 응답 / 펌웨어 확인
-- 설정: v2c / public
+- 장비: SNMP **ON**, Version `v1/v2c`, Community `public`(기본)
+- Paessler: SNMP Version `SNMP v2c` / Community `public`
 - 요청: Custom OID = `1.3.6.1.2.1.1.1.0` → Start
 - 올바른 응답:
   ```
@@ -493,7 +496,8 @@ SV300은 허용되지 않은 요청(잘못된 커뮤니티, 지원하지 않는 
 - 판정: 응답이 오고 버전·날짜가 시험 대상 펌웨어와 같으면 합격.
 
 #### TC-02 system 그룹
-- 설정: v2c / public
+- 장비: SNMP **ON**, Version `v1/v2c`, Community `public`, sysContact·sysLocation은 확인할 값 입력(비워 두면 `""`)
+- Paessler: `SNMP v2c` / `public`
 - 요청: Walk = `1.3.6.1.2.1.1` → Start, `1.3.6.1.2.1.11.`로 시작하는 줄이 나오면 Stop
 - 올바른 응답:
   ```
@@ -513,6 +517,8 @@ SV300은 허용되지 않은 요청(잘못된 커뮤니티, 지원하지 않는 
 - 아래 시험의 설정 `public`은 장비에 설정한 커뮤니티 `<COMM>`으로 바꿔 읽는다.
 
 #### TC-03 SNMP 버전별 동작
+- 장비: SNMP **ON**, Version **`v1/v2c`**(필수 — `v1/v2c/v3`면 3번이 응답한다), Community `public`
+- Paessler: 아래 표의 "설정" 열대로 순서마다 바꾼다
 
 | 순서 | 설정 | 요청 | 올바른 응답 |
 |---|---|---|---|
@@ -525,6 +531,8 @@ SV300은 허용되지 않은 요청(잘못된 커뮤니티, 지원하지 않는 
 - 위 표는 SNMP Version이 기본값 `v1/v2c`일 때 기준이다. v3 응답 시험은 TC-12.
 
 #### TC-04 잘못된 커뮤니티 거부
+- 장비: SNMP **ON**, Version `v1/v2c`, Community `public`
+- Paessler: `SNMP v2c`, Community는 아래 표의 "설정" 열대로 바꾼다
 
 | 순서 | 설정 | 요청 | 올바른 응답 |
 |---|---|---|---|
@@ -536,6 +544,8 @@ SV300은 허용되지 않은 요청(잘못된 커뮤니티, 지원하지 않는 
 - 커뮤니티를 `private`으로 설정한 장비라면 2번에는 설정값과 다른 아무 문자열을 쓴다.
 
 #### TC-05 쓰기(SET) 거부
+- 장비: SNMP **ON**, Version `v1/v2c`, Community `public`
+- Paessler: `SNMP v2c` / `public` (정식 시험은 Net-SNMP `-v2c -c public`)
 
 Paessler에는 SET 기능이 없으므로 다음 세 가지가 모두 확인되면 **"쓰기 불가"로 판정**한다.
 1. TC-04가 합격이다(쓰기 권한이 있던 `private` 커뮤니티가 없다).
@@ -552,7 +562,8 @@ Paessler에는 SET 기능이 없으므로 다음 세 가지가 모두 확인되�
 > **정식 쓰기 거부 시험**(외부 인증·납품 시험에 권장): SET 요청을 실제로 보낼 수 있는 도구(§7.2.1 ② 또는 ③)로 sysName(`1.3.6.1.2.1.1.5.0`)과 포트1 활성 상태(`1.3.6.1.2.1.17.2.15.1.4.1`, 값 `2`=비활성화)에 쓰기를 시도한다. 올바른 응답은 **응답 없음(timeout)** 이고, 이후 Paessler로 조회했을 때 값이 그대로이며 쓰기 거부 카운터(`1.3.6.1.2.1.11.5.0`)가 증가해 있어야 한다. Net-SNMP 예: `snmpset -v2c -c public -r 0 -t 2 <IP> 1.3.6.1.2.1.17.2.15.1.4.1 i 2`
 
 #### TC-06 BRIDGE/RSTP-MIB 조회
-- 설정: v2c / public
+- 장비: SNMP **ON**, Version `v1/v2c`, Community `public`, 랜케이블은 **ETH1만** 연결(아래 예 기준)
+- Paessler: `SNMP v2c` / `public`
 - 요청: Walk = `1.3.6.1.2.1.17` → Start, 판정할 줄이 나오면 Stop
 - 올바른 응답(주요 줄):
   ```
@@ -570,12 +581,15 @@ Paessler에는 SET 기능이 없으므로 다음 세 가지가 모두 확인되�
 - 판정: 위 값과 맞으면 합격. 일반 NMS에서는 RSTP-MIB 객체(`1.3.6.1.2.1.17.2.16` 이후)가 이름 없이 숫자 OID로 보일 수 있으며 정상이다.
 
 #### TC-07 전체 조회
-- 설정: v2c / public
+- 장비: SNMP **ON**, Version `v1/v2c`, Community `public`
+- Paessler: `SNMP v2c` / `public`
 - 요청: Walk = `1.3.6.1.2.1` → Start (Stop 하지 않고 끝까지)
 - 올바른 응답: `1.3.6.1.2.1.1.` → `1.3.6.1.2.1.11.` → `1.3.6.1.2.1.17.` 순으로 값이 이어지다가 오류 없이 스스로 멈춘다.
 - 판정: 중간에 timeout 없이 끝나면 합격. 같은 LAN에 MAC이 많으면 포워딩 테이블(`1.3.6.1.2.1.17.4.3`) 때문에 1분 이상 걸릴 수 있으며 정상이다.
 
 #### TC-08 호스트명 일치
+- 장비: SNMP 설정과 무관(OFF여도 됨). 장비 시리얼 번호가 설정돼 있어야 한다(콘솔 `SNSET`)
+- 시험 PC: 장비와 같은 서브넷(mDNS·LLMNR은 라우터를 넘지 않음)
 - Paessler에는 이 기능이 없으므로 Windows 명령 프롬프트를 쓴다.
   ```
   ping sv300-<SN>.local
@@ -585,12 +599,17 @@ Paessler에는 SET 기능이 없으므로 다음 세 가지가 모두 확인되�
 - DHCP 모드라면 DHCP 서버(공유기)의 임대 목록에 호스트명 `sv300-<SN>`이 표시되는지도 확인한다.
 
 #### TC-09 재부팅 후 복귀
-1. 설정: v2c / public, 요청 종류 **Read Device Uptime**, **Repeat every** 체크 후 `1` seconds → Start
+- 장비: SNMP **ON**, Version `v1/v2c`, Community `public`
+- Paessler: `SNMP v2c` / `public`
+1. 요청 종류 **Read Device Uptime**, **Repeat every** 체크 후 `1` seconds → Start
 2. SV300 전원을 껐다 켠다.
 3. 올바른 응답: 전원이 꺼져 있는 동안 응답 없음(timeout)이 반복되다가, 부팅 후 업타임 값이 다시 표시되고 작은 숫자부터 다시 증가한다.
 - 판정: 응답이 돌아오고 업타임이 처음부터 다시 증가하면 합격. 전원을 켠 시각과 첫 응답 시각의 차이를 복귀 시간으로 기록한다.
 
 #### TC-10 Trap (알람 발생 / 복귀 / 리셋)
+- 장비: SNMP **ON**, Version `v1/v2c` 또는 `v1/v2c/v3`(**`v3 only` 아님** — 그러면 v3 Trap이 나간다, TC-12 7번), Community `public`, **Trap ON**, **Trap Server = 시험 PC IP**
+- 알람(Channel Setting → Alarm Settings): 예 U1 `>` 50 또는 I1 `>` 0.5 → Save & Apply → Reboot
+- Wireshark: 시험 PC 랜카드, 표시 필터 `udp.port == 162` (Paessler 불필요)
 
 **준비**
 1. 시험 PC에서 Wireshark 실행 → SV300과 같은 네트워크의 랜카드 선택 → 표시 필터 `snmp` (또는 `udp.port == 162`)
@@ -638,14 +657,18 @@ Paessler에는 SET 기능이 없으므로 다음 세 가지가 모두 확인되�
 - Trap은 UDP라 수신 확인·재전송이 없다. 알람이 한꺼번에 많이 나면 큐(16건)를 넘는 오래된 요청은 버려진다.
 
 #### TC-11 SNMP 설정 반영
+- 장비 시작 상태: SNMP **ON**, Version **`v1/v2c/v3`**(`v3 only`면 Community 칸이 잠기고 v2c가 거부돼 시험 불가), Trap ON, Trap Server = 시험 PC IP
+- Paessler: `SNMP v2c`, Community는 아래 표대로 / Wireshark 필터 `udp.port == 162`
 
-| # | 방법 | 올바른 결과 |
-|---|---|---|
-| 1 | SNMP 카드에서 Community를 새 값(예: `ntek-test1`)으로 → Save → Reboot | Paessler에서 새 값으로 조회하면 응답, `public`으로는 응답 없음(timeout). Trap의 community도 새 값 |
-| 2 | sysContact / sysLocation 입력 → Save → Reboot | TC-02의 `1.3.6.1.2.1.1.4.0` / `.6.0`이 입력값 |
-| 3 | SNMP OFF → Save → Reboot | 모든 SNMP 요청 응답 없음, Trap 없음 |
-| 4 | 공장초기화(Init Settings) | SNMP OFF, 재부팅 후 다시 ON하면 Community `public`·Contact/Location 빈 값(설정 파일 삭제 확인) |
-| 5 | SNMP OFF 상태에서 SNMP 카드 확인 | Version·Trap·Trap Server·Community·sysContact·sysLocation 칸이 잠김 |
+| # | 장비 설정 | Paessler 설정 | 올바른 결과 |
+|---|---|---|---|
+| 1 | Community = 새 값(예: `ntek-test1`) → Save → Reboot | v2c / `ntek-test1`, 이어서 v2c / `public` | 새 값은 응답, `public`은 응답 없음(timeout). 알람 발생 시 Trap의 community도 `ntek-test1` |
+| 2 | sysContact / sysLocation 입력 → Save → Reboot | v2c / `ntek-test1`, Custom OID `1.3.6.1.2.1.1.4.0`·`.6.0` | 입력값 |
+| 3 | SNMP **OFF** → Save → Reboot | v2c / `ntek-test1`, 그리고 v3(TC-12 설정) | 둘 다 응답 없음, Trap 없음 |
+| 4 | Maintenance → **Init Settings**(공장초기화) → Reboot → SNMP ON → Save → Reboot | v2c / `public` | 응답. 카드에 Community "public (default) - change!", Contact/Location 빈 값, v3 "(not set)", Version `v1/v2c` |
+| 5 | SNMP **OFF** 상태에서 SNMP 카드 확인 | — | Version·Trap·Trap Server·Community·sysContact·sysLocation·v3 칸이 잠김 |
+
+- 4번을 하면 v3 사용자·비밀번호도 지워진다. TC-12를 다시 할 때는 v3 설정을 새로 입력한다.
 
 #### TC-12 SNMPv3
 
@@ -658,18 +681,18 @@ Paessler에는 SET 기능이 없으므로 다음 세 가지가 모두 확인되�
 - 화면 잠금: Version이 `v1/v2c`면 v3 칸 잠금, `v3 only`면 Community 칸 잠금.
 - 비밀번호는 저장 후 다시 보이지 않는다("(set)" 표시). 바꿀 때만 새로 입력한다.
 
-**Paessler 설정 (v3)**: SNMP Version `SNMP v3`, Community 칸 = **v3 User**, Authentication `SHA`, Password = Auth 비밀번호, Encryption `AES`, Encryption Key = Priv 비밀번호, Context 비움
+**Paessler 설정 (v3)**: SNMP Version `SNMP v3`, Community 칸 = **v3 User**, Authentication `SHA`, Password = Auth 비밀번호, Encryption `AES`, Encryption Key = Priv 비밀번호, Context 비움. 장비는 MD5·DES를 지원하지 않으므로 반드시 SHA(SHA-1)·AES를 고른다.
 
-| # | 방법 | 올바른 결과 |
-|---|---|---|
-| 1 | 위 설정으로 Custom OID `1.3.6.1.2.1.1.5.0` | `sv300-<SN>` 응답 |
-| 2 | Password(인증)만 틀리게 | 값 없음 — 인증 실패 오류(장비가 USM Report로 거부) |
-| 3 | Encryption Key(암호화)만 틀리게 | 값 없음 — 복호화 실패 오류 |
-| 4 | 등록되지 않은 사용자 이름 | 값 없음 — unknown user 오류 |
-| 5 | Version `v1/v2c/v3`에서 v2c / `<COMM>` 조회 | 응답(v2c와 v3 모두 허용) |
-| 6 | SNMP Version **`v3 only`** → Save → Reboot 후 v2c / `<COMM>` 조회 | **응답 없음(timeout)**. v3(1번 설정)은 응답 |
-| 7 | `v3 only`에서 알람 발생(TC-10 준비 동일) | Wireshark에 Trap 수신: `msgVersion: snmpv3 (3)`, `msgUserName` = v3 User, PDU는 암호화(`encryptedPDU`) |
-| 8 | 장비 재부팅 2회 | 콘솔 `engineBoots`가 매번 1씩 증가. Paessler 조회는 재부팅 후에도 정상 |
+| # | 장비 설정 | Paessler 설정 | 올바른 결과 |
+|---|---|---|---|
+| 1 | Version `v1/v2c/v3`, 위 v3 사용자 | v3 / `ntekv3` / SHA `authpass1` / AES `privpass1`, Custom OID `1.3.6.1.2.1.1.5.0` | `sv300-<SN>` 응답 |
+| 2 | 〃 | 1번에서 Password만 틀리게 | 값 없음 — 인증 실패 오류(장비가 USM Report로 거부) |
+| 3 | 〃 | 1번에서 Encryption Key만 틀리게 | 값 없음 — 복호화 실패 오류 |
+| 4 | 〃 | 1번에서 사용자 이름만 미등록 값(예: `nouser`) | 값 없음 — unknown user 오류 |
+| 5 | 〃 | v2c / `<COMM>` | 응답(v2c와 v3 모두 허용) |
+| 6 | Version **`v3 only`** → Save → Reboot | v2c / `<COMM>`, 이어서 1번 설정 | v2c는 **응답 없음(timeout)**, v3는 응답 |
+| 7 | `v3 only`, **Trap ON**, Trap Server = 시험 PC IP, 알람 설정(TC-10 준비 동일) | — (Wireshark `udp.port == 162`) | Trap 수신: `msgVersion: snmpv3 (3)`, `msgUserName` = v3 User, PDU는 암호화(`encryptedPDU`) |
+| 8 | `v3 only` 그대로, 장비 재부팅 2회 | 1번 설정 | 콘솔 `engineBoots`가 매번 1씩 증가. Paessler 조회는 재부팅 후에도 정상 |
 
 - Wireshark에서 v3 Trap 내용(varbind)을 보려면 **Edit → Preferences → Protocols → SNMP → Users Table**에 Username·Authentication model `SHA1`·Password·Privacy protocol `AES`·Privacy password를 등록한다(Engine ID는 비워 둠).
 - `v3 only`인데 v3 사용자를 설정하지 않으면 Trap을 보내지 않는다(콘솔 `[SNMP] v3 only but no v3 user — trap disabled`).
@@ -677,6 +700,11 @@ Paessler에는 SET 기능이 없으므로 다음 세 가지가 모두 확인되�
 ### 7.5 공존·부하 시험
 
 SNMP 폴링이 계측·Modbus·웹 기능에 영향을 주지 않는지 확인한다. Walk는 MIB 끝까지 조회하므로 반복 시험에는 **Custom OID + Repeat every**를 쓴다.
+
+- 장비: SNMP **ON**, Version `v1/v2c` 또는 `v1/v2c/v3`, Community `public`(또는 `<COMM>`), Modbus TCP **Enable**, (선택) Trap ON + Trap Server = 시험 PC IP
+- Paessler(프로그램 3개 실행): 모두 `SNMP v2c` / `public`(또는 `<COMM>`)
+- Modbus TCP 폴링 도구: 포트 502, 폴링 주기 1초 정도로 계측 영역 연속 읽기
+- 웹: Dashboard 열고 Live polling ON / 시리얼 콘솔: 시작·30분·1시간에 `CPU` 입력
 
 1. Modbus TCP 폴링(기존 시험 도구)과 웹 대시보드를 켜 둔다.
 2. Paessler 창을 2개 실행해 1시간 동안 반복 조회한다.
@@ -702,6 +730,11 @@ SNMP 변경 후에도 RSTP 링 이중화가 정상 동작하는지 확인한다.
             │ 포트A                 포트B │
         SV300 ETH1               SV300 ETH2
 ```
+
+- 장비: SNMP **ON**, Version `v1/v2c` 또는 `v1/v2c/v3`, Community `public`(또는 `<COMM>`)
+- 스위치: RSTP(또는 STP 호환 RSTP) **활성화**, 시험 PC와 SV300 두 포트가 같은 VLAN
+- Paessler: `SNMP v2c` / `public`, Custom OID(아래 2·4번)
+- 시험 PC 명령 프롬프트: `ping -t <IP>`
 
 1. **준비**: 스위치에서 RSTP를 켜고, SV300의 두 포트를 스위치의 서로 다른 포트에 연결해 루프를 만든다. RSTP가 동작하지 않으면 이 구성에서 브로드캐스트 스톰이 발생하므로, 통신이 정상이라는 것 자체가 1차 확인이다.
 2. **초기 상태**: Paessler Custom OID로 다음 값을 기록한다.
@@ -762,9 +795,7 @@ SNMP 변경 후에도 RSTP 링 이중화가 정상 동작하는지 확인한다.
 > 운영 규칙: SNMP 관련 남은 작업을 여기서 관리한다. **완료한 항목은 이 목록에서 삭제**하고, 결과는 해당 본문 절(§4~§7)과 FWUPDATE에 남긴다.
 > 기준: 2026-10-12 (SV300 `79d0891` 이후 PEN 67140·SNMPv3 미커밋 / confWebApp `6513bab` 이후 미커밋)
 
-### 8.1 SNMPv3 (§4.5-③) — 구현·빌드 완료(2026-10-12), 실기 시험 남음
-- [ ] 실기 TC-12(authPriv·오류 3종·v2c 병행·`v3 only`·v3 Trap·engineBoots 증가) + TC-11 재확인
-- [ ] 실기 확인 후 **FW_VER 상향** (현재 0004)
+### 8.1 SNMPv3 (§4.5-③) — 구현·빌드 완료(2026-10-12), 실기 TC-11·TC-12 합격(2026-11-04). FW_VER는 0004 유지(다음 작업 때 상향)
 - [ ] (선택) SHA-256 인증 — `sha256.c` 추가 + `SNMP_SHA256_SUPPORT`
 
 ### 8.3 자사 MIB — 계측값 (§4.5-④, §5)
@@ -785,7 +816,6 @@ SNMP 변경 후에도 RSTP 링 이중화가 정상 동작하는지 확인한다.
 - [ ] CycloneTCP 상용 라이선스 범위 확인(`GPL_LICENSE_TERMS_ACCEPTED`로 빌드 중)
 
 ### 8.6 시험 (26/10/08 빌드)
-- [ ] TC-11 SNMP 설정 반영(Community 변경·Contact/Location·SNMP OFF·공장초기화·화면 잠금) 실기 확인
 - [ ] §7.5 공존·부하, §7.6 RSTP 링 — SNMP·Trap 추가 빌드로 재확인
 
 ### 8.7 관련 항목 (SNMP 외, Trap 시험에 영향)
