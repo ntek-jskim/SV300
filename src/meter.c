@@ -16,8 +16,8 @@
 
 #define	FW_VER	0004
 #define	FW_BUILD_YEAR 26
-#define	FW_BUILD_MON  10
-#define	FW_BUILD_DAY  8
+#define	FW_BUILD_MON  11
+#define	FW_BUILD_DAY  4
 
 #define	SQRT_2	 1.414213562 
 
@@ -107,16 +107,58 @@ void fsFileLockInit(void)
 	}
 }
 
+/* [진단 26/11/04] 파일 락 점유시간이 100ms 이상이면 [FSL] 출력(잡은 곳 주소 ra → .map에서 함수 확인).
+ *  10분마다 ~25초 네트워크 정지 원인 확인용. 확인 후 0으로 끄거나 삭제. */
+#define FS_LOCK_TIMING_LOG	1
+#if FS_LOCK_TIMING_LOG
+static systime_t fsLockT0;
+static uint32_t fsLockRa;
+static uint8_t fsLockDepth;		/* RTX mutex는 재귀 획득 가능 → 바깥 1단만 측정 */
+#endif
+
 void fsFileLock(void)
 {
 	if (!fsFileMutexReady)
 		fsFileLockInit();
 	osAcquireMutex(&fsFileMutex);
+#if FS_LOCK_TIMING_LOG
+	if (fsLockDepth++ == 0) {
+		fsLockT0 = osGetSystemTime();
+		fsLockRa = (uint32_t)__return_address();
+	}
+#endif
 }
 
 void fsFileUnlock(void)
 {
+#if FS_LOCK_TIMING_LOG
+	systime_t hold = 0;
+	uint32_t ra = 0;
+
+	if (fsLockDepth > 0 && --fsLockDepth == 0) {
+		hold = osGetSystemTime() - fsLockT0;
+		ra = fsLockRa;
+	}
 	osReleaseMutex(&fsFileMutex);
+	if (hold >= 100)
+		printf("[FSL] hold %ums ra=0x%08X\n", (unsigned)hold, ra);
+#else
+	osReleaseMutex(&fsFileMutex);
+#endif
+}
+
+/* ffind()가 돌려준 이름(info.name)으로 fdelete/fopen용 전체 경로를 만든다.
+ *  NOR 플랫(NOSDMEM): info.name 이 이미 "pq_ql_...d"처럼 접두어 포함 전체 파일명 → 그대로 사용.
+ *  FAT: info.name 은 폴더 없는 순수 파일명 → dir + DIRSEP 를 앞에 붙인다.
+ *  (26/11/04 이전엔 플랫에서도 접두어를 한 번 더 붙여 "pq_pq_ql_..." 삭제가 항상 실패했음) */
+void fsPathFromFind(char *path, const char *dir, const char *name)
+{
+#ifdef NOSDMEM
+	(void)dir;
+	strcpy(path, name);
+#else
+	sprintf(path, "%s" DIRSEP "%s", dir, name);
+#endif
 }
 
 int getTzOffset(int tz) {
@@ -2972,7 +3014,9 @@ static void trimFixedRecordFileFs(const char *path, uint32_t recSize, uint32_t k
 	free(buf);
 }
 
-void FS_task(void *arg) 
+static void demandIoTick(void);
+
+void FS_task(void *arg)
 {
 	FILE *fp=NULL;
 	FS_MSG *pmsg;
@@ -2991,7 +3035,10 @@ void FS_task(void *arg)
 	fsQ.tid = os_tsk_self();
 #endif
 	
-	_enableTaskMonitor(Tid_Fs, 50);
+	/* 한도 50(5초) → 250(25초): NOR EFS 의 ffind 검색(ql/qw·trend·캡처 정리)이 1회 수 초씩 걸려
+	 *  _WDT_EN 빌드에서 정상 동작 중에도 감시 초과로 리셋될 수 있음 (26/11/04 실측 3.6~9초).
+	 *  errCnt 가 uint8_t 라 255 를 넘는 한도는 감시가 무력화되므로 250 이 상한. */
+	_enableTaskMonitor(Tid_Fs, 250);
 
 	/* [태스크 통합] 옛 Trend_Task 시작부의 헤더검증을 FS_task 로 흡수(1회).
 	 *  기존 트렌드 파일의 header 와 현재 trend 설정을 비교해 다르면 rename 한다. */
@@ -3139,6 +3186,12 @@ void FS_task(void *arg)
 		 *  안에 1분 1회만 실제 동작하고, 같은 분이면 즉시 return 이라 매 루프 호출해도 무해.
 		 *  fsQ 처리와 같은 태스크라 flash write 가 순차 실행되어 경합이 없다. */
 		trendTick();
+
+		/* [26/11/04] PQ 10분 기록(ql/qw)을 미터 태스크(REALTIME)에서 넘겨받아 처리 + 하루 1회 정리 */
+		pqIoTick();
+
+		/* [26/11/04] 15분 demand 파일 기록(Metering_Task 에서 넘겨받음) */
+		demandIoTick();
 	}
 
 	// wait forever
@@ -3495,22 +3548,48 @@ void resetDemand(int id, int mode) {
 }
 
 
-void storeDemand() {
+/* [26/11/04] demand 파일 저장을 Metering_Task(HIGH) → FS_task(LOW)로 이관.
+ *  예전: 채널마다 storeDemand()를 불러 15분마다 3채널 파일을 3번씩(9회, ~2.3초) HIGH 에서 기록
+ *        → 그동안 SNMP/네트워크 지연, 정각·30분엔 PQ 기록과 겹쳐 timeout.
+ *  지금: 미터 태스크는 해당 채널 스냅샷만 복사하고 비트를 세움 → FS_task 가 채널당 1회 기록.
+ *  (스냅샷은 15분에 1번 갱신되므로 기록 도중 덮어쓰일 일은 사실상 없다) */
+static DEMAND     dmSnap[METER_CH_COUNT]   __attribute__ ((section ("EXT_RAM"), zero_init));
+static DEMAND_LOG dlogSnap[METER_CH_COUNT] __attribute__ ((section ("EXT_RAM"), zero_init));
+static volatile uint32_t dmStorePending = 0;	/* bit id = 기록 대기 채널 */
+
+static void storeDemandDefer(int id) {
+	dmSnap[id] = meter[id].dm;
+	dlogSnap[id] = meter[id].dlog;
+	__disable_irq();
+	dmStorePending |= (1UL << id);
+	__enable_irq();
+}
+
+/* FS_task 루프에서 호출 */
+static void demandIoTick(void) {
 	FILE *fp;
 	char path[64];
+	uint32_t m;
 	int id;
 
-	/* [진단로그 OFF] printf("[WR] storeDemand\n"); */	/* 진단: 0x100000(FAT) 처닝원 추적 */
+	__disable_irq();
+	m = dmStorePending;
+	dmStorePending = 0;
+	__enable_irq();
+	if (m == 0) {
+		return;
+	}
 	fsFileLock();
 	for (id = 0; id < METER_CH_COUNT; id++) {
+		if ((m & (1UL << id)) == 0) continue;
 		if (id == 0) sprintf(path, "%s", DEMAND_FILE);
 		else sprintf(path, "%s" DIRSEP "demand.d%d", SYS_DIR, id);
 		fp = fopen(path, "wb");
 		if (fp == NULL) {
 			continue;
 		}
-		fwrite(&meter[id].dm, sizeof(DEMAND), 1, fp);
-		fwrite(&meter[id].dlog, sizeof(DEMAND_LOG), 1, fp);
+		fwrite(&dmSnap[id], sizeof(DEMAND), 1, fp);
+		fwrite(&dlogSnap[id], sizeof(DEMAND_LOG), 1, fp);
 		fclose(fp);
 	}
 	fsFileUnlock();
@@ -4214,7 +4293,7 @@ static void trimEgyArchBudget(void) {
 	while (findOldestEgyArch(oldestName, &total)) {
 		if (total <= FLASH_LOG_BUDGET_EGY)
 			break;
-		sprintf(path, "%s" DIRSEP "%s", LOG_EGY_DIR, oldestName);
+		fsPathFromFind(path, LOG_EGY_DIR, oldestName);
 #ifdef USE_CMSIS_RTOS2
 		res = fdelete(path, NULL);
 #else
@@ -4238,7 +4317,7 @@ static void trimEgyArchAge(uint32_t cutoffKey) {
 		return;
 	if (egyArchNameKey(oldestName) >= cutoffKey)
 		return;		/* 최古도 보존기간 내 → 삭제 없음 */
-	sprintf(path, "%s" DIRSEP "%s", LOG_EGY_DIR, oldestName);
+	fsPathFromFind(path, LOG_EGY_DIR, oldestName);
 #ifdef USE_CMSIS_RTOS2
 	res = fdelete(path, NULL);
 #else
@@ -4531,10 +4610,10 @@ void energy_scan(int id, METER_EH_REGS *ereg, ENERGY_NVRAM *pEgyNvr) {
 	if (meter[id].cntl.rstDemand == 0x1234) {
 		meter[id].cntl.rstDemand = 0;
 		resetDemand(id, 0);
-		storeDemand();
+		storeDemandDefer(id);
 	}
 	else if (wF) {
-		storeDemand();
+		storeDemandDefer(id);
 	}
 		
 	// Total / 상별 에너지 누적

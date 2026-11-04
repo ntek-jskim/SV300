@@ -2394,6 +2394,7 @@ extern void fetchAlarm(int id, int cmd);
 extern void fsFileLockInit(void);
 extern void fsFileLock(void);
 extern void fsFileUnlock(void);
+extern void fsPathFromFind(char *path, const char *dir, const char *name);
 extern void fetchItic(int id, int cmd);
 extern void fetchItic2(int id, int cmd);
 extern int loadEventFifo(int id);
@@ -2404,6 +2405,7 @@ extern void getMeterIpAddr(uint8_t *);
 /* PQ / EN50160 품질 로그 — 채널별 meter[id].qdLog */
 extern void initPQHeader(int id);
 extern int updateQualData(int id);
+extern void pqIoTick(void);		/* FS_task 루프에서 호출: PQ 10분 파일 기록 + 하루 1회 ql/qw 정리 */
 extern void writeLogData(int id, uint32_t ts);
 extern void timeStampChanged(void);
 extern uint32_t getQualWeekEndTs(CNTL_DATA *pcntl);

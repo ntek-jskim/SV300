@@ -29,53 +29,70 @@ extern int readQualWeekData(char *path, QualWeek *pqw);
 
 static uint8_t qw_tail_buf[QW_TAIL_MAX];
 
+/* [진단 26/11/04] PQ 10분 처리 단계별 소요시간(ms) 콘솔 출력 — 10분마다 ~25초 네트워크 정지 원인 확인용.
+ *  원인 확인 후 0으로 끄거나 삭제. 출력 접두어 [PQT]. */
+#define PQ_TIMING_LOG	1
+#if PQ_TIMING_LOG
+  #define PQT_BEGIN()	systime_t pqtT0 = osGetSystemTime(), pqtT1
+  #define PQT(tag)		do { pqtT1 = osGetSystemTime(); \
+							printf("[PQT] %s %ums\n", (tag), (unsigned)(pqtT1 - pqtT0)); \
+							pqtT0 = pqtT1; } while (0)
+#else
+  #define PQT_BEGIN()	do { } while (0)
+  #define PQT(tag)		do { } while (0)
+#endif
+
 static void pqFsLock(void) {
+#if PQ_TIMING_LOG
+	systime_t t = osGetSystemTime();
 	fsFileLock();
+	t = osGetSystemTime() - t;
+	if (t >= 20)
+		printf("[PQT] lock wait %ums\n", (unsigned)t);
+#else
+	fsFileLock();
+#endif
 }
 
 static void pqFsUnlock(void) {
 	fsFileUnlock();
 }
 
+/* qw 파일의 QualWeek 헤더 뒤 이벤트 tail 을 qw_tail_buf 로 읽는다.
+ *  [26/11/04] ffind(파일 크기 조회)가 NOR EFS 에서 3초 이상 걸려 제거 — fopen 후 EOF 까지 fread.
+ *  파일 없음/헤더 이하 크기 → tail 0. tail 이 버퍼보다 크면 -1. */
 static int qualWeekReadTail(const char *path, uint32_t *ptailSize) {
-#ifdef USE_CMSIS_RTOS2
-	fsFileInfo fi;
-#else
-	FINFO fi;
-#endif
 	FILE *fp;
-	uint32_t tailSize, n, total = 0;
+	uint32_t n, total = 0;
+	uint8_t extra;
 
 	*ptailSize = 0;
-	fi.fileID = 0;
-	if (ffind(path, &fi) != 0 || fi.size <= sizeof(QualWeek)) {
-		return 0;
-	}
-
-	tailSize = fi.size - (uint32_t)sizeof(QualWeek);
-	if (tailSize > sizeof(qw_tail_buf)) {
-		printf("updateQualWeekData, tail too large (%u)\n", tailSize);
-		return -1;
-	}
-
 	fp = fopen(path, "rb");
 	if (fp == NULL) {
-		return -1;
+		return 0;
 	}
-	fseek(fp, (long)sizeof(QualWeek), SEEK_SET);
-	while (total < tailSize) {
-		n = tailSize - total;
+	if (fseek(fp, (long)sizeof(QualWeek), SEEK_SET) != 0) {
+		fclose(fp);
+		return 0;
+	}
+	while (total < sizeof(qw_tail_buf)) {
+		n = sizeof(qw_tail_buf) - total;
 		if (n > 256) {
 			n = 256;
 		}
-		if (fread(qw_tail_buf + total, 1, n, fp) != n) {
-			fclose(fp);
-			return -1;
-		}
+		n = fread(qw_tail_buf + total, 1, n, fp);
 		total += n;
+		if (n == 0) {
+			break;
+		}
+	}
+	if (total == sizeof(qw_tail_buf) && fread(&extra, 1, 1, fp) == 1) {
+		fclose(fp);
+		printf("updateQualWeekData, tail too large (>%u)\n", (unsigned)sizeof(qw_tail_buf));
+		return -1;
 	}
 	fclose(fp);
-	*ptailSize = tailSize;
+	*ptailSize = total;
 	return 0;
 }
 
@@ -129,11 +146,13 @@ static int findOldestQualLog(char *oldestName, uint32_t *oldestSize, uint32_t *t
 	oldestName[0] = 0;
 	*oldestSize = 0;
 
+	/* ffind 가 NOR EFS 에서 수 초씩 걸리므로 항목마다 FS 태스크 감시 카운트를 올린다(FS_task 에서 실행) */
 	info.fileID = 0;
 	while (ffind(maskQl, &info) == 0) {
 		const char *name = (const char *)info.name;
 		int key = parseDateKey8(name);
 
+		meter[0].cntl.wdtTbl[Tid_Fs].count++;
 		*totalSize += info.size;
 		// PQ 통합 예산에서 금주(현재 주 시작일) ql*는 보호
 		if (key >= currentKey) {
@@ -154,6 +173,7 @@ static int findOldestQualLog(char *oldestName, uint32_t *oldestSize, uint32_t *t
 		const char *name = (const char *)info.name;
 		int key = parseDateKey8(name);
 
+		meter[0].cntl.wdtTbl[Tid_Fs].count++;
 		*totalSize += info.size;
 		if (key >= currentKey) {
 			continue;
@@ -170,33 +190,41 @@ static int findOldestQualLog(char *oldestName, uint32_t *oldestSize, uint32_t *t
 	return found;
 }
 
-static void trimQualLogBudget_nolock(void) {
+#define PQ_TRIM_MAX		8	/* 정리 1회(하루 1회)당 최대 삭제 개수 — 밀린 파일은 며칠에 걸쳐 정리 */
+
+/* ql/qw 정리 1단계(호출자가 pqFsLock 보유): 한 번 검색해서
+ *  - 용량 초과면 가장 오래된 1개 삭제,
+ *  - 아니면 날짜키 < cutoffKey(보존기간 경과)인 가장 오래된 1개 삭제.
+ *  cutoffKey==0(RTC 미설정/용량만 검사)이면 나이 정리 없음. 금주 파일은 findOldestQualLog 가 보호.
+ *  반환: 1=삭제함(더 할 수 있음), 0=할 일 없음/실패.
+ *  [26/11/04] 예전 trimQualLogBudget·trimQualLogAge 가 10분마다 같은 검색을 두 번(약 18초) 하던 것을 통합. */
+static int trimQualLogStep_nolock(uint32_t cutoffKey) {
 	char oldestName[64], path[96];
 	uint32_t oldestSize = 0, totalSize = 0;
-	int res;
+	int over, aged, res;
 
-	while (findOldestQualLog(oldestName, &oldestSize, &totalSize)) {
-		if (totalSize <= FLASH_LOG_BUDGET_PQ) {
-			break;
+	if (!findOldestQualLog(oldestName, &oldestSize, &totalSize)) {
+		if (totalSize > FLASH_LOG_BUDGET_PQ) {
+			printf("trimQualLog: PQ flash still over budget (%u > %u)\n",
+				totalSize, (unsigned)FLASH_LOG_BUDGET_PQ);
 		}
+		return 0;
+	}
+	over = (totalSize > FLASH_LOG_BUDGET_PQ);
+	aged = (cutoffKey != 0 && (uint32_t)parseDateKey8(oldestName) < cutoffKey);
+	if (!over && !aged) {
+		return 0;
+	}
 
-		sprintf(path, "%s" DIRSEP "%s", LOG_PQ_DIR, oldestName);
+	fsPathFromFind(path, LOG_PQ_DIR, oldestName);
 #ifdef USE_CMSIS_RTOS2
-		res = fdelete(path, NULL);
+	res = fdelete(path, NULL);
 #else
-		res = fdelete(path);
+	res = fdelete(path);
 #endif
-		printf("trimQualLogBudget: delete %s (size=%u, total=%u, res=%d)\n",
-			path, oldestSize, totalSize, res);
-
-		if (res != 0) {
-			break;
-		}
-	}
-	if (totalSize > FLASH_LOG_BUDGET_PQ) {
-		printf("trimQualLogBudget: PQ flash still over budget (%u > %u)\n",
-			totalSize, (unsigned)FLASH_LOG_BUDGET_PQ);
-	}
+	printf("trimQualLog: delete %s (%s, size=%u, total=%u, cutoff=%u, res=%d)\n",
+		path, over ? "budget" : "age", oldestSize, totalSize, cutoffKey, res);
+	return (res == 0);
 }
 
 static void ensureLogPqDir(void) {
@@ -214,45 +242,31 @@ static FILE *pqFopenLocked(const char *path, const char *mode) {
 	ensureLogPqDir();
 	fp = fopen(path, mode);
 	if (fp == NULL) {
-		trimQualLogBudget_nolock();
+		int n;
+
+		/* 열기 실패(용량 부족 추정) → 용량 기준으로만 정리 후 재시도 */
+		for (n = 0; n < PQ_TRIM_MAX && trimQualLogStep_nolock(0); n++) {
+		}
 		fp = fopen(path, mode);
 	}
 	return fp;
 }
 
-static void trimQualLogBudget(void) {
-	pqFsLock();
-	trimQualLogBudget_nolock();
-	pqFsUnlock();
-}
+/* ql/qw 정기 정리(FS_task, 하루 1회). 삭제 1건마다 락을 풀고 FS 태스크 감시 카운트를 올려
+ *  다른 태스크의 파일 저장이 오래 막히지 않게 한다. */
+static void trimQualLogs(uint32_t cutoffKey) {
+	int n, more;
 
-/* [나이 로테이션] ql/qw 중 날짜키 < cutoffKey 인 가장 오래된 1개 삭제(호출당 최대 1개).
- *  cutoffKey==0(RTC 미설정)이면 삭제 없음. findOldestQualLog가 금주(현재 주) 파일은 보호. */
-static void trimQualLogAge_nolock(uint32_t cutoffKey) {
-	char oldestName[64], path[96];
-	uint32_t oldestSize = 0, totalSize = 0;
-	int res;
-
-	if (cutoffKey == 0)
-		return;
-	if (!findOldestQualLog(oldestName, &oldestSize, &totalSize))
-		return;
-	if ((uint32_t)parseDateKey8(oldestName) >= cutoffKey)
-		return;		/* 최古도 보존기간 내 → 삭제 없음 */
-
-	sprintf(path, "%s" DIRSEP "%s", LOG_PQ_DIR, oldestName);
-#ifdef USE_CMSIS_RTOS2
-	res = fdelete(path, NULL);
-#else
-	res = fdelete(path);
-#endif
-	printf("trimQualLogAge: delete %s (cutoff=%u, res=%d)\n", path, cutoffKey, res);
-}
-
-static void trimQualLogAge(uint32_t cutoffKey) {
-	pqFsLock();
-	trimQualLogAge_nolock(cutoffKey);
-	pqFsUnlock();
+	for (n = 0; n < PQ_TRIM_MAX; n++) {
+		pqFsLock();
+		more = trimQualLogStep_nolock(cutoffKey);
+		pqFsUnlock();
+		meter[0].cntl.wdtTbl[Tid_Fs].count++;
+		if (!more) {
+			break;
+		}
+		osDelayTask(10);
+	}
 }
 
 void uLocalTime(const uint32_t *utc, struct tm *ptm) {
@@ -373,18 +387,22 @@ void getQualLastWeekFN(char *path, int id) {
 //	sprintf(path, "%s\\QL0_%s.d", LOG_PQ_DIR, dstr);			
 //}
 
-int appendQualLog(char *fn, void *bf, int size) {
+int appendQualLog(const char *fn, const void *bf, int size) {
 	FILE *fp;
-#ifdef USE_CMSIS_RTOS2
-   fsFileInfo fi;	
-#else
-	FINFO fi;
-#endif
+	int found;
+	PQT_BEGIN();
 
 	/* [진단로그 OFF] printf("[WR] appendQualLog %s sz=%d\n", fn, size); */	/* 진단: 0x100000(FAT) 처닝원 추적 */
 	pqFsLock();
-	fi.fileID = 0;
-	if (ffind (fn, &fi)) {
+	PQT("append.lock");
+	/* [26/11/04] 존재 확인을 ffind(NOR EFS 3.6초) → fopen("rb")로 교체. 크기 출력은 생략 */
+	fp = fopen(fn, "rb");
+	found = (fp != NULL);
+	if (fp != NULL) {
+		fclose(fp);
+	}
+	PQT("append.exist");
+	if (!found) {
 		printf("createQualLog(%s), ...\n", fn);
 		fp = pqFopenLocked(fn, "wb");
 		if (fp) {
@@ -396,7 +414,7 @@ int appendQualLog(char *fn, void *bf, int size) {
 		}
 	}
 	else {	
-		printf("appendQualLog(%s), size = %d\n", fn, fi.size);
+		printf("appendQualLog(%s)\n", fn);
 		fp = pqFopenLocked(fn, "ab");
 		if (fp) {
 			fseek(fp, -1, SEEK_END);
@@ -407,26 +425,26 @@ int appendQualLog(char *fn, void *bf, int size) {
 			printf("~~~ appendQualLog, can't open log file(%s)\n", fn);
 		}
 	}
+	PQT("append.write");
 	pqFsUnlock();
 	return 0;
 }
 
 
 // 10m 데이터를 파일에 기록한다. 10m을 다 채우지 못하면 기록하지 않는다 
-int writeQual10mData(int id, char *path, QualData10m *pq10m) {	
+/* [26/11/04] FS_task(pqIoTick)에서 호출 — 스냅샷(avg) 기록. ql/qw 정리는 pqIoTick 에서 하루 1회로 분리 */
+static int writeQual10mData(const char *path, const QualAvgData *avg, uint32_t count10m, uint32_t ts) {
 	struct tm lt;
-	
-	appendQualLog(path, &pq10m->avg, sizeof(pq10m->avg));
-	if (id == 0) {
-		trimQualLogBudget();
-		trimQualLogAge(logCutoffKeyDays(QUAL_KEEP_DAYS));	/* 90일 경과 ql/qw 1개 정리 */
-	}
-	uLocalTime(&sysTick1s, &lt);
+	PQT_BEGIN();
+
+	appendQualLog(path, avg, sizeof(*avg));
+	PQT("10m.append");
+	uLocalTime(&ts, &lt);
 	printf("{{Qual10m(%s) TS[%d-%d-%d %d:%d:%d], C[%d] U[%f,%f,%f]}\n", 
 		path, lt.tm_year, lt.tm_mon, lt.tm_mday, 
 		lt.tm_hour, lt.tm_min, lt.tm_sec,
-		pq10m->count10m,	pq10m->avg.U[0], pq10m->avg.U[1],	pq10m->avg.U[2]);
-		
+		count10m, avg->U[0], avg->U[1], avg->U[2]);
+
 	return 0;
 }
 
@@ -496,26 +514,26 @@ int createQualWeekData(char *path, QualWeek *pqw) {
 	return res;
 }
 
-int updateQualWeekData(int id, char *path, QualWeek *pqw) {
+/* qw 파일 갱신: QualWeek 헤더(weekSnap) 재기록 + 기존 이벤트 tail 보존 + 새 이벤트 append.
+ *  [26/11/04] FS_task(pqIoTick)에서 호출. weekSnap.evtCount 에는 이미 새 이벤트 수가 더해져 있다
+ *  (pqQueueJob 이 미터 태스크에서 RAM qw 와 이벤트 큐를 함께 갱신). */
+static int updateQualWeekData(const char *path, const QualWeek *pWeekSnap,
+                              const EVENT_LOG *pEv, int evCount) {
 	FILE *fp;
-	EVENT_Q *pevQ = &meter[id].eventQ;
-	QualWeek weekSnap;
 	uint32_t tailSize = 0;
-	int evCount = pevQ->count;
 	int res = 0;
+	PQT_BEGIN();
 
-	weekSnap = *pqw;
-	if (evCount > 0) {
-		weekSnap.evtCount += evCount;
-	}
-	printf("updateQualWeekData[m%d] (%s), event count=%d ...\n", id, path, evCount);
+	printf("updateQualWeekData (%s), event count=%d ...\n", path, evCount);
 
 	pqFsLock();
+	PQT("qw.lock");
 	if (qualWeekReadTail(path, &tailSize) != 0) {
 		printf("updateQualWeekData, tail read failed(%s)\n", path);
 		pqFsUnlock();
 		return -1;
 	}
+	PQT("qw.readTail");
 
 	/* RL-FlashFS: r+/r+b 갱신 실패 회피 — wb 재기록 + 기존 이벤트 tail 보존 */
 	fp = pqFopenLocked(path, "wb");
@@ -525,7 +543,7 @@ int updateQualWeekData(int id, char *path, QualWeek *pqw) {
 		return -1;
 	}
 
-	if (fwrite(&weekSnap, sizeof(QualWeek), 1, fp) != 1) {
+	if (fwrite(pWeekSnap, sizeof(QualWeek), 1, fp) != 1) {
 		printf("updateQualWeekData, fwrite failed(%s)\n", path);
 		fclose(fp);
 		pqFsUnlock();
@@ -538,27 +556,112 @@ int updateQualWeekData(int id, char *path, QualWeek *pqw) {
 		return -1;
 	}
 	fclose(fp);
+	PQT("qw.rewrite");
 
 	if (evCount > 0) {
 		fp = pqFopenLocked(path, "ab");
 		if (fp == NULL) {
 			printf("updateQualWeekData, Can't append events(%s)\n", path);
 			res = -1;
-		} else if (fwrite(pevQ->eq, sizeof(EVENT_LOG), evCount, fp) != (size_t)evCount) {
+		} else if (fwrite(pEv, sizeof(EVENT_LOG), evCount, fp) != (size_t)evCount) {
 			printf("updateQualWeekData, event fwrite failed(%s)\n", path);
 			fclose(fp);
 			res = -1;
 		} else {
 			fclose(fp);
 		}
+		PQT("qw.events");
 	}
 
-	if (res == 0) {
-		*pqw = weekSnap;
-		pevQ->count = 0;
-	}
 	pqFsUnlock();
 	return res;
+}
+
+/* ===================== PQ 파일 I/O 지연 처리 (26/11/04) =====================
+ *  10분 경계의 파일 I/O 를 REALTIME 미터 태스크(Meter0_Task)에서 빼서 FS_task(LOW)로 넘긴다.
+ *  예전에는 미터 태스크가 flash 를 직접 쓰는 동안(최대 약 25초) 네트워크·SNMP·콘솔 태스크가
+ *  전혀 돌지 못했다. 미터 태스크는 RAM 계산과 스냅샷 복사만 하고, 파일 쓰기는 pqIoTick 이 처리.
+ *  작업은 10분에 1건이라 1칸 버퍼로 충분하다(이전 작업이 남아 있으면 이번 기록은 건너뜀). */
+typedef struct {
+	volatile uint8_t pending;	/* 1=미터 태스크가 채움 → FS_task 처리 후 0 */
+	uint8_t  rollover;			/* 1=주 전환: newQwfn 새 qw 파일 생성 */
+	uint16_t evCount;
+	uint32_t count10m, ts;
+	char qlfn[64], qwfn[64], newQwfn[64];
+	QualAvgData avg;
+	QualWeek weekSnap, newQw;
+	EVENT_LOG ev[N_EVENT_Q];
+} PQ_IO_JOB;
+
+static PQ_IO_JOB pqIoJob __attribute__ ((section ("EXT_RAM"), zero_init));
+
+/* 미터 태스크에서 호출: 10분 평균·이벤트를 스냅샷으로 넘기고 RAM qw.evtCount 를 갱신한다.
+ *  반환 0=넘김, -1=이전 작업 미처리(이번 기록 건너뜀, 이벤트는 큐에 남겨 다음 10분에 기록). */
+static int pqQueueJob(int id, QualLogData *pqLog, QualData10m *pq10m) {
+	EVENT_Q *pevQ = &meter[id].eventQ;
+	int evCount;
+
+	if (pqIoJob.pending) {
+		printf("[PQ] file job overrun - skip this 10m record\n");
+		return -1;
+	}
+	evCount = pevQ->count;
+	if (evCount > N_EVENT_Q) {
+		evCount = N_EVENT_Q;
+	}
+	memcpy(pqIoJob.ev, pevQ->eq, (size_t)evCount * sizeof(EVENT_LOG));
+	pevQ->count = 0;
+	pqLog->qw.evtCount += evCount;
+
+	pqIoJob.evCount  = (uint16_t)evCount;
+	pqIoJob.count10m = pq10m->count10m;
+	pqIoJob.ts       = sysTick1s;
+	pqIoJob.avg      = pq10m->avg;
+	pqIoJob.weekSnap = pqLog->qw;
+	pqIoJob.rollover = 0;
+	strcpy(pqIoJob.qlfn, pqLog->qlfn);
+	strcpy(pqIoJob.qwfn, pqLog->qwfn);
+	return 0;
+}
+
+static void pqCommitJob(void) {
+	pqIoJob.pending = 1;	/* 모든 필드를 채운 뒤 마지막에 세운다 */
+}
+
+/* FS_task 루프(100ms)에서 호출: 대기 중인 PQ 파일 작업 처리 + 하루 1회 ql/qw 정리 */
+void pqIoTick(void) {
+	static uint32_t trimDay = 0xFFFFFFFFUL;
+	uint32_t day;
+
+	if (pqIoJob.pending) {
+		writeQual10mData(pqIoJob.qlfn, &pqIoJob.avg, pqIoJob.count10m, pqIoJob.ts);
+		meter[0].cntl.wdtTbl[Tid_Fs].count++;
+		if (updateQualWeekData(pqIoJob.qwfn, &pqIoJob.weekSnap, pqIoJob.ev, pqIoJob.evCount) != 0) {
+			printf("[PQ] qw update failed (%s), %d events not saved\n", pqIoJob.qwfn, pqIoJob.evCount);
+		}
+		if (pqIoJob.rollover) {
+			printf("[[Create QualWeekData: %s]]\n", pqIoJob.newQwfn);
+			createQualWeekData(pqIoJob.newQwfn, &pqIoJob.newQw);
+		}
+		pqIoJob.pending = 0;
+		return;
+	}
+
+	/* 정리는 부팅 60초 후부터(기동 중 파일 로드와 겹치지 않게), RTC 설정 후 하루 1회 */
+	if (sysTick1s == 0 || osGetSystemTime() < 60000) {
+		return;
+	}
+	/* [26/11/04] 매시 5~8분에만 시작: 단계당 ~8초 lock 이 10분(PQ)·15분(demand)·
+	 *  +2분(egy15)·00:03(egy15 아카이브) 기록과 겹치면 우선순위 상속으로 FS_task 가
+	 *  HIGH 로 올라 네트워크가 멈출 수 있으므로 모든 주기 경계에서 비켜 둔다. */
+	if (meter[0].cntl.tod.tm_min < 5 || meter[0].cntl.tod.tm_min > 8) {
+		return;
+	}
+	day = sysTick1s / 86400UL;
+	if (day != trimDay) {
+		trimDay = day;
+		trimQualLogs(logCutoffKeyDays(QUAL_KEEP_DAYS));
+	}
 }
 
 //int readQualLastWeekData(QualWeek *pqw) {
@@ -1015,40 +1118,45 @@ int updateQualData(int id)
 			meter[id].rpt[1] = meter[0].rpt[1];
 		}
 		else if (pqLog->qw.startTs <= sysTick1s && sysTick1s < pqLog->qw.endTs) {
-			// 10m Log 쓰기					
-			writeQual10mData(id, pqLog->qlfn, pq10m);
-			
 			// 주별 통계 데이터 갱신
-			updateQualWeek(pq10m, &pqLog->qw);		
-			updateQualWeekData(id, pqLog->qwfn, &pqLog->qw);	// 이벤트 데이터를 뒷 부분에 쓴다 
-			// 생성된 데이터를 금주로 복사한다 
-			updateQualReport(id, &pqLog->qw, 0);		
+			updateQualWeek(pq10m, &pqLog->qw);
+			// 10m Log·qw 파일 쓰기는 FS_task 로 넘긴다(이벤트 수는 여기서 qw 에 반영)
+			if (pqQueueJob(id, pqLog, pq10m) == 0) {
+				pqCommitJob();
+			}
+			// 생성된 데이터를 금주로 복사한다
+			updateQualReport(id, &pqLog->qw, 0);
 		}
 		else {
-			// 새로운 로그 시작전에 마지막 데이터를 갱신한다
-			// 10m Log 쓰기		
-			writeQual10mData(id, pqLog->qlfn, pq10m);			
+			int queued;
+
 			// 새로운 주기 시작전에 마지막 데이터를 갱신한다
 			// 주별 통계 데이터 갱신
-			updateQualWeek(pq10m, &pqLog->qw);		
-			// 생성된 데이터를 전주로 복사한다 
-			updateQualReport(id, &pqLog->qw, 1);						
-			updateQualWeekData(id, pqLog->qwfn, &pqLog->qw);
-						
+			updateQualWeek(pq10m, &pqLog->qw);
+			// 생성된 데이터를 전주로 복사한다
+			updateQualReport(id, &pqLog->qw, 1);
+			// 전주 파일(현재 qlfn/qwfn)에 마지막 기록 — FS_task 로 넘김
+			queued = (pqQueueJob(id, pqLog, pq10m) == 0);
+
 			// 새로운 주기 데이터 준비
 			getQualLogFN(pqLog->qlfn, id);
 			getQualWeekFN(pqLog->qwfn, id);
 			getQualLastWeekFN(pqLog->qwfnLast, id);
-			
+
 			memset(&pqLog->qw, 0, sizeof(pqLog->qw));
 			pqLog->qw.startTs = sysTick1s;
 			pqLog->qw.endTs = getQualWeekEndTs(pcntl);
 //			pqLog->qw.year = pcntl->tod.tm_year;
 //			pqLog->qw.woY = getYear_n_WoY(pcntl->tod.tm_yday, pcntl->tod.tm_wday);
-			printf("[[Create QualWeekData: %s]]\n", pqLog->qwfn);			
-			createQualWeekData(pqLog->qwfn, &pqLog->qw);		
-			// 초기화된 데이터를 금주로 복사한다 
-			updateQualReport(id, &pqLog->qw, 0);						
+			// 새 qw 파일 생성도 같은 작업으로 FS_task 에서 처리
+			if (queued) {
+				pqIoJob.rollover = 1;
+				strcpy(pqIoJob.newQwfn, pqLog->qwfn);
+				pqIoJob.newQw = pqLog->qw;
+				pqCommitJob();
+			}
+			// 초기화된 데이터를 금주로 복사한다
+			updateQualReport(id, &pqLog->qw, 0);
 		}
 				
 		memset(&pq10m->avg, 0, sizeof(pq10m->avg));	
@@ -1162,8 +1270,8 @@ void initPQHeader(int id) {
 	memset(&pqLog->q10m, 0, sizeof(pqLog->q10m));
 	pqLog->q10m.ts10s = sysTick10s;
 	pqLog->q10m.ts10m = sysTick10m;	
-	pqLog->q10m.avg.startTs = sysTick1s;		
+	pqLog->q10m.avg.startTs = sysTick1s;
 
-	// 부팅 시 1회 용량 정리
-	trimQualLogBudget();
+	/* 용량·보존기간 정리는 FS_task(pqIoTick)가 부팅 60초 후 1회, 이후 하루 1회 수행
+	 *  (예전엔 여기서 채널마다 1회씩 돌아 부팅이 약 22초 지연됐음) */
 }

@@ -1303,7 +1303,7 @@ static void trimTrendLogBudget(void) {
 			break;
 		}
 
-		sprintf(path, "%s" DIRSEP "%s", LOG_TREND_DIR, oldestName);
+		fsPathFromFind(path, LOG_TREND_DIR, oldestName);
 #ifdef USE_CMSIS_RTOS2
 		res = fdelete(path, NULL);
 #else
