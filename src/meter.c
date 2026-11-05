@@ -17,7 +17,7 @@
 #define	FW_VER	0004
 #define	FW_BUILD_YEAR 26
 #define	FW_BUILD_MON  11
-#define	FW_BUILD_DAY  4
+#define	FW_BUILD_DAY  5
 
 #define	SQRT_2	 1.414213562 
 
@@ -109,7 +109,7 @@ void fsFileLockInit(void)
 
 /* [진단 26/11/04] 파일 락 점유시간이 100ms 이상이면 [FSL] 출력(잡은 곳 주소 ra → .map에서 함수 확인).
  *  10분마다 ~25초 네트워크 정지 원인 확인용. 확인 후 0으로 끄거나 삭제. */
-#define FS_LOCK_TIMING_LOG	1
+#define FS_LOCK_TIMING_LOG	0
 #if FS_LOCK_TIMING_LOG
 static systime_t fsLockT0;
 static uint32_t fsLockRa;
@@ -3015,6 +3015,7 @@ static void trimFixedRecordFileFs(const char *path, uint32_t recSize, uint32_t k
 }
 
 static void demandIoTick(void);
+static void egyIoTick(void);
 
 void FS_task(void *arg)
 {
@@ -3192,6 +3193,9 @@ void FS_task(void *arg)
 
 		/* [26/11/04] 15분 demand 파일 기록(Metering_Task 에서 넘겨받음) */
 		demandIoTick();
+
+		/* [26/11/05] 에너지 로그(1시간/egy15/월 아카이브) 파일 기록(Metering_Task 에서 넘겨받음) */
+		egyIoTick();
 	}
 
 	// wait forever
@@ -4024,21 +4028,26 @@ static void initEnergyLog15Blob(void *blob)
 	plog->ts = sysTick1s;
 }
 
-void storeEnergyLog15Fs(int id, int sel)
+static void writeEnergyLog15File(int id, int sel, const ENERGY_LOG15 *plog)
 {
 	char path[64];
 	FILE *fp;
 
-	if (id < 0 || id >= METER_CH_COUNT || sel < 0 || sel > 1)
-		return;
 	getEnergyLog15FileName(id, sel, path);
 	fsFileLock();
 	fp = fopen(path, "wb");
 	if (fp != NULL) {
-		fwrite(&egy15[id].log[sel], sizeof(ENERGY_LOG15), 1, fp);
+		fwrite(plog, sizeof(ENERGY_LOG15), 1, fp);
 		fclose(fp);
 	}
 	fsFileUnlock();
+}
+
+void storeEnergyLog15Fs(int id, int sel)
+{
+	if (id < 0 || id >= METER_CH_COUNT || sel < 0 || sel > 1)
+		return;
+	writeEnergyLog15File(id, sel, &egy15[id].log[sel]);
 }
 
 void loadEnergyLog15Fs(void)
@@ -4362,6 +4371,61 @@ static void archiveEnergyLog15Day(int id, ENERGY_LOG15 *pDay) {
 }
 #endif	/* HWV2 */
 
+/* [26/11/05] 에너지 로그 파일 기록을 Metering_Task(HIGH) → FS_task(LOW)로 이관.
+ *  예전: +3분마다 egy15 today 파일을 채널별로(3×~270ms), 매시 1시간 로그를, 00:03 에 월 아카이브
+ *        (ffind 정리 포함)를 HIGH 에서 기록 → 그동안 SNMP 응답 0.8~0.9초 지연(타임아웃 직전).
+ *  지금: 미터 태스크는 스냅샷 복사 + 비트만 세움 → FS_task 의 egyIoTick() 이 기록.
+ *  (같은 스냅샷은 최소 15분 간격으로만 갱신되므로 기록 도중 덮어쓰일 일은 사실상 없다)
+ *  부팅 초기화 경로(Metering_Task 진입부, 날짜 바뀐 경우 1회)는 기존대로 직접 기록. */
+#define EIO_ELOG0		0x01	/* 1시간 에너지 로그 today */
+#define EIO_ELOG1		0x02	/* 1시간 에너지 로그 전일 */
+#define EIO_E15_0		0x04	/* egy15 today */
+#define EIO_E15_1		0x08	/* egy15 전일 */
+#define EIO_E15_ARCH	0x10	/* egy15 전일 → 월 아카이브(HWV2) */
+
+static ENERGY_LOG   elogSnap[METER_CH_COUNT][2] __attribute__ ((section ("EXT_RAM"), zero_init));
+static ENERGY_LOG15 e15Snap[METER_CH_COUNT][2]  __attribute__ ((section ("EXT_RAM"), zero_init));
+static volatile uint8_t egyIoPending[METER_CH_COUNT];
+
+static void egyIoDefer(int id, uint8_t kind)
+{
+	switch (kind) {
+	case EIO_ELOG0:		elogSnap[id][0] = meter[id].elog[0]; break;
+	case EIO_ELOG1:		elogSnap[id][1] = meter[id].elog[1]; break;
+	case EIO_E15_0:		e15Snap[id][0] = egy15[id].log[0]; break;
+	case EIO_E15_1:
+	case EIO_E15_ARCH:	e15Snap[id][1] = egy15[id].log[1]; break;
+	default:			return;
+	}
+	__disable_irq();
+	egyIoPending[id] |= kind;
+	__enable_irq();
+}
+
+/* FS_task 루프에서 호출 */
+static void egyIoTick(void)
+{
+	int id;
+	uint8_t m;
+
+	for (id = 0; id < METER_CH_COUNT; id++) {
+		__disable_irq();
+		m = egyIoPending[id];
+		egyIoPending[id] = 0;
+		__enable_irq();
+		if (m == 0)
+			continue;
+		if (m & EIO_ELOG0)	storeEnergyLogFs(id, 0, elogSnap[id]);
+		if (m & EIO_ELOG1)	storeEnergyLogFs(id, 1, elogSnap[id]);
+		if (m & EIO_E15_0)	writeEnergyLog15File(id, 0, &e15Snap[id][0]);
+		if (m & EIO_E15_1)	writeEnergyLog15File(id, 1, &e15Snap[id][1]);
+#ifdef HWV2
+		if (m & EIO_E15_ARCH)	archiveEnergyLog15Day(id, &e15Snap[id][1]);
+#endif
+		meter[0].cntl.wdtTbl[Tid_Fs].count++;
+	}
+}
+
 int putEnergyLog(int id, int hix)
 {
 	int wF = 0;
@@ -4398,9 +4462,9 @@ int putEnergyLog(int id, int hix)
 		wF = 1;
 	}
 
-	storeEnergyLogFs(id, 0, pegylog);
+	egyIoDefer(id, EIO_ELOG0);
 	if (wF == 1) {
-		storeEnergyLogFs(id, 1, pegylog);
+		egyIoDefer(id, EIO_ELOG1);
 	}
 
 	return wF;
@@ -4441,7 +4505,7 @@ void putEnergyLog15(int id, int q)
 #ifdef HWV2
 		egy15[id].pendArch = 1;
 #endif
-		storeEnergyLog15Fs(id, 1);			/* 전일 파일 보존(리부팅 대비, 일 1회) */
+		egyIoDefer(id, EIO_E15_1);			/* 전일 파일 보존(리부팅 대비, 일 1회) */
 		memset(pt, 0, sizeof(ENERGY_LOG15));
 		pt->magic = 0x1234abcd;
 		pt->ts = egy15[id].dayStartTick = sysTick1s;
@@ -4594,14 +4658,14 @@ void energy_scan(int id, METER_EH_REGS *ereg, ENERGY_NVRAM *pEgyNvr) {
 	}
 	// today 파일 flash 저장: 정각에서 2분 비켜 기록(demand 15분 flash 버스트와 분리 → 동시 flash 활동↓)
 	if (egy15[id].lastQstore != egy15[id].lastQ && (meter[id].cntl.tod.tm_min % 15) >= 2) {
-		storeEnergyLog15Fs(id, 0);
+		egyIoDefer(id, EIO_E15_0);
 		egy15[id].lastQstore = egy15[id].lastQ;
 	}
 #ifdef HWV2
 	// 일 변경 3분 뒤 전일 egy15를 월아카이브에 저장(자정 정각 태스크 집중 분산)
 	if (egy15[id].pendArch &&
 	    (uint32_t)(sysTick1s - egy15[id].dayStartTick) >= 180) {
-		archiveEnergyLog15Day(id, &egy15[id].log[1]);
+		egyIoDefer(id, EIO_E15_ARCH);
 		egy15[id].pendArch = 0;
 	}
 #endif

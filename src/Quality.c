@@ -31,7 +31,7 @@ static uint8_t qw_tail_buf[QW_TAIL_MAX];
 
 /* [진단 26/11/04] PQ 10분 처리 단계별 소요시간(ms) 콘솔 출력 — 10분마다 ~25초 네트워크 정지 원인 확인용.
  *  원인 확인 후 0으로 끄거나 삭제. 출력 접두어 [PQT]. */
-#define PQ_TIMING_LOG	1
+#define PQ_TIMING_LOG	0
 #if PQ_TIMING_LOG
   #define PQT_BEGIN()	systime_t pqtT0 = osGetSystemTime(), pqtT1
   #define PQT(tag)		do { pqtT1 = osGetSystemTime(); \
