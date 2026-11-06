@@ -2201,7 +2201,7 @@ void copyModbusWaveData(int id) {
 
 	// scale이 작으면 계단파로 보이는 문제 있다
 	for (j=0; j<3; j++) {
-		vscl[j] = (1 + (pcal->vgain[id][j][IS_WM_1LN1CT(db.pt[id].wiring)?(db.pt[id].wiring-WM_1LN1CT_L1):j][(db.pt[id].PT2<150)?1:0]/134217728.)) * meter[id].cntl.wv_vscale * sqrt(2);
+		vscl[j] = (1 + (pcal->vgain[id][j][vGainZ(id,j)][(db.pt[id].PT2<150)?1:0]/134217728.)) * meter[id].cntl.wv_vscale * sqrt(2);
 		iscl[j] = (1 + (pcal->igain[id][j]/134217728.)) * meter[id].cntl.wv_iscale * sqrt(2);
 	}
 	
@@ -2284,7 +2284,7 @@ int copyGUIWaveData(int id,int sel) {
 	}
 	
 	for (j=0; j<3; j++) {
-		vscl[j] = (1 + (pcal->vgain[id][j][IS_WM_1LN1CT(db.pt[id].wiring)?(db.pt[id].wiring-WM_1LN1CT_L1):j][(db.pt[id].PT2<150)?1:0]/134217728.)) * meter[id].cntl.wv_vscale * sqrt(2);
+		vscl[j] = (1 + (pcal->vgain[id][j][vGainZ(id,j)][(db.pt[id].PT2<150)?1:0]/134217728.)) * meter[id].cntl.wv_vscale * sqrt(2);
 		iscl[j] = (1 + (pcal->igain[id][j]/134217728.)) * meter[id].cntl.wv_iscale * sqrt(2);
 	}
 	

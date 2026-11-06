@@ -641,7 +641,8 @@ int updateEhGrp(int id, int mode, int group, float diff);
 
 
 
-void writeGainU(int id);	 
+void writeGainU(int id);
+int vGainZ(int id, int j);	/* 슬롯 j 전압게인 Z(실제 읽는 상) */
 void clrGainU(int id);
 void setGainU(int id, float ref);
 

@@ -241,9 +241,19 @@ void writeGainI(int id) {
 	}
 }
 
-/* 결선Z 인덱스: 1P2W(L1/L2/L3)=0/1/2, 그 외(3P4W/3P3W)=phase(j) */
-static int uGainZ(int w, int j) {
-	return IS_WM_1LN1CT(w) ? (w - WM_1LN1CT_L1) : j;
+/* 결선Z 인덱스: 미터 id 슬롯 j가 실제 읽는 전압상 — ADC_REDIRECT(adcRedirectWord)와 같은 피더맵 기준.
+ *  단상 피더가 물린 슬롯=그 피더 상(0/1/2), 3상·미배정 슬롯=j.
+ *  [26/11/06] 이전엔 db.pt[id].wiring 하나로 칩 전체 Z를 정해 L1,L2,L3 혼합 시 슬롯1·2가 다른 상 게인을 받았다. */
+int vGainZ(int id, int j) {
+	FEEDER_MAP map[MAX_CH];
+	int f;
+
+	buildFeederMap(map);
+	for (f = 0; f < MAX_CH; f++) {
+		if (map[f].valid && !map[f].is3ph && map[f].meter == (uint8_t)id && map[f].slot == (uint8_t)j)
+			return map[f].vphase;
+	}
+	return j;
 }
 /* AD9X_UGAIN: wiring이 3P3W(3LL2CT/3LL3CT)면 vppgain, 그 외 vgain. PT2<150이면 x2([1]). */
 void writeGainU(int id) {
@@ -252,7 +262,7 @@ void writeGainU(int id) {
 	int32_t (*pvg)[3][2] = (w == WM_3LL3CT || w == WM_3LL2CT) ? pcal->vppgain[id] : pcal->vgain[id];
 
 	for (j=0;j<3;j++, addr+=AD9X_GAINSZ) {
-		write_reg32(id, addr,(uint32_t*)&pvg[j][uGainZ(w,j)][pt]);
+		write_reg32(id, addr,(uint32_t*)&pvg[j][vGainZ(id,j)][pt]);
 	}
 }
 
@@ -316,18 +326,18 @@ void writeGainW(int id) {
 void setGainU(int id, float ref)
 {
 	float fg;
-	int i, w=db.pt[id].wiring, pt=(db.pt[id].PT2<150)?1:0, z;
+	int i, pt=(db.pt[id].PT2<150)?1:0, z[3];
 	int32_t (*pvg)[3][2] = pcal->vgain[id];
 
 	// Vab: vrms[0] -> vgain[0]
 	for (i=0; i<3; i++) {
-		z = uGainZ(w,i);
+		z[i] = vGainZ(id,i);
 		fg = ref/meter[id].meter.U[i];
-		pvg[i][z][pt] = (fg-1)*GAIN_MAX;
+		pvg[i][z[i]][pt] = (fg-1)*GAIN_MAX;
 	}
 
 	meter[id].cntl.wCalF[0] = meter[id].cntl.wCalF[1] = 1;
-	printf("vg : %d, %d, %d\n", pvg[0][uGainZ(w,0)][pt], pvg[1][uGainZ(w,1)][pt], pvg[2][uGainZ(w,2)][pt]);
+	printf("vg : %d(z%d), %d(z%d), %d(z%d)\n", pvg[0][z[0]][pt], z[0], pvg[1][z[1]][pt], z[1], pvg[2][z[2]][pt], z[2]);
 }
 // V0: Va-Vb -> U[0]
 // V1: Vc-Va -> U[2]
@@ -354,11 +364,11 @@ void setGainUpp(int id, float ref)
 
 void clrGainU(int id)
 {
-	int i, w=db.pt[id].wiring, pt=(db.pt[id].PT2<150)?1:0;
+	int i, pt=(db.pt[id].PT2<150)?1:0;
 	int32_t (*pvg)[3][2] = pcal->vgain[id];
 
 	for (i=0; i<3; i++) {
-		pvg[i][uGainZ(w,i)][pt] = 0;
+		pvg[i][vGainZ(id,i)][pt] = 0;
 	}
 
 	meter[id].cntl.wCalF[0] = meter[id].cntl.wCalF[1] = 1;
@@ -434,13 +444,21 @@ void clrGainI(int id)
 }
 // PT ratio = 1;1
 // CT ratio = 50/5
+/* [26/11/06] 임의 PF(예: 60° PF0.5)에서도 교정 가능하도록 기대전력에 cos(위상) 반영.
+ *  기대 P = refU*refI*cos(θ), θ=atan2(Q,P) → exp/P = refU*refI/sqrt(P²+Q²).
+ *  P·Q는 같은 xPGAIN을 받으므로 θ는 게인과 무관. ADE 게인은 (1+g/2^27) 곱이므로 g=(exp/meas-1). */
 void setGainW(int id, float refU, float refI) {
 	int i;
-	float exp = refU*refI, error;
-	
+	float exp = refU*refI, s, fg;
+
 	for (i=0; i<3; i++) {
-		error = (exp - meter[id].meter.P[i])/exp;
-		pcal->wgain[id][i] = error * GAIN_MAX;
+		s = sqrt(meter[id].meter.P[i]*meter[id].meter.P[i] + meter[id].meter.Q[i]*meter[id].meter.Q[i]);
+		if (s <= 0)
+			continue;
+		fg = exp/s;
+		if (fabs(fg-1) > 0.2)
+			continue;
+		pcal->wgain[id][i] = (fg-1) * GAIN_MAX;
 	}
 //	float Ifsp, Ufsp, error, exp;
 
@@ -1374,13 +1392,7 @@ void calcPower(int id) {
 	
 	for (i=0; i<3; i++) {
 		switch(db.pt[id].wiring){
-		//1LN : 2,3 전력을 지운다
-		case WM_1LN1CT_L1: case WM_1LN1CT_L2: case WM_1LN1CT_L3:
-			if(i!=0){
-				meter[id].cntl.P[i] = meter[id].cntl.Q[i] = meter[id].cntl.S[i] = 0;
-				meter[id].cntl.fP[i] = meter[id].cntl.fQ[i] = meter[id].cntl.fS[i] = 0;
-			}
-			break;
+		//1LN : 각 CT슬롯이 독립 단상피더이므로 3슬롯 전력 모두 유지 (26/11/06, 슬롯1·2 0 표시 수정)
 
 		//3LL,1LL:2번 전력 지운다
 		case WM_3LL3CT:
