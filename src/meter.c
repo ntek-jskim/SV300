@@ -17,7 +17,7 @@
 #define	FW_VER	0004
 #define	FW_BUILD_YEAR 26
 #define	FW_BUILD_MON  11
-#define	FW_BUILD_DAY  5
+#define	FW_BUILD_DAY  6
 
 #define	SQRT_2	 1.414213562 
 
@@ -5779,6 +5779,9 @@ void Meter0_Task(void *param)
  * [태스크 모니터] 하나만 등록(Tid_Meter2 사용). Tid_Meter3는 이제 놀게 된다
  *   (M2 전용 태스크가 사라졌으므로 WDT 슬롯 미사용).
  * ───────────────────────────────────────────────────────────────────────── */
+extern void irqPhaseDiagInit(void);
+extern void irqPhaseDiagTick(void);
+
 void Meter12_Task(void *param) {
 	printf("[task Meter#12 started ...\n");
 
@@ -5817,9 +5820,11 @@ void Meter12_Task(void *param) {
 
 	/* WDT 모니터는 하나만 등록. Tid_Meter3는 미사용(놀게 됨). */
 	_enableTaskMonitor(Tid_Meter2, 50);
+	irqPhaseDiagInit();		/* [진단 26/11/06] M1·M2 IRQ 위상차(ade9000.c IRQ_PHASE_DIAG) */
 
 	while (1) {
 		meter[0].cntl.wdtTbl[Tid_Meter2].count++;
+		irqPhaseDiagTick();		/* 1분마다 [IRQPH] 출력 (IRQ_PHASE_DIAG=0이면 빈 함수) */
 		meter_scan(1);			/* M1: 내부에서 0x1 대기 → 처리 */
 #ifdef CH3
 		meter_scan(2);			/* M2: 내부에서 다음 0x1 대기 → 처리 */

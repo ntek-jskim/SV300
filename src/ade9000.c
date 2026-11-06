@@ -2577,6 +2577,79 @@ void initADE9000(uint8_t id)
 
 }
 
+/* [진단 26/11/06] M1·M2 IRQ 위상차 추적 — ~4h 주기 ZX timeout/lag late 원인 검증용.
+ *  가설: M1·M2 IRQ가 단일 플래그(0x1)로 합쳐지는데, 두 칩 클럭 차로 IRQ 위상이 ~4h마다
+ *  겹치면 합쳐짐이 반복돼 Meter12 루프가 밀린다. 위상차가 0 근처일 때 이벤트가 나면 확증.
+ *  DWT CYCCNT(코어클럭) 사용. 1분마다 Meter12_Task에서 [IRQPH] 출력. 검증 후 0. */
+#define IRQ_PHASE_DIAG	1
+#if IRQ_PHASE_DIAG
+#define IPD_DEMCR   (*(volatile uint32_t *)0xE000EDFCUL)
+#define IPD_DWTCTRL (*(volatile uint32_t *)0xE0001000UL)
+#define IPD_CYCCNT  (*(volatile uint32_t *)0xE0001004UL)
+static volatile uint32_t ipdCyc[3];		/* 칩별 마지막 IRQ 시각(cycle) */
+static volatile uint32_t ipdPer1;		/* M1 직전 IRQ 간격(cycle) */
+static volatile uint32_t ipdMinGap = 0xFFFFFFFFu;	/* 1분 구간 내 M1·M2 IRQ 최소 간격(cycle) */
+static volatile uint32_t ipdNear;		/* 1분 구간 내 간격 < 200us 횟수 */
+
+void irqPhaseDiagInit(void)
+{
+	IPD_DEMCR   |= (1UL << 24);	/* TRCENA */
+	IPD_DWTCTRL |= 1UL;			/* CYCCNTENA (이미 동작 중이면 그대로) */
+}
+
+static void irqPhaseMark(int id)
+{
+	uint32_t now = IPD_CYCCNT, gap;
+
+	if (id == 1) {
+		ipdPer1 = now - ipdCyc[1];
+		gap = now - ipdCyc[2];		/* M2 → M1 */
+	} else if (id == 2) {
+		gap = now - ipdCyc[1];		/* M1 → M2 */
+	} else {
+		ipdCyc[id] = now;
+		return;
+	}
+	ipdCyc[id] = now;
+	if (gap < ipdMinGap)
+		ipdMinGap = gap;
+	if (gap < SystemCoreClock / 5000u)	/* 200us */
+		ipdNear++;
+}
+
+/* Meter12_Task 루프에서 호출: 1분마다 한 줄 출력 */
+void irqPhaseDiagTick(void)
+{
+	static uint64_t next;
+	uint32_t c1, c2, per, mg, nr, cpu, ph;
+
+	if (sysTick64 < next)
+		return;
+	next = sysTick64 + 60000u;
+
+	__disable_irq();
+	c1 = ipdCyc[1]; c2 = ipdCyc[2]; per = ipdPer1;
+	mg = ipdMinGap; nr = ipdNear;
+	ipdMinGap = 0xFFFFFFFFu; ipdNear = 0;
+	__enable_irq();
+
+	cpu = SystemCoreClock / 1000000u;
+	if (cpu == 0u)
+		cpu = 204u;
+	/* M1→M2 위상: M1 IRQ 이후 M2 IRQ까지(0~주기). M2가 더 먼저였으면 한 주기 더함 */
+	ph = c2 - c1;
+	if ((int32_t)ph < 0)
+		ph += per;
+	/* 0 또는 주기 근처로 수렴하면 겹침 */
+	printf("[IRQPH] M1->M2=%uus per1=%uus minGap=%uus near(<200us)=%u\n",
+	       (unsigned)(ph / cpu), (unsigned)(per / cpu),
+	       (unsigned)(mg == 0xFFFFFFFFu ? 0u : mg / cpu), (unsigned)nr);
+}
+#else
+void irqPhaseDiagInit(void) {}
+void irqPhaseDiagTick(void) {}
+#endif
+
 void meterIrqSvc(int id) {
 	/* [W3 버스별 스레드] SSP1 공유 칩(M1·M2)은 단일 Meter12_Task(tid_meter[1])가
 	 * 전담한다. 따라서 M1·M2 IRQ(id==1 또는 id==2)는 모두 tid_meter[1]에 단일
@@ -2585,6 +2658,9 @@ void meterIrqSvc(int id) {
 	 * 수행한다. */
 	OsTaskId tid = (id == 0) ? tid_meter[0] : tid_meter[1];
 
+#if IRQ_PHASE_DIAG
+	irqPhaseMark(id);
+#endif
 	if (tid != 0) {
 #ifdef __FREERTOS
 		BaseType_t xHigherPriorityTaskWoken = pdFALSE;
