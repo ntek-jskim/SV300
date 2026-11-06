@@ -107,44 +107,17 @@ void fsFileLockInit(void)
 	}
 }
 
-/* [진단 26/11/04] 파일 락 점유시간이 100ms 이상이면 [FSL] 출력(잡은 곳 주소 ra → .map에서 함수 확인).
- *  10분마다 ~25초 네트워크 정지 원인 확인용. 확인 후 0으로 끄거나 삭제. */
-#define FS_LOCK_TIMING_LOG	0
-#if FS_LOCK_TIMING_LOG
-static systime_t fsLockT0;
-static uint32_t fsLockRa;
-static uint8_t fsLockDepth;		/* RTX mutex는 재귀 획득 가능 → 바깥 1단만 측정 */
-#endif
 
 void fsFileLock(void)
 {
 	if (!fsFileMutexReady)
 		fsFileLockInit();
 	osAcquireMutex(&fsFileMutex);
-#if FS_LOCK_TIMING_LOG
-	if (fsLockDepth++ == 0) {
-		fsLockT0 = osGetSystemTime();
-		fsLockRa = (uint32_t)__return_address();
-	}
-#endif
 }
 
 void fsFileUnlock(void)
 {
-#if FS_LOCK_TIMING_LOG
-	systime_t hold = 0;
-	uint32_t ra = 0;
-
-	if (fsLockDepth > 0 && --fsLockDepth == 0) {
-		hold = osGetSystemTime() - fsLockT0;
-		ra = fsLockRa;
-	}
 	osReleaseMutex(&fsFileMutex);
-	if (hold >= 100)
-		printf("[FSL] hold %ums ra=0x%08X\n", (unsigned)hold, ra);
-#else
-	osReleaseMutex(&fsFileMutex);
-#endif
 }
 
 /* ffind()가 돌려준 이름(info.name)으로 fdelete/fopen용 전체 경로를 만든다.
@@ -2195,13 +2168,15 @@ void copyModbusWaveData(int id) {
 	WAVE_PHASE_LF *wv, *wi;
 	int i, j, k, prev, ix=0, dx, nwin;
 	float vscl[3], iscl[3];
+	int vz, vpt;
 
 	if (rix >= N_WAVE_WIN) rix -= N_WAVE_WIN;
 	pww = &wvblk[id].ww[rix];
 
 	// scale이 작으면 계단파로 보이는 문제 있다
 	for (j=0; j<3; j++) {
-		vscl[j] = (1 + (pcal->vgain[id][j][vGainZ(id,j)][(db.pt[id].PT2<150)?1:0]/134217728.)) * meter[id].cntl.wv_vscale * sqrt(2);
+		uGainSel(id, j, &vz, &vpt);	/* 슬롯별 입력상(Z)·PT2 — writeGainU 와 같은 칸 */
+		vscl[j] = (1 + (pcal->vgain[id][j][vz][vpt]/134217728.)) * meter[id].cntl.wv_vscale * sqrt(2);
 		iscl[j] = (1 + (pcal->igain[id][j]/134217728.)) * meter[id].cntl.wv_iscale * sqrt(2);
 	}
 	
@@ -2269,8 +2244,9 @@ int copyGUIWaveData(int id,int sel) {
 	WAVE_WINDOW *pww = &wvblk[id].ww[wvblk[id].ix];
 	WAVE_PHASE_HF *wv, *wi;
 	WAVEFORM_GUI *pwvgui = &meter[id].cntl.wvGUI;
-	int i, j, k, prev, ix=0, absVal;	
+	int i, j, k, prev, ix=0, absVal;
 	float vscl[3], iscl[3];
+	int vz, vpt;
 	
 	// PICKUP_VOLT 이하 값은 표시하지 않는다 
 	if (sel == 0 && meter[id].meter.U[0] == 0 && meter[id].meter.U[1] == 0 && meter[id].meter.U[2] == 0) {
@@ -2284,7 +2260,8 @@ int copyGUIWaveData(int id,int sel) {
 	}
 	
 	for (j=0; j<3; j++) {
-		vscl[j] = (1 + (pcal->vgain[id][j][vGainZ(id,j)][(db.pt[id].PT2<150)?1:0]/134217728.)) * meter[id].cntl.wv_vscale * sqrt(2);
+		uGainSel(id, j, &vz, &vpt);	/* 슬롯별 입력상(Z)·PT2 — writeGainU 와 같은 칸 */
+		vscl[j] = (1 + (pcal->vgain[id][j][vz][vpt]/134217728.)) * meter[id].cntl.wv_vscale * sqrt(2);
 		iscl[j] = (1 + (pcal->igain[id][j]/134217728.)) * meter[id].cntl.wv_iscale * sqrt(2);
 	}
 	
@@ -2638,7 +2615,6 @@ void Wave_Task(void *arg)
 			if (g_sdBusy) {						/* 있었음 → 폐기·재충전 */
 				g_sdBusy = 0;
 				if (++qcRetry < 15) continue;	/* 최대 15회(≈3s)까지 클린 창 대기 */
-				/* [진단로그 OFF] printf("[QCAP] DIRTY capture (flash busy >3s)\n"); */	/* 진단: 14s마다 뜨면 '긴 flash op'이 원인 */
 			}
 			qcRetry = 0;						/* 클린(또는 포기) → 아래 캡처 */
 		}
@@ -2719,7 +2695,6 @@ void Wave_Task(void *arg)
 #ifdef WV_QCAP
 		g_wfbQuiet = 0;				/* 캡처 완료 → 워커 재개 */
 		qcState = 0; qcTick = 0;	/* 다음 주기 대기 */
-		/* [진단로그 OFF] { static uint32_t qc = 0; if ((qc++ % 3) == 0) printf("[QCAP] clean capture #%u\n", qc); } */
 #endif
 	}
 }
@@ -3473,7 +3448,6 @@ void putDemandBin(int id, float dd, uint32_t utc) {
 
 	if (id < 0 || id >= METER_CH_COUNT)
 		return;
-	/* [진단로그 OFF] printf("[WR] putDemandBin id=%d\n", id); */	/* 진단: 0x100000(FAT) 처닝원 추적 */
 	pdm = &meter[id].dm;
 
 	// 날이 변경되면 금일데이터를 전일데이터에 복사
@@ -3698,17 +3672,20 @@ int loadDemandNVR() {
 
 // }
 
+/* 에너지 FRAM(FM24CL64, 8KB) 이중 저장 위치. [26/11/06] 2번째 사본 512 → 4096 이동.
+ *  ENERGY_NVRAM(1168B)이 512 를 넘은 뒤(6/17 d06bb47) 0/512 두 사본이 겹쳐 1번째가 항상 CRC 실패였다.
+ *  FRAM 사용: 에너지#1 0~1167, 수요 2048~3967(storeDemand), 에너지#2 4096~5263.
+ *  EGY_NVR_OS_LEGACY: 이전 2번째 위치 — 업데이트 직후 첫 부팅에 새 위치가 비어 있을 때만 읽는다. */
+#define EGY_NVR_OS1			0
+#define EGY_NVR_OS2			4096
+#define EGY_NVR_OS_LEGACY	512
+
 void storeEnergyNVR(ENERGY_NVRAM *pEgyNvr) {
-	int os=0;
-	
-	//
-	if (FramWrite(pEgyNvr, os, sizeof(ENERGY_NVRAM)) == 0) 	
-		printf("FramWrite failed(%d, %d)\n", os, sizeof(ENERGY_NVRAM));
-	
-	os += 512;
-	
-	if (FramWrite(pEgyNvr, os, sizeof(ENERGY_NVRAM)) == 0) 	
-		printf("FramWrite failed(%d, %d)\n", os, sizeof(ENERGY_NVRAM));
+	if (FramWrite(pEgyNvr, EGY_NVR_OS1, sizeof(ENERGY_NVRAM)) == 0)
+		printf("FramWrite failed(%d, %d)\n", EGY_NVR_OS1, sizeof(ENERGY_NVRAM));
+
+	if (FramWrite(pEgyNvr, EGY_NVR_OS2, sizeof(ENERGY_NVRAM)) == 0)
+		printf("FramWrite failed(%d, %d)\n", EGY_NVR_OS2, sizeof(ENERGY_NVRAM));
 }
 
 
@@ -3936,19 +3913,25 @@ int loadEnergyLogFs(void)
 }
 
 int loadEnergyNVR(ENERGY_NVRAM *pEgyNvr) {
-	uint16_t os = 0, crc;
+	uint16_t crc;
 	int id, grp, mode, sign, ret=0;
-	
-	FramRead(pEgyNvr, os, sizeof(ENERGY_NVRAM));
+
+	FramRead(pEgyNvr, EGY_NVR_OS1, sizeof(ENERGY_NVRAM));
 	crc = gencrc_modbus((uint8_t *)pEgyNvr, sizeof(ENERGY_NVRAM));
-	if (crc) {	
+	if (crc) {
 		printf(">>Error on 1st Energy Register <<<\n");
-		os += 512;	
-		FramRead(pEgyNvr, os, sizeof(ENERGY_NVRAM));
+		FramRead(pEgyNvr, EGY_NVR_OS2, sizeof(ENERGY_NVRAM));
 		crc = gencrc_modbus((uint8_t *)pEgyNvr, sizeof(ENERGY_NVRAM));
 		if (crc) {
 			printf(">>Error on 2nd Energy Register <<<\n");
-			return -1;
+			/* 이전 펌웨어 배치(2번째 사본 @512) — 업데이트 후 첫 부팅 1회. 다음 storeEnergy()가 새 위치에 기록 */
+			FramRead(pEgyNvr, EGY_NVR_OS_LEGACY, sizeof(ENERGY_NVRAM));
+			crc = gencrc_modbus((uint8_t *)pEgyNvr, sizeof(ENERGY_NVRAM));
+			if (crc) {
+				printf(">>Error on legacy Energy Register(@%d) <<<\n", EGY_NVR_OS_LEGACY);
+				return -1;
+			}
+			printf(">>Energy loaded from legacy FRAM @%d (migrate) <<<\n", EGY_NVR_OS_LEGACY);
 		}
 	}
 
@@ -4189,7 +4172,6 @@ int storeMaxMin() {
 	FILE *fp;
 	int id;
 
-	/* [진단로그 OFF] printf("[WR] storeMaxMin\n"); */	/* 진단: 0x100000(FAT) 처닝원 추적 */
 	fsFileLock();
 	fp = fopen(MAXMIN_FILE, "wb");
 		
@@ -4434,7 +4416,6 @@ int putEnergyLog(int id, int hix)
 
 	if (id < 0 || id >= METER_CH_COUNT)
 		return 0;
-	/* [진단로그 OFF] printf("[WR] putEnergyLog id=%d\n", id); */	/* 진단: 0x100000(FAT) 처닝원 추적 */
 
 	if (peLog->ts == 0) {
 		peLog->ts = meter[id].cntl.egyStartTs1D;
@@ -4557,11 +4538,8 @@ void energy_scan(int id, METER_EH_REGS *ereg, ENERGY_NVRAM *pEgyNvr) {
 		
 		//wiring모드에 따라 불 필요한 항목 지운다		
 		switch(db.pt[id].wiring){
-		//1CT:2,3을지운다
-		case WM_1LN1CT_L1: case WM_1LN1CT_L2: case WM_1LN1CT_L3:
-			if (i != 0) wh = varh = vah = 0;
-			break;
-		
+		//1CT: 슬롯 0/1/2 가 각각 독립 단상 피더 → 상별 전력량 유지 (2026-10-16 stash, 옛 '2,3 지움' 삭제)
+
 		//2CT:2제거
 		case WM_3LL3CT:	// 2017-9-26 (추가)
 		case WM_3LL2CT:
@@ -5758,20 +5736,15 @@ void Meter0_Task(void *param)
  *
  * [스캔 방식] 옵션 A: 매 루프에서 meter_scan(1) 다음 meter_scan(2)를 순차 호출.
  *
- * [IRQ/wait 판단] meter_scan(id)는 함수 진입부에서 자체적으로 ZX notify(플래그
- *   0x1)를 대기한다(ade9000.c meter_scan: os_evt_wait_and(0x1, 50ms) /
- *   xTaskNotifyWait). meterIrqSvc는 M1·M2 IRQ 모두 tid_meter[1](=이 태스크)에
- *   0x1 단일 플래그로 통보한다(0x1/0x2 분리 안 함).
- *     · 정상 흐름: meter_scan(1)이 0x1 하나를 소비→M1 처리, 이어 meter_scan(2)가
- *       다음 0x1을 대기→M2 처리. 두 칩 page-full이 각 ~16ms 주기이므로 두 wait가
- *       자연히 각자 다음 IRQ에 걸려 순번대로 소비된다.
- *     · 이벤트 플래그는 카운팅이 아니라 비트마스크다. 두 IRQ가 태스크 busy 구간에
- *       거의 동시에 떠 0x1이 하나로 합쳐지면, meter_scan(1)이 그 하나를 소비하고
- *       meter_scan(2)는 다음 IRQ(어느 칩이든) 혹은 50ms 타임아웃까지 대기한다.
- *       이때 meter_scan(2)는 최신 STATUS0/1을 읽어 처리하므로 데이터 정합은 유지되고
- *       (칩별 STATUS는 각자 하드웨어가 래치), 최대 지연은 타임아웃(50ms)으로 유계다.
- *       online 중 파형버퍼는 유지(meter_scan 내부에서 timeout 시 online이면 버퍼
- *       보존)되므로 seam도 생기지 않는다.
+ * [IRQ/wait 판단] meter_scan(id)는 함수 진입부에서 자체적으로 자기 칩 ZX notify
+ *   비트를 대기한다(ade9000.c meter_scan: os_evt_wait_and(METER_IRQ_EVT(id), 50ms)).
+ *   meterIrqSvc는 M1→0x1, M2→0x2 로 tid_meter[1](=이 태스크)에 통보한다(26/11/06 분리).
+ *     · 정상 흐름: meter_scan(1)이 0x1을 기다려 M1 처리, 이어 meter_scan(2)가 0x2를
+ *       기다려 M2 처리. M1 대기 중 먼저 온 M2 통보(0x2)는 남아 있다가 바로 소비된다.
+ *     · [이전 단일 0x1 의 문제, 11/06 [IRQPH] 로그로 확정] 이벤트 플래그는 비트마스크라
+ *       두 칩 IRQ가 200us 이내로 겹치면(칩별 크리스털 차로 ~2.5~4h마다 ~4분) 통보 하나가
+ *       사라지거나 M2 IRQ가 meter_scan(1)을 깨워 ZX timeout·lag late·파형 스파이크가 났다.
+ *       online 중 timeout 이면 파형버퍼는 보존(meter_scan 내부)되어 seam은 생기지 않는다.
  *   → 가장 안전한 형태는 meter_scan 내부 wait를 그대로 두고 이 루프는 단순히
  *     meter_scan(1); meter_scan(2); 를 연속 호출하는 것. 별도 wait를 이 루프에
  *     추가하면 이중 대기가 되어 오히려 지연/어긋남을 유발하므로 넣지 않는다.

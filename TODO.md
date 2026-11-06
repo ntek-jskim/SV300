@@ -2,36 +2,24 @@
 
 > 운영 규칙: 완료한 항목은 이 목록에서 **삭제**하고, 결과는 [WORKLOG.md](WORKLOG.md)·[FWUPDATE](FWUPDATE) 에 남긴다.
 > 출처: 2026-10-16 위상교정 조사, 차주 계획(08/28), FWUPDATE 의 "실기 검증 필요/예정/보류" 표기, web 브랜치 `snmp.md` §8.
-> 기준: web `557ed25`(통신 설정 410워드·MQTT) / main `edc2866`(V00.03) + `stash@{0}`(10/16~19 교정 수정, 미커밋)
+> 기준: main = web `2b0f399`(26/11/06 통합) + `stash@{0}`(10/16~19 교정 수정, 미커밋)
 
 ---
 
 ## Priority: 브랜치 정리
-### main `stash@{0}` 교정 수정 적용 위치 결정
-- **내용**: `uGainSel`·1P2W 2·3번 슬롯 전력 복구·`setGainW` VA+누적·CT_100mA PGA 2x·Phase L2 색 (+ 진단 `WV_M0_ONLY` 는 제외)
-- **할 일**: main 에 커밋할지, web 에 옮길지 결정. web 에 옮기면 필드 타깃 플래시 여유(약 4.3KB) 확인
-- 현재 web 빌드는 PGA 1x·옛 setGainW(PF=1 전용) — README §5 절차 중 Power Cali 는 web 빌드에서 60° 로 누르면 안 됨
+### `stash@{0}` 삭제
+- 11/06 `uGainSel`·`energy_scan` 1P2W 전력량·web.c L2 색 반영(미커밋). PGA 2x·`setGainW` 누적식은 제외 결정(PGA 1x 유지, 전력 게인은 √(P²+Q²) 덮어쓰기 유지), `WV_M0_ONLY` 제외
+- **할 일**: 아래 실기 검증(uGainSel·1P2W 전력량) 통과 후 `git stash drop stash@{0}`
 
 ---
 
 ## Priority: 교정(Calibration) — 출하 품질 직결
 
-### 위상 교정 시험조건·절차 확정
-- **상태**: 원인 확인(2026-10-16), 재시험 필요
-- **현재**: 소스 "60°" 가 진상(I 앞섬)이라 펌웨어 전제(지상 60°, VAR +)와 반대 → PHCAL 오계산
-- **할 일**: 소스 전류위상 **−60°(300°, 지상)** 으로 Phase Init → Cali 1회 → 검증. 결과로 README.md §5 절차 확정
-- **위치**: [ade9000.c:476 setGainPh](src/ade9000.c#L476)
-
-### 보정값 누적 계산으로 변경 (V·I·Phase — Power 는 10/19 적용)
-- **상태**: 미해결 — 현재는 README §5.4 "Init → 대기 → Cali 1회" 로 회피 (Power 는 10/19 누적·VA 기준으로 변경 완료)
+### 보정값 누적 계산으로 변경 (V·I·Phase·Power)
+- **상태**: 미해결 — 현재는 "Init → 대기 → Cali 1회" 로 회피 (Power 는 11/06 결정으로 덮어쓰기 유지)
 - **문제**: `setGainU/Upp/I/W/Ph` 모두 '기존 보정 0' 전제의 절대값 → Init 직후 바로 Cali 하면 옛 보정이 섞인 측정값으로 계산, Cali 를 두 번 누르면 잔여오차(≈0)로 덮어써 원복
 - **해결**: 기존 값에 합성 — 게인은 `(1+old)·(ref/meas)−1`, PHCAL 은 각도 합산 후 재계산
 - **위치**: [ade9000.c:316 setGainU](src/ade9000.c#L316) · [:406 setGainI](src/ade9000.c#L406) · [:437 setGainW](src/ade9000.c#L437) · [:476 setGainPh](src/ade9000.c#L476)
-
-### 무전류 상 PHCAL 이 0 으로 지워짐
-- **상태**: 미해결
-- **문제**: 전류 0 인 상은 Wh=VARh=0 → `atan(0/0)`=NaN → 정수변환 0. phcal 은 칩×상 단위라 단상(1P2W Lx) 순차 교정 시 앞 상 결과가 지워진다
-- **해결**: |Wh|·|VARh| 가 임계 미만이면 해당 상 skip (setGainI 의 20% 가드처럼)
 
 ### 교정 진단 로그·조건 가드
 - 위상교정 시 상별 Wh·VARh·오차각·PHCAL 출력(전압/전류는 `vg:`/`ig:` 로그가 있음)
@@ -41,7 +29,6 @@
 ### confWebApp 교정 연동 정리 (confWebApp 저장소)
 - Maintenance > Other Commands(GEMS7100/iDPM200): Calibration command·V/I/In-ref 가 0x1234 로 기록됨 — 값/코드 입력 방식으로 수정
 - Maintenance Set Time 을 전 제품 로컬시각(Date.UTC)으로 통일 — GEMS7000/7100/7300/9000/SV500 실기 확인
-- Calibration W/VAR/VA 를 W 단위 표시로 변경 — 실기 확인
 
 ---
 
@@ -62,18 +49,29 @@
 
 | 항목 | 반영일 | 확인 내용 |
 |---|---|---|
-| SSP1 버스트 락 범위 확대 | 09/10 | CH3 전류 고조파 전 차수 100% 재발 여부(장시간) |
-| 로그 로테이션·에너지 월단위·캡처 V+I·FTP | 08/28 | 파일 삭제/생성, COMTRADE 6채널, FTP LIST |
-| 에너지 15분 아카이브(egy15) | 09/01 | 일변경 +3분 아카이브, 6개월 보존, stale-day 복구 |
-| FW 업로드·명령맵·THD·nTurns·ct_dir | 08/24 | 브라우저 업로드→부트로더 굽기, 명령 주소 |
-| VQ 전압편차 | 08/26 | 편차값·공칭전압(vnorm) 연동 |
-| SNMPv3 (web 브랜치) | 10/12 | snmp.md TC-12, 확인 후 FW_VER 상향 |
-| 통신 설정 410워드 재배치 (web) | 10/28 | confWebApp Main Setting 읽기/쓰기, 문자열(호스트명·SNMP), Modbus TCP OFF→재부팅→ON 복구 경로, SNTP 도메인 |
-| MQTT 퍼블리시 (web) | 10/28 | 브로커 접속·재접속, JSON 페이로드, 주기·QoS·retain |
-| 메모리맵 `_261028` | 10/28 | Excel 에서 한 번 열어 저장(캐시값 생성) 후 주소 확인 |
-| (main stash) 1P2W 2·3번 슬롯 전력·전력량 복구 | 10/16 | 피더 2·3·5·6·8·9 W/VAR/VA·kWh 누적·수요, 채널 합계(P[3]) |
-| (main stash) CT_100mA 전류 PGA 1x→2x (GEMS7100 동일) | 10/19 | 재교정 후 W 0.5% 이내 확인됨(10/19). 남은 확인: OC·과도 트리거 레벨, 정격 대전류 포화 없음 |
-| (main stash) 전압 보정값 슬롯별 입력상 선택(`uGainSel`) | 10/16 | 피더 L1/L2/L3 혼합 결선에서 각 피더 V 가 기준값 이내, 콘솔 `vg:` 로그의 L 표시 |
+| 1P2W 2·3번 슬롯 전력(`2b0f399`)·전력량(`energy_scan`, 11/06 미커밋) 복구 | 11/06 | 전력 W/PF 는 #2·#3 확인됨. 남은 확인: kWh 누적·수요, 채널 합계(P[3]) |
+| 전압 보정 슬롯별 Z·PT2·3P3W (`uGainSel`, 11/06 미커밋) | 11/06 | 피더 L1/L2/L3 혼합 결선에서 각 피더 V 가 기준값 이내, 콘솔 `vg:` 로그의 L 표시 |
+| confWebApp AUTO CAL (`9f1af4b`) | 11/06 | 13단계 전체 1회 통과(재부팅 4회 대기·판정 멈춤), REPORT 엑셀 |
+| M1·M2 IRQ 통보 비트 분리 (11/06 미커밋) | 11/06 | 하룻밤 로그 — `near(<200us)`>0 구간에 ZX timeout·lag late·WVF 스파이크 증가 없음 |
+
+---
+
+## Priority: 안정성 (장시간 운전)
+
+### SPIFI program FAIL (3~4시간 주기)
+- **상태**: 미해결 (11/05~06 콘솔 5회, rc=0x20003, sz 4/8)
+- **현상**: 실패 주소가 전부 64KB 블록 마지막 4KB(EFS 할당레코드 영역), 쓰기 주체(egy15·demand·PQ) 무관 → EFS/드라이버 계층 추정
+- **관련 발견(11/06)**: `EraseSector` 가 8/21(`9894b95`)부터 소거 실패 시 return 없이 함수 끝으로 빠짐(주석 처리한 printf 때문에 return 이 else 몸체가 됨) → 반환값 미정, 소거 실패가 성공으로 보고됐을 수 있음. 11/06 수정(미커밋) — 이후에도 program FAIL 이 나는지 재관찰
+- **할 일**: rc 의미 확인, FAIL 시 대상 영역의 기존 플래시 내용 출력 진단 추가
+- **참고**: 새 메인보드는 초기 부품 2MB SPI 플래시(MX id 0x15) 실장 상태 → 16MB 로 교체 예정. 교체 후 재관찰
+- **위치**: [FS_SPIFI_FlashPrg.c:184](src/FS_SPIFI_FlashPrg.c#L184)
+
+### M1·M2 ZX timeout / lag late (새 보드 ~2.5시간 주기)
+- **상태**: 원인 확정(11/06 `[IRQPH]` 로그), 수정 반영(미커밋) — 실기 재확인 대기
+- **원인**: `meterIrqSvc` 가 M1·M2 IRQ 를 같은 비트 0x1 로 통보. 위상차가 1분에 ~108us 씩 줄어(크리스털 차 ~1.8ppm) 200us 이내로 겹친 17:14~17:19 에만 ZX timeout[1][2]·lag late +1089/+1087·M1/M2 파형 스파이크 +4600, M0 무영향
+- **수정**: `METER_IRQ_EVT` M1=0x1·M2=0x2, `meter_scan` 이 자기 비트만 대기
+- **확인**: 하룻밤 로그에서 위상차 0 근처(`near(<200us)`>0) 구간에 ZX timeout·lag late 증가가 없으면 완료 → `IRQ_PHASE_DIAG`·`WV_DIAG` 0 으로
+- **위치**: [ade9000.c meterIrqSvc](src/ade9000.c)
 
 ---
 
@@ -100,15 +98,7 @@
 
 ---
 
-## Priority: 하드웨어
-
-### 랜케이블 착탈 시 리셋 / SWD 통신 깨짐
-- 펌웨어 무관 확정(09/02). RJ45 실드 종단 **R214 / CB221(2kV 1000pF) 미실장** → 실드 스너버 실장·실드 접지
-
----
-
 ## Priority: 청소 (영향 없음)
-- 진단 스캐폴딩 정리: WV_STAGED·WV_DIAG_METER·WV_M0_ONLY·[WR]/[FLASH]/[QCAP] 로그
-- HTTP_TRACE INFO → OFF (확인 후 OFF 예정 표기)
+- 남은 진단 코드: `IRQ_PHASE_DIAG`(ade9000.c)·`WV_DIAG`(meter.h, [WVF] 요약·lag late 카운터) — `[IRQPH]` 하룻밤 검증에 lag late 가 필요해 유지, 검증 후 끄기. `WV_STAGED` 단계기동 스위치(meter.h·app_main.c, 현재 OFF)는 재진단용으로 보존 여부 결정
 - 메모리맵 xlsx 에 캡처 구조체(V+I)·에너지 월포맷 변경 반영 여부 확인 (최신 기준 `memorymap/` 날짜 최신 파일)
 - (deferred) M1/M2 WFB 파형 커플링 저감 · GEMS THD 비교

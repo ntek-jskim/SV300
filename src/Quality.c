@@ -29,29 +29,9 @@ extern int readQualWeekData(char *path, QualWeek *pqw);
 
 static uint8_t qw_tail_buf[QW_TAIL_MAX];
 
-/* [진단 26/11/04] PQ 10분 처리 단계별 소요시간(ms) 콘솔 출력 — 10분마다 ~25초 네트워크 정지 원인 확인용.
- *  원인 확인 후 0으로 끄거나 삭제. 출력 접두어 [PQT]. */
-#define PQ_TIMING_LOG	0
-#if PQ_TIMING_LOG
-  #define PQT_BEGIN()	systime_t pqtT0 = osGetSystemTime(), pqtT1
-  #define PQT(tag)		do { pqtT1 = osGetSystemTime(); \
-							printf("[PQT] %s %ums\n", (tag), (unsigned)(pqtT1 - pqtT0)); \
-							pqtT0 = pqtT1; } while (0)
-#else
-  #define PQT_BEGIN()	do { } while (0)
-  #define PQT(tag)		do { } while (0)
-#endif
 
 static void pqFsLock(void) {
-#if PQ_TIMING_LOG
-	systime_t t = osGetSystemTime();
 	fsFileLock();
-	t = osGetSystemTime() - t;
-	if (t >= 20)
-		printf("[PQT] lock wait %ums\n", (unsigned)t);
-#else
-	fsFileLock();
-#endif
 }
 
 static void pqFsUnlock(void) {
@@ -390,18 +370,14 @@ void getQualLastWeekFN(char *path, int id) {
 int appendQualLog(const char *fn, const void *bf, int size) {
 	FILE *fp;
 	int found;
-	PQT_BEGIN();
 
-	/* [진단로그 OFF] printf("[WR] appendQualLog %s sz=%d\n", fn, size); */	/* 진단: 0x100000(FAT) 처닝원 추적 */
 	pqFsLock();
-	PQT("append.lock");
 	/* [26/11/04] 존재 확인을 ffind(NOR EFS 3.6초) → fopen("rb")로 교체. 크기 출력은 생략 */
 	fp = fopen(fn, "rb");
 	found = (fp != NULL);
 	if (fp != NULL) {
 		fclose(fp);
 	}
-	PQT("append.exist");
 	if (!found) {
 		printf("createQualLog(%s), ...\n", fn);
 		fp = pqFopenLocked(fn, "wb");
@@ -425,7 +401,6 @@ int appendQualLog(const char *fn, const void *bf, int size) {
 			printf("~~~ appendQualLog, can't open log file(%s)\n", fn);
 		}
 	}
-	PQT("append.write");
 	pqFsUnlock();
 	return 0;
 }
@@ -435,10 +410,8 @@ int appendQualLog(const char *fn, const void *bf, int size) {
 /* [26/11/04] FS_task(pqIoTick)에서 호출 — 스냅샷(avg) 기록. ql/qw 정리는 pqIoTick 에서 하루 1회로 분리 */
 static int writeQual10mData(const char *path, const QualAvgData *avg, uint32_t count10m, uint32_t ts) {
 	struct tm lt;
-	PQT_BEGIN();
 
 	appendQualLog(path, avg, sizeof(*avg));
-	PQT("10m.append");
 	uLocalTime(&ts, &lt);
 	printf("{{Qual10m(%s) TS[%d-%d-%d %d:%d:%d], C[%d] U[%f,%f,%f]}\n", 
 		path, lt.tm_year, lt.tm_mon, lt.tm_mday, 
@@ -522,18 +495,15 @@ static int updateQualWeekData(const char *path, const QualWeek *pWeekSnap,
 	FILE *fp;
 	uint32_t tailSize = 0;
 	int res = 0;
-	PQT_BEGIN();
 
 	printf("updateQualWeekData (%s), event count=%d ...\n", path, evCount);
 
 	pqFsLock();
-	PQT("qw.lock");
 	if (qualWeekReadTail(path, &tailSize) != 0) {
 		printf("updateQualWeekData, tail read failed(%s)\n", path);
 		pqFsUnlock();
 		return -1;
 	}
-	PQT("qw.readTail");
 
 	/* RL-FlashFS: r+/r+b 갱신 실패 회피 — wb 재기록 + 기존 이벤트 tail 보존 */
 	fp = pqFopenLocked(path, "wb");
@@ -556,7 +526,6 @@ static int updateQualWeekData(const char *path, const QualWeek *pWeekSnap,
 		return -1;
 	}
 	fclose(fp);
-	PQT("qw.rewrite");
 
 	if (evCount > 0) {
 		fp = pqFopenLocked(path, "ab");
@@ -570,7 +539,6 @@ static int updateQualWeekData(const char *path, const QualWeek *pWeekSnap,
 		} else {
 			fclose(fp);
 		}
-		PQT("qw.events");
 	}
 
 	pqFsUnlock();

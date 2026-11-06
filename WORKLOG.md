@@ -9,6 +9,38 @@
 
 ---
 
+# 2026-11-06
+버전: **V00.04** (main = web 통합)
+
+## 1. 새 메인보드 시험 + main/web 통합
+- 새 메인보드(M0~M2 칩별 개별 크리스털)에서 전압 위상 오차 해소. 전류 미계측은 저항 미실장(하드웨어)으로 확인
+- 튜닝 코드가 main·web 동일함을 확인하고 main 을 web 으로 fast-forward 통합 → 이후 브랜치 분리 불필요
+
+## 2. 교정(Calibration) 수정 (커밋 2b0f399 + 마감 커밋)
+- 1P2W 피더 #2·#3(슬롯1·2) 유효전력·PF 0 표시 → `calcPower` 옛 '2·3 지움' 제거, `energy_scan` 전력량도 동일 복구
+- Power Cali 를 60°(PF 0.5)에서도 가능하게: 기대전력 V·I·cos(θ), θ=atan2(Q,P). 게인식 `기대/측정−1` 로 정정
+- 전압 게인 Z·PT2·3P3W 를 피더맵 기준 슬롯별로(`uGainSel`, stash@{0} 선별 반영) — L1/L2/L3 혼합 결선 대응
+- 무전류 상 Phase Cali 시 기존 PHCAL 유지(0 으로 지워지던 문제)
+- PGA 2x·Power 누적식은 반영 안 함(결정)
+- confWebApp: AUTO CAL(결선 L1/L2/L3 전압교정 → 혼합 전류·위상·전력 → 3P4W 확인 → REPORT, 실패 시 멈춤), 커밋 9f1af4b
+- 실기: 60° 입력에서 W·VAR·VA 정상(역산 위상 오차 0.1° 이내). AUTO CAL·uGainSel 은 실기 대기
+
+## 3. ★M1·M2 ZX timeout / lag late 원인 확정·수정
+- `[IRQPH]` 진단(커밋 4736f1e)으로 확인: M1→M2 IRQ 위상이 1분에 ~108us 이동(~2.5h 주기), 200us 이내로 겹친 ~4분에만 ZX timeout·lag late·M1/M2 파형 스파이크(M0 무영향)
+- 원인: 두 칩 IRQ 를 같은 이벤트 비트 0x1 로 통보 → 겹치면 하나가 사라짐
+- 수정: M1=0x1·M2=0x2, `meter_scan` 이 자기 비트만 대기. 하룻밤 로그로 재확인 예정
+
+## 4. ★에너지 FRAM 이중저장 겹침 + 플래시 소거 반환 버그
+- `ENERGY_NVRAM`(1168B)을 FRAM 0/512 에 써서 두 사본이 겹침 → 부팅마다 1번째 CRC 오류, 이중화 무의미 → FM24CL64(8KB) 기준 2번째를 4096 으로 이동, 옛 위치에서 1회 이관. **실기 확인**
+- `EraseSector` 가 소거 실패 시 return 없이 빠지던 버그(8/21 주석 처리 부작용) 수정
+
+## 5. 정리
+- 비활성 진단 로그 삭제([WR]/[QCAP]/[FLASH], WV_DIAG_METER, WV_M0_ONLY, PQ/FS 타이밍 로그). IRQ_PHASE_DIAG·WV_DIAG 는 재확인 후 끔
+- TODO.md 정리: 실기 확인 끝난 항목 삭제(사용자 확인), 안정성 섹션 신설
+- 새 보드 SPI 플래시는 초기 부품 MX25L1636E(2MB) → 128Mbit 로 교체 예정
+
+---
+
 # 2026-11-04
 버전: **V00.04** (web)
 
