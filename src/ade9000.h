@@ -619,6 +619,8 @@ extern int zxTimer;
 //void setDateTime(RTC_TYPE *prtcTime);
 
 void meter_scan(uint8_t id);
+void meter_scan_proc(uint8_t id);
+void meterZxTimeout(uint8_t id);
 void calcRmsFreqAngle(int id);
 void calcPower(int id);
 void calcTHD(int id);

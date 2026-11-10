@@ -17,7 +17,7 @@
 #define	FW_VER	0004
 #define	FW_BUILD_YEAR 26
 #define	FW_BUILD_MON  11
-#define	FW_BUILD_DAY  6
+#define	FW_BUILD_DAY  9
 
 #define	SQRT_2	 1.414213562 
 
@@ -5734,26 +5734,20 @@ void Meter0_Task(void *param)
  * [설계] M0=SSP0 전용(Meter0_Task 유지), M1·M2=SSP1 공유 → 한 스레드에서만
  *        SSP1을 접근하게 하여 W2의 락 제거를 안전하게 만든다. 3칩/2버스.
  *
- * [스캔 방식] 옵션 A: 매 루프에서 meter_scan(1) 다음 meter_scan(2)를 순차 호출.
- *
- * [IRQ/wait 판단] meter_scan(id)는 함수 진입부에서 자체적으로 자기 칩 ZX notify
- *   비트를 대기한다(ade9000.c meter_scan: os_evt_wait_and(METER_IRQ_EVT(id), 50ms)).
- *   meterIrqSvc는 M1→0x1, M2→0x2 로 tid_meter[1](=이 태스크)에 통보한다(26/11/06 분리).
- *     · 정상 흐름: meter_scan(1)이 0x1을 기다려 M1 처리, 이어 meter_scan(2)가 0x2를
- *       기다려 M2 처리. M1 대기 중 먼저 온 M2 통보(0x2)는 남아 있다가 바로 소비된다.
- *     · [이전 단일 0x1 의 문제, 11/06 [IRQPH] 로그로 확정] 이벤트 플래그는 비트마스크라
- *       두 칩 IRQ가 200us 이내로 겹치면(칩별 크리스털 차로 ~2.5~4h마다 ~4분) 통보 하나가
- *       사라지거나 M2 IRQ가 meter_scan(1)을 깨워 ZX timeout·lag late·파형 스파이크가 났다.
- *       online 중 timeout 이면 파형버퍼는 보존(meter_scan 내부)되어 seam은 생기지 않는다.
- *   → 가장 안전한 형태는 meter_scan 내부 wait를 그대로 두고 이 루프는 단순히
- *     meter_scan(1); meter_scan(2); 를 연속 호출하는 것. 별도 wait를 이 루프에
- *     추가하면 이중 대기가 되어 오히려 지연/어긋남을 유발하므로 넣지 않는다.
+ * [IRQ/wait] meterIrqSvc는 M1→0x1, M2→0x2 로 tid_meter[1](=이 태스크)에 통보한다(26/11/06 분리).
+ *   루프는 0x1|0x2 를 OR 대기하고 도착한 칩만 meter_scan_proc(id)로 처리한다(26/11/09).
+ *     · [단일 0x1 의 문제, 11/06 [IRQPH] 확정] 두 칩 IRQ가 200us 이내로 겹치면 통보가
+ *       합쳐져 ZX timeout·lag late·파형 스파이크.
+ *     · [고정순서 meter_scan(1)→(2)의 문제, 11/06~09 로그 확정] M2가 M1보다 앞서는 위상에서
+ *       M2를 최대 16ms 늦게 읽고(pgLag 매 IRQ 증가) 짝 복귀 순간 M2 스파이크.
+ *   칩별 50ms 동안 통보가 없으면 timeout 출력 후 처리(기존 meter_scan 동작 유지).
  *
  * [태스크 모니터] 하나만 등록(Tid_Meter2 사용). Tid_Meter3는 이제 놀게 된다
  *   (M2 전용 태스크가 사라졌으므로 WDT 슬롯 미사용).
  * ───────────────────────────────────────────────────────────────────────── */
 extern void irqPhaseDiagInit(void);
 extern void irqPhaseDiagTick(void);
+#define METER12_ZX_TMO_MS	50	/* M1/M2 칩별 통보 없음 판정(ms) — ade9000.c METER_SCAN2_ZX_TMO_MS 와 동일 */
 
 void Meter12_Task(void *param) {
 	printf("[task Meter#12 started ...\n");
@@ -5795,13 +5789,36 @@ void Meter12_Task(void *param) {
 	_enableTaskMonitor(Tid_Meter2, 50);
 	irqPhaseDiagInit();		/* [진단 26/11/06] M1·M2 IRQ 위상차(ade9000.c IRQ_PHASE_DIAG) */
 
-	while (1) {
-		meter[0].cntl.wdtTbl[Tid_Meter2].count++;
-		irqPhaseDiagTick();		/* 1분마다 [IRQPH] 출력 (IRQ_PHASE_DIAG=0이면 빈 함수) */
-		meter_scan(1);			/* M1: 내부에서 0x1 대기 → 처리 */
-#ifdef CH3
-		meter_scan(2);			/* M2: 내부에서 다음 0x1 대기 → 처리 */
+	/* [26/11/09] 0x1|0x2 OR 대기 → 도착한 칩만 처리. 고정순서 meter_scan(1)→(2)는 위상이 0을
+	 * 지나 M2 IRQ가 M1보다 앞서면 M2를 직전 IRQ와 짝지어 (16ms-위상차)+M1처리 만큼 늦게 읽었고,
+	 * 위상차≈M1처리시간(~2.3ms)에서 짝이 복귀하며 쓰는 중 절반을 읽어 M2 파형 스파이크(~2.5h 주기). */
+	{
+		uint64_t last1 = sysTick64, last2 = sysTick64, now;
+		uint16_t ev;
+#ifdef __FREERTOS
+		uint32_t nv;
 #endif
+		while (1) {
+			meter[0].cntl.wdtTbl[Tid_Meter2].count++;
+			irqPhaseDiagTick();		/* 1분마다 [IRQPH] 출력 (IRQ_PHASE_DIAG=0이면 빈 함수) */
+			ev = 0;
+#ifdef __FREERTOS
+			nv = 0;
+			if (xTaskNotifyWait(0, 0x3, &nv, pdMS_TO_TICKS(METER12_ZX_TMO_MS)) != 0) ev = (uint16_t)(nv & 0x3);
+#else
+			if (os_evt_wait_or(0x3, METER12_ZX_TMO_MS) == OS_R_EVT) ev = os_evt_get() & 0x3;
+#endif
+			now = sysTick64;
+			/* 칩별 타임아웃: 마지막 처리 후 METER12_ZX_TMO_MS 동안 통보가 없으면 기존처럼 timeout 후 처리 */
+			if (ev & 0x1) { meter_scan_proc(1); last1 = sysTick64; }
+			else if (now - last1 >= METER12_ZX_TMO_MS) { meterZxTimeout(1); meter_scan_proc(1); last1 = sysTick64; }
+#ifdef CH3
+			if (ev & 0x2) { meter_scan_proc(2); last2 = sysTick64; }
+			else if (now - last2 >= METER12_ZX_TMO_MS) { meterZxTimeout(2); meter_scan_proc(2); last2 = sysTick64; }
+#else
+			(void)last2;
+#endif
+		}
 	}
 }
 

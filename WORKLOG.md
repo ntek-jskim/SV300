@@ -9,6 +9,21 @@
 
 ---
 
+# 2026-11-10
+버전: **V00.04** (초기 납품 버전, main = web)
+
+## 1. ★M1·M2 파형 스파이크(고정 순서 스캔) 수정
+- 11/06~09 62h 로그: 비트 분리로 ZX timeout·lag late 는 해소, 대신 M2 가 IRQ 위상 0 통과 후 직전 IRQ 와 짝지어 늦게 읽혀 `pgLag` 매 IRQ 증가, 위상차 ≈2.3ms 에서 M2 >3% 스파이크(~2h35m 주기)
+- `Meter12_Task` 가 0x1|0x2 OR 대기로 도착한 칩만 처리, 칩별 50ms 무통보 시 ZX timeout 처리(`meter_scan_proc`·`meterZxTimeout` 분리)
+- 실기 23.6h: 리셋·ZX timeout·lag late 0, 2.3ms 통과·IRQ 겹침 9회 모두 스파이크 없음(남은 >3% 는 M0 동시 = 신호)
+
+## 2. 납품 정리
+- 진단 끔: `IRQ_PHASE_DIAG`=0, `WV_DIAG` 주석
+- 필드 타깃 `SV300_3CH_app` 0E/0W, 플래시 여유 ~5.2KB
+- 보드 V082(MAIN·PT) 재교정·위상·1P2W/3P4W 확인 완료. 2MB SPI 플래시는 가득 차면 PQ 저장 실패 → 16MB 교체 예정
+
+---
+
 # 2026-11-06
 버전: **V00.04** (main = web 통합)
 

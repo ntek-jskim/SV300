@@ -52,7 +52,6 @@
 | 1P2W 2·3번 슬롯 전력(`2b0f399`)·전력량(`energy_scan`, 11/06 미커밋) 복구 | 11/06 | 전력 W/PF 는 #2·#3 확인됨. 남은 확인: kWh 누적·수요, 채널 합계(P[3]) |
 | 전압 보정 슬롯별 Z·PT2·3P3W (`uGainSel`, 11/06 미커밋) | 11/06 | 피더 L1/L2/L3 혼합 결선에서 각 피더 V 가 기준값 이내, 콘솔 `vg:` 로그의 L 표시 |
 | confWebApp AUTO CAL (`9f1af4b`) | 11/06 | 13단계 전체 1회 통과(재부팅 4회 대기·판정 멈춤), REPORT 엑셀 |
-| M1·M2 IRQ 통보 비트 분리 (11/06 미커밋) | 11/06 | 하룻밤 로그 — `near(<200us)`>0 구간에 ZX timeout·lag late·WVF 스파이크 증가 없음 |
 
 ---
 
@@ -65,13 +64,6 @@
 - **할 일**: rc 의미 확인, FAIL 시 대상 영역의 기존 플래시 내용 출력 진단 추가
 - **참고**: 새 메인보드는 초기 부품 2MB SPI 플래시(MX id 0x15) 실장 상태 → 16MB 로 교체 예정. 교체 후 재관찰
 - **위치**: [FS_SPIFI_FlashPrg.c:184](src/FS_SPIFI_FlashPrg.c#L184)
-
-### M1·M2 ZX timeout / lag late (새 보드 ~2.5시간 주기)
-- **상태**: 원인 확정(11/06 `[IRQPH]` 로그), 수정 반영(미커밋) — 실기 재확인 대기
-- **원인**: `meterIrqSvc` 가 M1·M2 IRQ 를 같은 비트 0x1 로 통보. 위상차가 1분에 ~108us 씩 줄어(크리스털 차 ~1.8ppm) 200us 이내로 겹친 17:14~17:19 에만 ZX timeout[1][2]·lag late +1089/+1087·M1/M2 파형 스파이크 +4600, M0 무영향
-- **수정**: `METER_IRQ_EVT` M1=0x1·M2=0x2, `meter_scan` 이 자기 비트만 대기
-- **확인**: 하룻밤 로그에서 위상차 0 근처(`near(<200us)`>0) 구간에 ZX timeout·lag late 증가가 없으면 완료 → `IRQ_PHASE_DIAG`·`WV_DIAG` 0 으로
-- **위치**: [ade9000.c meterIrqSvc](src/ade9000.c)
 
 ---
 
@@ -99,6 +91,6 @@
 ---
 
 ## Priority: 청소 (영향 없음)
-- 남은 진단 코드: `IRQ_PHASE_DIAG`(ade9000.c)·`WV_DIAG`(meter.h, [WVF] 요약·lag late 카운터) — `[IRQPH]` 하룻밤 검증에 lag late 가 필요해 유지, 검증 후 끄기. `WV_STAGED` 단계기동 스위치(meter.h·app_main.c, 현재 OFF)는 재진단용으로 보존 여부 결정
+- 남은 진단 코드: `IRQ_PHASE_DIAG`(ade9000.c)·`WV_DIAG`(meter.h, [WVF] 요약·lag late 카운터) — M1·M2 IRQ 겹침 검증 완료(11/09~10 하룻밤), 이제 0 으로 끄기 가능. `WV_STAGED` 단계기동 스위치(meter.h·app_main.c, 현재 OFF)는 재진단용으로 보존 여부 결정
 - 메모리맵 xlsx 에 캡처 구조체(V+I)·에너지 월포맷 변경 반영 여부 확인 (최신 기준 `memorymap/` 날짜 최신 파일)
 - (deferred) M1/M2 WFB 파형 커플링 저감 · GEMS THD 비교

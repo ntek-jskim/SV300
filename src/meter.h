@@ -8,7 +8,7 @@
    ▶ 정식 운전 = WV_STAGED OFF(전체 태스크 자동 ON). 재진단 시 WV_STAGED만 주석해제하면 아래 블록 재활성. */
 //#define	WV_STAGED		/* [정식운전] OFF. 재진단 시 이 줄만 주석해제 */
 #define	WV_NO_DESPIKE		/* [보정 OFF] despike 우회 유지(사용자 방침). despike 켜려면 이 줄 주석 처리 */
-#define	WV_DIAG			/* [진단] 스파이크 검출·로그. FFT_Task(LLOW)에서 검출→Meter 오염 없음. 정식운전 시 주석 */
+//#define	WV_DIAG			/* [진단] 스파이크 검출·로그. FFT_Task(LLOW)에서 검출→Meter 오염 없음. 정식운전 시 주석 */
 
 /* ↓ WV_STAGED 진단모드 전용 — 정식운전(WV_STAGED OFF)에선 전부 무효. 재진단 시 필요한 것만 주석해제. */
 //#define	WV_EN_RMSLOG

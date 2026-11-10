@@ -2492,7 +2492,7 @@ void initADE9000(uint8_t id)
  *  가설: M1·M2 IRQ가 단일 플래그(0x1)로 합쳐지는데, 두 칩 클럭 차로 IRQ 위상이 ~4h마다
  *  겹치면 합쳐짐이 반복돼 Meter12 루프가 밀린다. 위상차가 0 근처일 때 이벤트가 나면 확증.
  *  DWT CYCCNT(코어클럭) 사용. 1분마다 Meter12_Task에서 [IRQPH] 출력. 검증 후 0. */
-#define IRQ_PHASE_DIAG	1
+#define IRQ_PHASE_DIAG	0
 #if IRQ_PHASE_DIAG
 #define IPD_DEMCR   (*(volatile uint32_t *)0xE000EDFCUL)
 #define IPD_DWTCTRL (*(volatile uint32_t *)0xE0001000UL)
@@ -2928,13 +2928,21 @@ uint64_t ts_irq[2], ts_delta[2];
  * - ZX 타임아웃: M0=20ms, M1/M2=METER_SCAN2_ZX_TMO_MS(50ms)
  * - LED 토글: M0에서만(Energy READY 시)
  * - PQM(period/RMS/THD)은 RR/슬라이스 없이 매 IRQ마다 조건 없이 처리(연속성 유지). */
+void meter_scan_proc(uint8_t id);
+
+/* ZX notify 타임아웃 처리(meter_scan·Meter12_Task 공용) */
+void meterZxTimeout(uint8_t id)
+{
+	printf(">>> ZX timeout [%d]...\n", id);
+	// online(정상 계측) 중엔 파형버퍼 유지 — 경합성 타임아웃으로 인한 불연속 방지
+	if (!meter[id].cntl.online)
+		wQ[id].fr = wQ[id].re = 0;
+}
+
+/* M0(Meter0_Task) 용: 자기 칩 통보 대기 후 처리.
+ * M1·M2는 Meter12_Task가 0x1|0x2를 OR 대기해 도착한 칩만 meter_scan_proc 호출(26/11/09). */
 void meter_scan(uint8_t id)
 {
-	uint32_t chipId, flag, zxtMask;
-	uint16_t version, runCmd=0, wtemp, fr;
-	uint32_t rms, stat0, stat1, vlevel, dtemp, i, cnt=0, mask;
-	void *msg;
-	uint64_t tick64, zxTo;
 	/* ZX notify 대기: M0=20ms, M1/M2=50ms(SSP1 공유 경합 여유). C89: 선언은 블록 선두에 */
 	uint32_t zxTmoMs;
 #ifdef __FREERTOS
@@ -2948,25 +2956,27 @@ void meter_scan(uint8_t id)
 	// 8K: (Max 8ms) -> Hi/Low 적용시 4ms
 	// 32: (Max 32ms) -> Hi/Low 적용시 16ms
 	zxTmoMs = (id == 0) ? 20u : METER_SCAN2_ZX_TMO_MS;
-	/* 자기 칩 비트만 대기·소거 — M1 대기 중 들어온 M2 통보(0x2)는 남아 meter_scan(2)가 바로 처리 */
 #ifdef __FREERTOS
 	if (xTaskNotifyWait(0, METER_IRQ_EVT(id), &ulNotificationValue, pdMS_TO_TICKS(zxTmoMs)) == 0)
 #else
 	if (os_evt_wait_and((uint16_t)METER_IRQ_EVT(id), zxTmoMs) == OS_R_TMO)
 #endif
-	{
-		printf(">>> ZX timeout [%d]...\n", id);
-		// wave sampling를 다시시작한다
-//		if (id == 0)
-//			w8kQ.fr = w8kQ.re = 0;
-//		else
-//			w32kQ.fr = w32kQ.re = 0;
-		// online(정상 계측) 중엔 파형버퍼 유지 — 경합성 타임아웃으로 인한 불연속 방지
-		if (!meter[id].cntl.online)
-			wQ[id].fr = wQ[id].re = 0;
-	}
-//	ts_delta[id] = sysTick64 - ts_irq[id];
-//	ts_irq[id] = sysTick64;
+		meterZxTimeout(id);
+
+	meter_scan_proc(id);
+}
+
+/* 칩 1개 IRQ 처리(대기 없음) */
+void meter_scan_proc(uint8_t id)
+{
+	uint32_t chipId, flag, zxtMask;
+	uint16_t version, runCmd=0, wtemp, fr;
+	uint32_t rms, stat0, stat1, vlevel, dtemp, i, cnt=0, mask;
+	void *msg;
+	uint64_t tick64, zxTo;
+
+	if (id >= METER_CH_COUNT)
+		return;
 
 	tick64 = sysTick64;
 //	printf("@@@ meter_scan tick, %d\n", tick64);
