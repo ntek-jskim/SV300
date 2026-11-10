@@ -16,6 +16,7 @@ extern COMP_TBL almTbl[METER_CH_COUNT][MAX_ALARM_CH];
 void initAlarmTable(int id);
 void buildAlarmSettings(int id);
 int alarmProc(int id);
+void requestAlarmDefApply(void);
 int loadAlarmLog(int id);
 int storeAlarmStatus(int id);
 int loadAlarmStatus(int id);

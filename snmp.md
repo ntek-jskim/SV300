@@ -819,4 +819,4 @@ SNMP 변경 후에도 RSTP 링 이중화가 정상 동작하는지 확인한다.
 - [ ] §7.5 공존·부하, §7.6 RSTP 링 — SNMP·Trap 추가 빌드로 재확인
 
 ### 8.7 관련 항목 (SNMP 외, Trap 시험에 영향)
-- [ ] 알람 설정(Channel·Cond·Level)이 재부팅 후에만 적용되는 문제 — Save Set 시 판정값(`alarm.st[]`) 갱신 여부 결정
+- [ ] 알람 설정(Channel·Cond·Level)이 재부팅 후에만 적용되는 문제 — 26/11/10 Save Set 시 즉시 반영하도록 수정(바뀐 행이 발생 중이면 복귀 Trap 송신). 실기 확인 대기(TODO.md 3.4)

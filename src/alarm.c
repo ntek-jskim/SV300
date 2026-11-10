@@ -1011,25 +1011,78 @@ void fetchItic2(int id, int cmd)
 }
 #endif
 
-// 매 1초 마다 호출되어야 한다 
+/* [26/11/10] Save Set 시 알람설정(almSet)을 판정값(alarm.st[])에 즉시 반영.
+ *  판정 기준값(level)은 부팅 때 loadAlarmStatus 에서만 복사돼, 설정 변경이 재부팅 후에야 적용됐다.
+ *  Save Set 경로(FS_task)는 표시만 하고, 실제 반영은 alarmProc(1초, 판정 태스크) 안에서 해 경합을 피한다. */
+static volatile uint8_t almDefDirty[METER_CH_COUNT];
+
+void requestAlarmDefApply(void) {
+	int id;
+	for (id = 0; id < METER_CH_COUNT; id++)
+		almDefDirty[id] = 1;
+}
+
+/* 바뀐 행만 반영. 발생 중이던 행은 옛 설정 기준으로 복귀 기록 후 정상 상태로, 채널이 바뀌면 횟수 초기화 */
+static int applyAlarmDef(int id) {
+	int i, change = 0, logged = 0, oc;
+	float value;
+	ALARM_DEF *paset = &meter[id].almSet;
+	ALARM_STATUS *palm = &meter[id].alarm;
+
+	for (i = 0; i < 32; i++) {
+		if (palm->st[i].chan == paset->set[i].chan && palm->st[i].cond == paset->set[i].cond
+			&& palm->st[i].level == paset->set[i].level)
+			continue;
+
+		if (palm->st[i].status) {
+			oc = palm->st[i].chan;
+			value = (oc > 0 && oc < MAX_ALARM_CH && almTbl[id][oc].src) ? *almTbl[id][oc].src : 0;
+			storeAlarmLog(id, i, 0, value, 0);	/* 옛 chan/cond/level 로 복귀 기록 */
+			palm->st[i].status = 0;
+			logged++;
+		}
+		if (palm->st[i].chan != paset->set[i].chan)
+			palm->st[i].count = 0;
+		palm->st[i].chan  = paset->set[i].chan;
+		palm->st[i].cond  = paset->set[i].cond;
+		palm->st[i].level = paset->set[i].level;
+		meter[id].cntl.almTimer[i] = 0;
+		change++;
+
+		if (palm->st[i].chan)
+			printf("++ almset apply(M%d,%d) -> chan(%d), cond(%d), level(%f)\n", id, i,
+				palm->st[i].chan, palm->st[i].cond, palm->st[i].level);
+	}
+	if (logged)
+		fetchAlarm(id, 0);
+	return change;
+}
+
+// 매 1초 마다 호출되어야 한다
 int alarmProc(int id) {
 	int i, chan, cond, change=0, result, almCount=0, doPoint=0;
 	float level, *src;
 	ALARM_DEF *paset = &meter[id].almSet;
 	ALARM_STATUS *palm = &meter[id].alarm;
 	CNTL_DATA *pcntlId = &meter[id].cntl;
-	
+
+	/* Save Set 이후 첫 호출에서 설정 반영(무전압이어도 반영·저장되도록 아래 가드보다 먼저) */
+	if (almDefDirty[id]) {
+		almDefDirty[id] = 0;
+		change = applyAlarmDef(id);
+	}
+
 	/* 부팅 5s + RMS 초기화 + ZX(online) 없으면 알람·FIFO 기록 안 함 (무전압/미배선 보호) */
 	if (pcntlId->online2++ < 5)
-		return 0;
+		return change;
 	if (!pcntlId->rmsInit)
-		return 0;
+		return change;
 	if (!pcntlId->online || pcntlId->zxMonCnt == 0)
-		return 0;
+		return change;
 	{
 		float f = meter[id].meter.Freq;
 		if (f < 47.0f || f > 63.0f)
-			return 0;
+			return change;
 	}
 
 	for (i=0; i<32; i++) {		

@@ -296,19 +296,27 @@ void writeGainW(int id) {
 	}		
 }
 
+/* [26/11/10] 보정값 누적: 측정값은 이미 기존 게인(old)이 적용된 값이므로
+ *  새 게인 = (1+old)·(ref/meas) − 1. 종전 (ref/meas)−1 덮어쓰기는 교정을 두 번 하면
+ *  남은 오차(≈0)만 저장돼 첫 교정이 사라졌다. old=0(보정값 지움 후)이면 종전 식과 같다. */
+static int32_t gainCompose(int32_t old, float ratio)
+{
+	return (int32_t)(((1.0 + (double)old/GAIN_MAX) * ratio - 1.0) * GAIN_MAX);
+}
+
 // U
-// 3P4W, 3P3W 모드, X1, X2 에서 각각 조정한다 
+// 3P4W, 3P3W 모드, X1, X2 에서 각각 조정한다
 void setGainU(int id, float ref)
 {
-	float fg;
 	int i, z[3], pt[3];
 	int32_t (*pvg)[3][2] = pcal->vgain[id];
 
 	// Vab: vrms[0] -> vgain[0] — 슬롯별 입력상(Z)·PT2 칸에 저장
 	for (i=0; i<3; i++) {
 		uGainSel(id, i, &z[i], &pt[i]);
-		fg = ref/meter[id].meter.U[i];
-		pvg[i][z[i]][pt[i]] = (fg-1)*GAIN_MAX;
+		if (meter[id].meter.U[i] <= 0)
+			continue;
+		pvg[i][z[i]][pt[i]] = gainCompose(pvg[i][z[i]][pt[i]], ref/meter[id].meter.U[i]);
 	}
 
 	meter[id].cntl.wCalF[0] = meter[id].cntl.wCalF[1] = 1;
@@ -320,20 +328,17 @@ void setGainU(int id, float ref)
 // V2: Vc-Vb -> U[1]  (3P3W → Z=phase)
 void setGainUpp(int id, float ref)
 {
-	float fg;
 	int pt;
 	int32_t (*pvg)[3][2] = pcal->vppgain[id];
 
 	uGainSel(id, 0, NULL, &pt);		/* 3P3W 는 미터 통째 — 피더 PT2 */
 
-	fg = ref/meter[id].meter.U[0];
-	pvg[0][0][pt] = (fg-1)*GAIN_MAX;
-
-	fg = ref/meter[id].meter.U[1];
-	pvg[2][2][pt] = (fg-1)*GAIN_MAX;
-
-	fg = ref/meter[id].meter.U[2];
-	pvg[1][1][pt] = (fg-1)*GAIN_MAX;
+	if (meter[id].meter.U[0] > 0)
+		pvg[0][0][pt] = gainCompose(pvg[0][0][pt], ref/meter[id].meter.U[0]);
+	if (meter[id].meter.U[1] > 0)
+		pvg[2][2][pt] = gainCompose(pvg[2][2][pt], ref/meter[id].meter.U[1]);
+	if (meter[id].meter.U[2] > 0)
+		pvg[1][1][pt] = gainCompose(pvg[1][1][pt], ref/meter[id].meter.U[2]);
 
 	meter[id].cntl.wCalF[0] = meter[id].cntl.wCalF[1] = 1;
 	printf("vpp_g : ref(%f), %d, %d, %d\n", ref, pvg[0][0][pt], pvg[1][1][pt], pvg[2][2][pt]);
@@ -396,7 +401,7 @@ void setDcOffset(int id) {
 // 20% 이상 차이 나면 보정하지 않는다
 void setGainI(int id, float ref)
 {
-	float 					fg, error;
+	float 					error;
 	int 						i;
 	int32_t *pig = (db.ct[id].CT2 == CT_RCT) ? pcal->R_igain[id] : pcal->igain[id];	/* 로고스키 */
 
@@ -406,8 +411,7 @@ void setGainI(int id, float ref)
 		if (fabs(error) > 0.2)
 			continue;
 
-		fg = ref/meter[id].meter.I[i];
-		pig[i] = (fg-1) * GAIN_MAX;
+		pig[i] = gainCompose(pig[i], ref/meter[id].meter.I[i]);
 	}
 
 	meter[id].cntl.wCalF[0] = meter[id].cntl.wCalF[1] = 2;
@@ -471,10 +475,21 @@ void clrGainW(int id) {
 	}
 	meter[id].cntl.wCalF[0] = meter[id].cntl.wCalF[1] = 3;
 }
+/* [26/11/10] PHCAL ↔ 보정각(rad) 변환. 칩 식: PHCAL/2^27 = k = (sin(φ−ω)+sin ω)/sin(2ω−φ), ω=2π·f/8000.
+ *  역변환: A cosφ − B sinφ = sin ω (A = k·sin2ω + sin ω, B = k·cos2ω + cos ω)
+ *        → φ = acos(sin ω / √(A²+B²)) − atan2(B, A)   (k=0 → φ=0 쪽 해, ±3° 범위 왕복 확인) */
+static double phcalToAngle(int32_t ph, double omega)
+{
+	double k = (double)ph/GAIN_MAX;
+	double A = k*sin(2*omega) + sin(omega), B = k*cos(2*omega) + cos(omega);
+	return acos(sin(omega)/sqrt(A*A + B*B)) - atan2(B, A);
+}
+
 // phase
 void setGainPh(int id)
 {
 	float a, b, c, omega, mag[3], mmax = 0;
+	double old, tot, k;
 	int i;
 	int32_t *pph = (db.ct[id].CT2 == CT_RCT) ? pcal->R_phcal[id] : pcal->phcal[id];	/* 로고스키 */
 
@@ -488,19 +503,37 @@ void setGainPh(int id)
 	}
 
 	for (i=0; i<3; i++) {
+		/* [26/11/10] 진단 로그: 상별 유효/무효전력량(1초 누적)·측정 각도(PF 0.5 지상이면 ≈60°) */
+		printf("ph : M%d L%d Wh %d, VARh %d, angle %.3f deg, old %d\n", id, i+1,
+			meter[id].cntl.wh[i], meter[id].cntl.varh[i],
+			atan2((float)meter[id].cntl.varh[i], (float)meter[id].cntl.wh[i])*180/M_PI, pph[i]);
+
 		if (mag[i] <= 0 || mag[i] < mmax*0.1f) {
 			printf("ph : M%d L%d skip (no current, keep %d)\n", id, i+1, pph[i]);
 			continue;
 		}
+		/* [26/11/10] 가드: 식이 PF 0.5 지상(60°) 전제 — 무효전력 ≤0(진상) 또는 유효전력 ≤0(CT 역결선)이면
+		 *  오차각이 엉뚱하게(역결선은 0 근처로) 계산돼 잘못 저장되므로 교정 거부 */
+		if (meter[id].cntl.varh[i] <= 0 || meter[id].cntl.wh[i] <= 0) {
+			printf("ph : M%d L%d REJECT (%s, need PF 0.5 lagging; keep %d)\n", id, i+1,
+				(meter[id].cntl.wh[i] <= 0) ? "Wh<=0 reverse CT?" : "VARh<=0 leading", pph[i]);
+			continue;
+		}
 		a = meter[id].cntl.wh[i]*CONST_SIN_60 - meter[id].cntl.varh[i]*CONST_COS_60;
 		b = meter[id].cntl.wh[i]*CONST_COS_60 + meter[id].cntl.varh[i]*CONST_SIN_60;
-		c = -atan(a/b);
+		c = -atan(a/b);		/* 남은 오차각(기존 PHCAL 적용 후 측정) */
 
-		a = sin(c-omega) + sin(omega);
-		b = sin(2*omega-c);
-		c = a/b*GAIN_MAX;
-
-		pph[i] = c;
+		/* [26/11/10] 누적: 기존 보정각 + 남은 오차각 → PHCAL 재계산(종전은 남은 오차각만으로 덮어써 2회째 원복) */
+		old = phcalToAngle(pph[i], omega);
+		tot = old + c;
+		/* 누적 보정각 ±3° 초과 — 결선·부하(PF) 오류로 보고 유지. (k 크기로는 판정 불가: −60°도 |k|<1) */
+		if (fabs(tot) > 3.0*M_PI/180) {
+			printf("ph : M%d L%d skip (angle %.3f deg out of range, keep %d)\n", id, i+1, tot*180/M_PI, pph[i]);
+			continue;
+		}
+		k = (sin(tot-omega) + sin(omega)) / sin(2*omega-tot);
+		pph[i] = (int32_t)(k*GAIN_MAX);
+		printf("ph : M%d L%d err %.4f deg, total %.4f deg -> %d\n", id, i+1, c*180/M_PI, tot*180/M_PI, pph[i]);
 	}
 
 	meter[id].cntl.wCalF[0] = meter[id].cntl.wCalF[1] = 4;
@@ -518,12 +551,11 @@ void clrGainPh(int id)
 // In
 void setGainIn(int id, float ref)
 {
-	float 					fg, error;
+	float 					error;
 
 	error = (ref-meter[id].meter.In)/ref;
 	if (fabs(error) <= 0.2) {
-		fg = ref/meter[id].meter.In;
-		pcal->Ingain[id][0] = (fg-1) * GAIN_MAX;
+		pcal->Ingain[id][0] = gainCompose(pcal->Ingain[id][0], ref/meter[id].meter.In);
 		meter[id].cntl.wCalF[0] = meter[id].cntl.wCalF[1] = 5;
 	}
 	printf("zgain : %d\n", pcal->Ingain[id][0]);
@@ -2369,9 +2401,10 @@ void initADE9000(uint8_t id)
 	read_reg16(id, AD9X_PGA_GAIN, &wtemp);
 	printf("PGA = %x\n", wtemp);
 	
-	// ACCNMODE, SELFREQ=1=60Hz
-	wtemp = (1<<8);
+	// ACCMODE, SELFREQ(bit8): 1=60Hz, 0=50Hz — [26/11/10] 계통주파수 설정(db.freq, 7170) 반영(종전 60Hz 고정)
+	wtemp = (FREQ_HZ(db.freq) == 60) ? (1<<8) : 0;
 	write_reg16(id, AD9X_ACCMODE, &wtemp);
+	printf("ACCMODE[M%d] = %x (%dHz)\n", id, wtemp, FREQ_HZ(db.freq));
 		
 	// change Isum mode -> Ig로 사용한다 
 	if (db.ct[id].CT2 == CT_5A && (db.pt[id].wiring == WM_3LN3CT || IS_WM_1LN1CT(db.pt[id].wiring) || db.pt[id].wiring == WM_1LL2CT)) {

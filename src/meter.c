@@ -3114,6 +3114,7 @@ void FS_task(void *arg)
 			db.comm.layoutVer = SETTINGS_LAYOUT_VER;
 			saveSettings(&db);
 			storeAlarmDef();	/* 알람설정(almSet) 영속화 — SETTINGS에 미포함이라 별도 저장 */
+			requestAlarmDefApply();	/* 판정값(alarm.st[])에 즉시 반영 — alarmProc 다음 1초에 적용 */
 			storePqeDef();		/* PQE/Transient/Waveform/Trend 설정 영속화 — SETTINGS 미포함, 별도 저장 */
 			storeEnergy();		/* 에너지 편집(Energy Edit) 영속화 — Save Set에서만 FRAM 저장 */
 
