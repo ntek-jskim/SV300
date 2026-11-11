@@ -5,7 +5,7 @@
  *  구성:
  *   - 인증: 폼 로그인(admin ntek/0300, viewer sv300/0000) + 쿠키 세션.
  *           쓰기(명령/설정)는 admin 권한 게이트(서버측 재확인).
- *   - Dashboard: /api/dashboard(CH1 순시) + /api/sv300/events(3CH 알람/이벤트).
+ *   - Dashboard: /api/dashboard?ch=N(CHn 순시, CH1~3 선택) + /api/sv300/events(3CH 알람/이벤트).
  *   - 데이터: meter[id].meter(METERING) 및 meter[id].alarm/alist/elist 직렬화.
  *   - 정적파일은 S0:(SPI Flash) 폴백(HTTP_SERVER_FS_SUPPORT).
  *
@@ -371,17 +371,24 @@ static error_t apiMe(HttpConnection *c)
 /*============================ Dashboard 데이터 ==============================*/
 static float favg3(const float *a) { return (a[0] + a[1] + a[2]) / 3.0f; }
 
-/* GET /api/dashboard — CH1 순시치(confWebApp iDPM300 대시보드) */
+static int webNch(void);
+static int qparam(const char *qs, const char *key);
+
+/* GET /api/dashboard?ch=N — CHn 순시치(기본 CH1, 범위 밖이면 CH1). IOM 은 CH1 고정 */
 static error_t apiDashboard(HttpConnection *c)
 {
 	char b[192];   /* 작은 버퍼로 분할 기록(태스크 스택 절약) */
-	METERING *m = &meter[0].meter;
+	int ch = qparam(c->request.queryString, "ch");
+	METERING *m;
+
+	if (ch < 1 || ch > webNch()) ch = 1;
+	m = &meter[ch - 1].meter;
 
 	if (beginJson(c)) return ERROR_WRITE_FAILED;
 	snprintf(b, sizeof(b),
-		"{\"ok\":true,\"data\":{\"freq\":%.2f,\"v_avg\":%.1f,\"i_avg\":%.2f,"
+		"{\"ok\":true,\"data\":{\"ch\":%d,\"freq\":%.2f,\"v_avg\":%.1f,\"i_avg\":%.2f,"
 		"\"u\":[%.1f,%.1f,%.1f],\"i\":[%.2f,%.2f,%.2f],",
-		m->Freq, m->U[3], m->I[3],
+		ch, m->Freq, m->U[3], m->I[3],
 		m->U[0], m->U[1], m->U[2], m->I[0], m->I[1], m->I[2]);
 	w(c, b);
 	snprintf(b, sizeof(b),
@@ -393,6 +400,12 @@ static error_t apiDashboard(HttpConnection *c)
 		m->Ubal[0], m->Ibal[0],
 		favg3(m->THD_U), favg3(m->THD_I), favg3(m->TDD_I));
 	w(c, b);
+	{
+		ENERGY_REG64 *E = &meter[ch - 1].egy.Ereg64;   /* TOTAL,KWH,IMPORT/EXPORT 누적(Wh→kWh) */
+		snprintf(b, sizeof(b), "\"imp_kwh\":%.2f,\"exp_kwh\":%.2f,",
+			(double)E->cell[0][0][0] / 1000.0, (double)E->cell[0][0][1] / 1000.0);
+		w(c, b);
+	}
 	{
 		IOM_DATA *io = &meter[0].iom;   /* IOM DATA 7050~7069: DI status/pulse/TEMP */
 		IO_CFG   *cf = &meter[0].setting.iom;   /* dt=diType(0=DI,1=PI), db=debounce, sc=piConst */
@@ -1477,7 +1490,7 @@ static const char INDEX_HTML[] =
 ".sidebar{width:216px;flex-shrink:0;background:var(--panel);border-right:1px solid var(--line);padding:8px 10px 24px;position:sticky;top:0;align-self:stretch}\n"
 ".sgroup{font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;padding:16px 10px 6px}\n"
 ".sitem{display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:8px;color:var(--fg);font-size:13.5px;margin:1px 0;border-left:3px solid transparent;cursor:pointer}\n"
-".sitem:hover{background:var(--panel2)}.sitem.active{background:var(--panel2);color:#fff;border-left-color:var(--accent);font-weight:600}\n"
+".sitem:hover{background:var(--panel2);text-decoration:none}.sitem.active{background:var(--panel2);color:#fff;border-left-color:var(--accent);font-weight:600}\n"
 ".sitem .ico{font-size:15px;width:18px;text-align:center}\n"
 ".poll-toggle{margin-top:18px;padding:12px 11px 0;border-top:1px solid var(--line)}\n"
 ".poll-toggle label{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12.5px;cursor:pointer}\n"
@@ -1496,7 +1509,10 @@ static const char INDEX_HTML[] =
 ".hint{color:var(--muted);font-size:12px;margin-top:14px}\n"
 /* dashboard */
 ".dash{display:flex;flex-direction:column;height:calc(100vh - 53px - 28px);min-height:560px}\n"
-".dash h1{font-size:19px;font-weight:800;margin:0 0 6px}\n"
+".dash h1{font-size:19px;font-weight:800;margin:0}\n"
+".dhead{display:flex;align-items:center;gap:14px;margin:0 0 6px}.dchs{display:flex;gap:6px}\n"
+".dchb{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:4px 12px;font-weight:800;font-size:12.5px;cursor:pointer;color:var(--muted)}\n"
+".dchb.ok{color:var(--ok)}.dchb.al{color:var(--bad)}.dchb.on{background:var(--panel2);border-color:var(--accent);box-shadow:inset 0 -2px 0 var(--accent)}\n"
 ".dstatus{color:var(--muted);font-size:11px;margin:0 0 8px;font-family:'Consolas',monospace;display:flex;align-items:center;gap:14px;flex-wrap:wrap}\n"
 ".dstatus .on{color:var(--ok)}.dstatus .bad{color:var(--bad)}.dstatus .dmeas{color:var(--fg)}.dstatus .dmeas::before{content:'\\1F552 '}\n"
 ".dgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;align-items:stretch;flex:1 1 0;min-height:0}\n"
@@ -1524,9 +1540,12 @@ static const char INDEX_HTML[] =
 ".gauge .gc{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}\n"
 ".gauge .gv{font-size:clamp(19px,4vh,44px);font-weight:800;color:var(--bad);font-family:'Consolas',monospace}\n"
 ".gauge .gu{font-size:clamp(10px,1.6vh,16px);color:var(--muted)}.gauge .gl{font-size:clamp(11px,1.8vh,18px);color:var(--muted);margin-top:1px}.gauge .gs{font-size:clamp(10px,1.6vh,16px);color:var(--bad);font-weight:600;margin-top:1px}\n"
-".pwrcol{display:flex;flex-direction:column;gap:6px;min-height:0}\n"
-".pwrbox{background:var(--panel2);border-radius:7px;padding:6px 12px;display:flex;flex-direction:column;justify-content:space-between;flex:1;min-height:0}.pwrbox>span:last-child{align-self:flex-end}\n"
-".pwrbox .wk{font-size:13px;color:var(--muted)}.pwrbox .wv{font-family:'Consolas',monospace;font-weight:800;font-size:24px}.pwrbox .wu{font-size:13px;color:var(--muted);margin-left:4px}\n"
+".pwrcol{display:flex;flex-direction:column;gap:5px;min-height:0}\n"
+".pwrbox{background:var(--panel2);border-radius:7px;padding:4px 10px;display:flex;flex-direction:column;justify-content:space-between;flex:1;min-height:0}.pwrbox>span:last-child{align-self:flex-end}\n"
+".pwrbox .wk{font-size:12px;color:var(--muted)}.pwrbox .wv{font-family:'Consolas',monospace;font-weight:800;font-size:clamp(14px,2.3vh,19px)}.pwrbox .wu{font-size:12px;color:var(--muted);margin-left:4px}\n"
+".pwrbox.egy{border-left:3px solid var(--cyan);flex-direction:row;gap:10px;padding-left:9px}.pwrbox.egy .wv{color:var(--cyan);font-size:clamp(13px,2vh,17px)}\n"
+".pwrbox.egy .eh{flex:1 1 0;min-width:0;display:flex;flex-direction:column;justify-content:space-between}.pwrbox.egy .eh>span:last-child{align-self:flex-end;white-space:nowrap}\n"
+".pwrbox.egy .eh+.eh{border-left:1px solid var(--line);padding-left:10px}\n"
 ".ut{font-size:11px;color:var(--muted);font-weight:600;margin:0 0 6px}\n"
 ".usec{flex:1 1 0;min-height:0;display:flex;flex-direction:column}.usec .ubox{flex:1;display:flex;flex-direction:column;justify-content:space-evenly}\n"
 ".ubar{display:flex;align-items:center;gap:12px}.ubar .uk{width:60px;font-size:13px;font-weight:600;color:var(--muted)}\n"
@@ -1712,7 +1731,7 @@ static const char INDEX_HTML[] =
 "  <main class='container'>\n"
 /* dashboard page */
 "   <div id='p-dash' class='dash'>\n"
-"    <h1>Dashboard</h1>\n"
+"    <div class='dhead'><h1 id='dtitle'>Dashboard - CH1</h1><div class='dchs'><button class='dchb on' id='dch1' onclick='dSel(1)'>CH1</button><button class='dchb' id='dch2' onclick='dSel(2)'>CH2</button><button class='dchb' id='dch3' onclick='dSel(3)'>CH3</button></div></div>\n"
 "    <div class='dstatus'><span id='dstat' class='on'>&#9679; live &#8635; 1s</span><span id='dmeas' class='dmeas'>Measured: -</span></div>\n"
 "    <div class='dgrid'>\n"
 "     <div class='dcard c1'><div class='dct'>Voltage / Current / Frequency</div>\n"
@@ -1726,7 +1745,7 @@ static const char INDEX_HTML[] =
 "       <div class='ptab'><div class='ph'>Current</div><div class='pr'><span class='pk'>L1</span><span class='pv' id='d-i1'>-</span></div><div class='pr'><span class='pk'>L2</span><span class='pv' id='d-i2'>-</span></div><div class='pr'><span class='pk'>L3</span><span class='pv' id='d-i3'>-</span></div></div>\n"
 "      </div>\n"
 "     </div>\n"
-"     <div class='dcard c2'><div class='dct'>Power Factor &middot; Power</div>\n"
+"     <div class='dcard c2'><div class='dct'>Power Factor &middot; Power &middot; Energy</div>\n"
 "      <div class='pfwrap'>\n"
 "       <div class='gauge'><svg width='140' height='140' viewBox='0 0 140 140'>\n"
 "        <circle class='gtrack' cx='70' cy='70' r='60' fill='none' stroke='#222c38' stroke-width='12'></circle>\n"
@@ -1738,6 +1757,7 @@ static const char INDEX_HTML[] =
 "        <div class='pwrbox'><span class='wk'>Active Power (P)</span><span><span class='wv' id='d-p'>-</span><span class='wu'>kW</span></span></div>\n"
 "        <div class='pwrbox'><span class='wk'>Reactive Power (Q)</span><span><span class='wv' id='d-q'>-</span><span class='wu'>kVar</span></span></div>\n"
 "        <div class='pwrbox'><span class='wk'>Apparent Power (S)</span><span><span class='wv' id='d-s'>-</span><span class='wu'>kVA</span></span></div>\n"
+"        <div class='pwrbox egy'><div class='eh'><span class='wk'>Imp.</span><span><span class='wv' id='d-eimp'>-</span><span class='wu' id='d-eimpu'>kWh</span></span></div><div class='eh'><span class='wk'>Exp.</span><span><span class='wv' id='d-eexp'>-</span><span class='wu' id='d-eexpu'>kWh</span></span></div></div>\n"
 "       </div>\n"
 "      </div>\n"
 "     </div>\n"
@@ -1864,17 +1884,23 @@ static const char INDEX_HTML[] =
 " $('d-pf').style.color=col;$('d-pfst').style.color=col;$('d-pfst').textContent=st;}\n"
 "function setBar(id,bid,v){var e=$(id);e.textContent=n(v,1)+'%';e.className='uv '+(v>=100?'r':'g');var b=$(bid);b.style.width=Math.max(1,Math.min(100,v||0))+'%';b.className='ufill'+(v>=100?' hot':'');}\n"
 "var DBLANK={u:[null,null,null],i:[null,null,null]};\n"
+"function egyAuto(k){var a=Math.abs(k);if(k==null||isNaN(k))return['----','kWh'];if(a>=1e6)return[(k/1e6).toFixed(3),'GWh'];if(a>=1e3)return[(k/1e3).toFixed(3),'MWh'];return[Number(k).toFixed(2),'kWh'];}\n"
+"function egySet(id,k){var r=egyAuto(k);$(id).textContent=r[0];$(id+'u').textContent=r[1];}\n"
 "function renderDash(d){\n"
 "  $('d-vavg').textContent=n(d.v_avg,1);$('d-iavg').textContent=n(d.i_avg,2);$('d-freq').textContent=n(d.freq,2);\n"
 "  $('d-u1').textContent=n(d.u[0],1)+' V';$('d-u2').textContent=n(d.u[1],1)+' V';$('d-u3').textContent=n(d.u[2],1)+' V';\n"
 "  $('d-i1').textContent=n(d.i[0],2)+' A';$('d-i2').textContent=n(d.i[1],2)+' A';$('d-i3').textContent=n(d.i[2],2)+' A';\n"
 "  $('d-p').textContent=n(d.p,2);$('d-q').textContent=n(d.q,2);$('d-s').textContent=n(d.s,2);\n"
+"  egySet('d-eimp',d.imp_kwh);egySet('d-eexp',d.exp_kwh);\n"
 "  $('d-pf').textContent=n(d.pf,2);setGauge(d.pf==null?0:d.pf);\n"
 "  setBar('d-vunb','d-vunb-bar',d.u_unbal);setBar('d-iunb','d-iunb-bar',d.i_unbal);\n"
 "  $('d-thdu').textContent=n(d.thd_u,1)+'%';$('d-thdi').textContent=n(d.thd_i,1)+'%';$('d-tddi').textContent=n(d.tdd_i,1)+'%';}\n"
-"function loadDash(){return j('/api/dashboard').then(function(r){if(!r.d.ok){renderDash(DBLANK);dstat(false);return}\n"
+"var dashCh=1,dAlm=[0,0,0,0];\n"
+"function dChBtns(){for(var c=1;c<=3;c++){var b=$('dch'+c);if(!b)continue;b.style.display=(c<=NCH)?'':'none';b.className='dchb'+(dAlm[c]?' al':' ok')+(c===dashCh?' on':'');b.title=dAlm[c]?(dAlm[c]+' active alarm(s)'):'No active alarm';}$('dtitle').textContent='Dashboard - CH'+dashCh;}\n"
+"function dSel(c){if(c===dashCh)return;dashCh=c;dChBtns();renderDash(DBLANK);loadDash();}\n"
+"function loadDash(){var want=dashCh;dChBtns();return j('/api/dashboard?ch='+want).then(function(r){if(want!==dashCh)return;if(!r.d.ok){renderDash(DBLANK);dstat(false);return}\n"
 "  renderDash(r.d.data);$('dmeas').textContent='Measured: '+fdt(new Date());dstat(true);\n"
-" }).catch(function(){renderDash(DBLANK);dstat(false)});}\n"
+" }).catch(function(){if(want!==dashCh)return;renderDash(DBLANK);dstat(false)});}\n"
 "function loadIom(){return j('/api/dashboard').then(function(r){if(!r.d.ok)return;var d=r.d.data;if(d&&d.iom){iomDat=d.iom;if(!ioEd)renderIom();}}).catch(function(){});}\n"
 "var ioEd=0,iomDat=null;\n"
 "function renderIom(){var io=iomDat;if(!io)return;var k,ed=ioEd&&IS_ADMIN,di=\"<div class='hsub'>DI</div><table class='ctbl hsm'><tr><th>P</th><th>Type</th><th>Deb</th><th>Scale</th><th>St</th><th>Pulse</th></tr>\";\n"
@@ -1887,6 +1913,7 @@ static const char INDEX_HTML[] =
 "function chip(c){return \"<span class='chchip'>CH\"+c+'</span>'}\n"
 "function ts2(s){return s?fdtU(new Date(s*1000)):'-'}\n"
 "function loadEvents(){return j('/api/sv300/events').then(function(r){if(!r.d.ok)return;var d=r.d;\n"
+"  dAlm=[0,0,0,0];d.status.forEach(function(x){if(x.chn>=1&&x.chn<=3)dAlm[x.chn]++;});dChBtns();\n"
 "  $('as-cnt').textContent=d.status.length;$('as-cnt').className='dbadge'+(d.status.length?' hot':'');\n"
 "  var h=\"<tr><th>Alarm Channel</th><th>State</th><th>Count</th></tr>\";\n"
 "  if(!d.status.length)h+=\"<tr><td class='empty' colspan='3'>\\u2713 No active alarms</td></tr>\";\n"
