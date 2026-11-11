@@ -206,7 +206,7 @@ static void smpFill3ph(SMP_CHANNEL *d, SMP_HARMONICS *h, int m)
 	d->U[3]   = pm->U[3];		/* 상전압 평균 */
 	d->Upp[3] = pm->Upp[3];		/* 선간전압 평균 */
 	d->I[3]   = pm->I[3];		/* 상전류 평균 (cbStatus 판정 기준) */
-	d->In    = pm->In;
+	d->Ig    = pm->Ig;		/* 맵 261110 Simple 50056: In→Ig */
 	d->Ptot  = pm->P[3];
 	d->Qtot  = pm->Q[3];
 	d->Stot  = pm->S[3];
@@ -251,7 +251,7 @@ static void smpFill1ph(SMP_CHANNEL *d, SMP_HARMONICS *h, int m, int slot, int vp
 	d->TDD_I[p] = pm->TDD_I[slot];
 	d->U[3] = pm->U[slot];		/* 단상: 해당 상전압이 곧 평균 */
 	d->I[3] = pm->I[slot];		/* 단상: 해당 상전류가 곧 평균 (cbStatus 기준) */
-	/* Upp[3](선간전압 평균)·나머지 상 인덱스·In/Uunb/Iunb 는 0 유지 */
+	/* Upp[3](선간전압 평균)·나머지 상 인덱스·Ig/Uunb/Iunb 는 0 유지 (Ig: 칩 ZCT 1개를 단상 피더 3개가 공유 → 피더 귀속 불가) */
 
 	d->kWh_imp       = EGY_PHASE(e[EGY_PERIOD_TOTAL],      EGY_MODE_KWH,   EGY_SIGN_IMPORT, slot);
 	d->kWh_imp_thisM = EGY_PHASE(e[EGY_PERIOD_THIS_MONTH], EGY_MODE_KWH,   EGY_SIGN_IMPORT, slot);

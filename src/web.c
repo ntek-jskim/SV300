@@ -447,10 +447,10 @@ static error_t apiFeeders(HttpConnection *c)
 		snprintf(b, sizeof(b),
 			"%s{\"n\":%d,\"wiring\":%u,\"freq\":%.2f,"
 			"\"u\":[%.1f,%.1f,%.1f],\"upp\":[%.1f,%.1f,%.1f],"
-			"\"i\":[%.2f,%.2f,%.2f],\"in\":%.2f,",
+			"\"i\":[%.2f,%.2f,%.2f],\"ig\":%.2f,",	/* 맵 261110: 피더 In→Ig */
 			first ? "" : ",", i + 1, wiring, m->Freq,
 			m->U[0], m->U[1], m->U[2], m->Upp[0], m->Upp[1], m->Upp[2],
-			m->I[0], m->I[1], m->I[2], m->In);
+			m->I[0], m->I[1], m->I[2], m->Ig);
 		w(c, b);
 		snprintf(b, sizeof(b),
 			"\"thdu\":[%.1f,%.1f,%.1f],\"thdi\":[%.1f,%.1f,%.1f],\"tddi\":[%.1f,%.1f,%.1f],"
@@ -1461,6 +1461,10 @@ static error_t apiSaveCfg(HttpConnection *c)
 
 /*============================ 임베디드 SPA =================================*/
 /*  ※ C 이스케이프 최소화: HTML/SVG 속성=작은따옴표, CSS 문자열=작은따옴표, JS=백틱/작은따옴표. */
+/* [내장 웹 gzip] 아래 INDEX_HTML 은 화면 원본(편집은 계속 여기서). 컴파일되지 않고,
+ *  Keil Before Build 의 tools/gen_web_gz.ps1 이 이 문자열을 gzip 해 web_index_gz.h(INDEX_HTML_GZ)를 만든다.
+ *  펌웨어에는 압축본만 들어감(내부 플래시 절약: 약 92KB -> 28KB). */
+#if 0
 static const char INDEX_HTML[] =
 "<!doctype html><html lang='en' data-theme='dark'><head><meta charset='utf-8'>\n"
 "<meta name='viewport' content='width=device-width,initial-scale=1'>\n"
@@ -1597,7 +1601,8 @@ static const char INDEX_HTML[] =
 "#d-iom .ctbl.hsm td{font-size:clamp(16px,1.2vw,22px);padding:8px 10px;font-family:'Consolas',monospace;font-weight:700}\n"
 "#d-iom .ctbl.hsm td.rk{font-size:13px;font-family:inherit;color:var(--muted)}\n"
 "#d-iom .ctbl.hsm select,#d-iom .ctbl.hsm input{font-size:15px}\n"
-".chgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}\n"
+".chgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.chgrid.one{grid-template-columns:minmax(0,1fr)}\n"
+"#p-channel .gp-head .dchs{margin-left:4px}\n"
 "@media(max-width:1000px){.chgrid{grid-template-columns:1fr}}\n"
 ".chcard{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;min-width:0}\n"
 ".chh{font-size:14px;font-weight:700;color:var(--accent);margin-bottom:10px}\n"
@@ -1786,7 +1791,7 @@ static const char INDEX_HTML[] =
 "    <div id='fgrid' class='fgrid'></div>\n"
 "   </div>\n"
 "   <div id='p-channel' style='display:none'>\n"
-"    <div class='gp-head'><h1>Channel</h1><span class='gp-actions'><span id='chstat' class='ph2 on'>&#9679; live &#8635; 1s</span></span></div>\n"
+"    <div class='gp-head'><h1 id='chtitle'>Channel - CH1</h1><div class='dchs' id='chsel'></div><span class='gp-actions'><span id='chstat' class='ph2 on'>&#9679; live &#8635; 1s</span></span></div>\n"
 "    <div class='gp-tabs'>\n"
 "     <a class='gp-tab on' id='ct-meter' onclick=\"chSetTab('meter')\">Meter</a>\n"
 "     <a class='gp-tab' id='ct-phase' onclick=\"chSetTab('phase')\">Phase</a>\n"
@@ -1803,7 +1808,7 @@ static const char INDEX_HTML[] =
 "    </div>\n"
 "    <div id='chctl' style='display:none;margin:0 0 10px;align-items:center;gap:8px'>\n"
 "     <span class='ph2'>Option</span>\n"
-"     <select id='hopt' style='width:150px' onchange=\"harmOpt=this.value;pollLoop()\"><option value='pv'>Phase Voltage</option><option value='lv'>Line Voltage</option><option value='cur'>Current</option></select>\n"
+"     <select id='hopt' style='width:150px' onchange=\"harmOpt=this.value;chSelBtns();pollLoop()\"><option value='pv'>Phase Voltage</option><option value='lv'>Line Voltage</option><option value='cur'>Current</option></select>\n"
 "     <span class='ph2' style='margin-left:6px'>Voltage: CH1 (M0~M2 shared) &middot; Current: CH1~3</span>\n"
 "    </div>\n"
 "    <div id='chbody'></div>\n"
@@ -2073,7 +2078,7 @@ static const char INDEX_HTML[] =
 "  h+=`<div class='fcard${f.st?'':' off'}'><div class='fch'><span class='ft'>Feeder #${f.n}</span>${fbadge(f.wiring)}<span class='ff'>${n(f.freq,2)} Hz</span></div>`;\n"
 "  h+=`<table class='ftbl'><tr><th></th><th>Phase V</th><th>Line V</th><th>Current</th><th>THD-U</th><th>THD-I</th></tr>`;\n"
 "  ['L1','L2','L3'].forEach(function(ph,k){h+=`<tr><td class='pk'>${ph}</td><td>${n(f.u[k],1)}</td><td>${n(f.upp[k],1)}</td><td>${n(f.i[k],2)}</td><td>${n(f.thdu[k],1)}%</td><td>${n(f.thdi[k],1)}%</td></tr>`;});\n"
-"  h+=`</table><div class='fkv'>`+kv('In',n(f.in,2),'A')+kv('PF',n(f.pf,3),'')+kv('P',n(f.p,2),'kW')+kv('Q',n(f.q,2),'kVar')+kv('S',n(f.s,2),'kVA')+kv('U-unb',n(f.uunb,1),'%')+kv('I-unb',n(f.iunb,1),'%')+kv('Import',n(f.kwh,2),'kWh')+kv('Month',n(f.kwh_m,2),'kWh')+`</div></div>`;\n"
+"  h+=`</table><div class='fkv'>`+kv('Ig',n(f.ig,2),'A')+kv('PF',n(f.pf,3),'')+kv('P',n(f.p,2),'kW')+kv('Q',n(f.q,2),'kVar')+kv('S',n(f.s,2),'kVA')+kv('U-unb',n(f.uunb,1),'%')+kv('I-unb',n(f.iunb,1),'%')+kv('Import',n(f.kwh,2),'kWh')+kv('Month',n(f.kwh_m,2),'kWh')+`</div></div>`;\n"
 "  });return h;}\n"
 "function fErr(){$('fstat').className='bad';$('fstat').innerHTML='&#9679; read error';if(lastFeed)$('fgrid').innerHTML=fCards(chBlank(lastFeed));}\n"
 "function loadFeeder(){return j('/api/feeders').then(function(r){\n"
@@ -2083,11 +2088,16 @@ static const char INDEX_HTML[] =
 /* Channel */
 "var chTabCur='meter',CHN=[{n:1},{n:2},{n:3}];\n"
 "var harmOpt='pv',harmView='table',PCOL=['#8b5cf6','#38bdf8','#84cc16'];\n"
+/* 채널 선택(대시보드와 동일 버튼): 선택 채널 카드만 표시. CH1 전용 탭(VQ·Report·Harmonics 전압)은 버튼 숨김 */
+"var chSel=1;\n"
+"function chOne(){var t=chTabCur;return t==='vq'||t==='report'||(t==='harmonics'&&harmOpt!=='cur');}\n"
+"function chSelBtns(){var e=$('chsel');if(!e)return;if(chSel>NCH)chSel=1;var h='';for(var c=1;c<=NCH;c++)h+=\"<button class='dchb\"+(dAlm[c]?' al':' ok')+(c===chSel?' on':'')+\"' onclick='chPick(\"+c+\")'>CH\"+c+'</button>';e.innerHTML=h;e.style.display=chOne()?'none':'';$('chtitle').textContent=chOne()?'Channel':'Channel - CH'+chSel;}\n"
+"function chPick(c){if(c===chSel)return;chSel=c;egyEd=0;chSelBtns();$('chbody').innerHTML=\"<p class='stub'>loading...</p>\";pollLoop();}\n"
 "function chEnter(){chSetTab(chTabCur);}\n"
-"function chSetTab(t){chTabCur=t;egyEd=0;['meter','phase','minmax','harmonics','waveform','report','vq','monthly','energy','demand','alarm','event'].forEach(function(x){var e=$('ct-'+x);if(e)e.className='gp-tab'+(x===t?' on':'');});var cc=$('chctl');if(cc)cc.style.display=(t==='harmonics')?'flex':'none';syncHv();$('chbody').innerHTML=\"<p class='stub'>loading...</p>\";pollLoop();}\n"
+"function chSetTab(t){chTabCur=t;egyEd=0;chSelBtns();['meter','phase','minmax','harmonics','waveform','report','vq','monthly','energy','demand','alarm','event'].forEach(function(x){var e=$('ct-'+x);if(e)e.className='gp-tab'+(x===t?' on':'');});var cc=$('chctl');if(cc)cc.style.display=(t==='harmonics')?'flex':'none';syncHv();$('chbody').innerHTML=\"<p class='stub'>loading...</p>\";pollLoop();}\n"
 "function chStat(ok){var e=$('chstat');if(e){e.className='ph2 '+(ok?'on':'bad');e.innerHTML=ok?'&#9679; live &#8635; 1s':'&#9679; read error';}}\n"
 "function chFail(){chStat(false);var b=$('chbody');if(b&&b.innerHTML.indexOf('loading')>=0)b.innerHTML=\"<p class='stub'>read error - retrying...</p>\";}\n"
-"function chCards(list,fn){var h=\"<div class='chgrid'>\";list.forEach(function(x){h+=`<div class='chcard'><div class='chh'>CH${x.n}${x.wiring!==undefined?' '+fbadge(x.wiring):''}</div>${fn(x)}</div>`;});return h+'</div>';}\n"
+"function chCards(list,fn){var h=\"<div class='chgrid one'>\";list.filter(function(x){return x.n===chSel;}).forEach(function(x){h+=`<div class='chcard'><div class='chh'>CH${x.n}${x.wiring!==undefined?' '+fbadge(x.wiring):''}</div>${fn(x)}</div>`;});return h+'</div>';}\n"
 "var lastCh=null;\n"
 "function nv(o){if(Array.isArray(o))return o.map(nv);if(o&&typeof o==='object'){var r={};for(var k in o)r[k]=nv(o[k]);return r;}return(typeof o==='number')?null:o;}\n"
 "function chBlank(list){return(list||[]).map(function(x){var o={};for(var k in x)o[k]=(k==='n'||k==='wiring')?x[k]:nv(x[k]);return o;});}\n"
@@ -2227,7 +2237,7 @@ static const char INDEX_HTML[] =
 " if(t==='report')return j('/api/en50160').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);var x=r.d.ch[0];if(!x)return;$('chbody').innerHTML=\"<div class='chcard'><div class='chh'>CH\"+x.n+\" · EN50160</div>\"+bReport(x)+bItic(r.d.itic2,'ITIC List (Voltage)','pgItic2')+'</div>';drawITIC('it'+x.n,r.d.itic2);}).catch(chFail);\n"
 " if(t==='vq')return j('/api/vq').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=bVq(r.d.rows);}).catch(chFail);\n"
 " if(t==='monthly')return j('/api/monthly').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=chCards(r.d.ch,bMonthly);}).catch(chFail);\n"
-" if(t==='alarm'||t==='event')return j('/api/sv300/events').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=chCards(CHN,function(x){return (t==='alarm'?bAlarm:bEvent)(x,r.d);});}).catch(chFail);\n"
+" if(t==='alarm'||t==='event')return j('/api/sv300/events').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);dAlm=[0,0,0,0];r.d.status.forEach(function(s){if(s.chn>=1&&s.chn<=3)dAlm[s.chn]++;});chSelBtns();$('chbody').innerHTML=chCards(CHN,function(x){return (t==='alarm'?bAlarm:bEvent)(x,r.d);});}).catch(chFail);\n"
 " return Promise.resolve();}\n"
 "function runCmd(ci){var c=CMDS[ci],id='c'+ci;\n"
 " if(c.utc){var v=$('u_'+id).value;if(!v){alert('Enter time');return;}var m=v.split(/[-T:]/),ep=Math.floor(Date.UTC(+m[0],+m[1]-1,+m[2],+m[3],+m[4],+m[5]||0)/1000);if(!confirm('Set Time to '+v.replace('T',' ')+' ?'))return;jp('/api/setreg',{addr:c.addr,type:'u32',val:ep}).then(function(r){cmdDone(r,c);});return;}\n"
@@ -2265,21 +2275,25 @@ static const char INDEX_HTML[] =
 "}\n"
 "tbtn();clk();setInterval(clk,1000);setInterval(pollLoop,1000);me();\n"
 "</script></body></html>\n";
+#endif
 
-/* 임베디드 SPA 서빙(고정 길이) */
+#include "web_index_gz.h"	/* INDEX_HTML_GZ[] — tools/gen_web_gz.ps1 자동 생성 */
+
+/* 임베디드 SPA 서빙(고정 길이, gzip — 현용 브라우저는 모두 gzip 지원) */
 static error_t serveIndex(HttpConnection *c)
 {
 	error_t e;
 	httpInitResponseHeader(c);
 	c->response.contentType   = "text/html";
-	c->response.contentLength = sizeof(INDEX_HTML) - 1;
+	c->response.contentLength = sizeof(INDEX_HTML_GZ);
+	c->response.gzipEncoding  = TRUE;	/* Content-Encoding: gzip */
 	c->response.keepAlive     = FALSE;
 	/* SPA는 펌웨어에 내장 — 캐시 지시자가 없으면 브라우저가 예전 페이지를 계속 써서
 	 * 펌웨어를 갱신해도 새 화면/로직이 반영되지 않는다(Chrome 휴리스틱 캐시). */
 	c->response.noCache       = TRUE;
 	e = httpWriteHeader(c);
 	if (e) return e;
-	e = httpWriteStream(c, INDEX_HTML, sizeof(INDEX_HTML) - 1);
+	e = httpWriteStream(c, INDEX_HTML_GZ, sizeof(INDEX_HTML_GZ));
 	if (e) return e;
 	return httpCloseStream(c);
 }

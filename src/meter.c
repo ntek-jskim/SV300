@@ -17,7 +17,7 @@
 #define	FW_VER	0004
 #define	FW_BUILD_YEAR 26
 #define	FW_BUILD_MON  11
-#define	FW_BUILD_DAY  9
+#define	FW_BUILD_DAY  11
 
 #define	SQRT_2	 1.414213562 
 
@@ -741,7 +741,14 @@ int buildSettings(int id)
 	else {	
 		// 200mA:1.5mA CT 만 지원한다 
 		meter[id].cntl.pga_ingain = 2;	// 4x
-		meter[id].cntl.igscale = IZ_FULL/RMS_MAX; 			
+		/* [26/11/10] ZCT Type(7606) 반영: 3=2000:1(QZ3CT), 2=200mA:1.5mA(3.2Ω 기준 재계산),
+		 *  0·1(기본값)=종전 상수 유지(미검증) */
+		if (db.ct[id].zctType == 3)
+			meter[id].cntl.igscale = IZ_FULL_2000/RMS_MAX;
+		else if (db.ct[id].zctType == 2)
+			meter[id].cntl.igscale = IZ_FULL/RMS_MAX;
+		else
+			meter[id].cntl.igscale = IZ_FULL_LEGACY/RMS_MAX;
 //		switch (db.ct[id].zctType) {
 //		case 0:	// none
 //			meter[id].cntl.pga_ingain = 0;	// 2x

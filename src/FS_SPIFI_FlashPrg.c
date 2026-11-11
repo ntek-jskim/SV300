@@ -152,10 +152,27 @@ static BOOL ReadData(U32 adr, U32 sz, U8 *buf)
 	return (__TRUE);
 }
 
+/* [TODO 4.1 진단] program FAIL(rc=0x20003) 원인 확인용.
+ *  options=0 은 S_ERASE_AS_REQD 와 같아서, 대상에 0→1 이 필요한 비트가 있으면 ROM 이 섹터를 지우고 다시 쓴다.
+ *  쓰기 전 기존 내용을 확인해 "지우기 필요" 여부와 실패 시 기존/새/쓴 후 내용을 출력한다. */
+#define PRG_DIAG_N	16
+
+static void prgDiagDump(const char *tag, const volatile uint8_t *p, uint32_t n)
+{
+	uint32_t i;
+	printf("[SPIFI]   %s:", tag);
+	for (i = 0; i < n; i++)
+		printf(" %02x", (unsigned)p[i]);
+	printf("\n");
+}
+
 static BOOL ProgramPage(U32 adr, U32 sz, U8 *buf)
 {
 	SPIFIopers opers;
 	int32_t rc;
+	uint8_t oldv[PRG_DIAG_N];
+	const volatile uint8_t *mp;
+	uint32_t i, n, needErase = 0;
 
 	if (s_rom == NULL || buf == NULL || sz == 0U) {
 		return (__FALSE);
@@ -176,12 +193,36 @@ static BOOL ProgramPage(U32 adr, U32 sz, U8 *buf)
 	opers.protect = -1;
 	opers.options = S_NO_VERIFY;
 
+	/* [TODO 4.1 진단] 쓰기 전 기존 내용 확인(메모리 모드에서 읽음) */
+	s_rom->set_mem_mode(&s_spifi_obj);
+	mp = (const volatile uint8_t *)((uintptr_t)s_spifi_obj.base + (uintptr_t)adr);
+	n = (sz < PRG_DIAG_N) ? sz : PRG_DIAG_N;
+	for (i = 0; i < sz; i++) {
+		uint8_t o = mp[i];
+		if (i < n)
+			oldv[i] = o;
+		if ((o & buf[i]) != buf[i])
+			needErase++;
+	}
+
 	g_sdBusy = 1;		/* [Quiet Capture] flash 쓰기 활동 표시 */
 	s_rom->cancel_mem_mode(&s_spifi_obj);
 	rc = s_rom->spifi_program(&s_spifi_obj, (char *)buf, &opers);
 	s_rom->set_mem_mode(&s_spifi_obj);
-	if (rc != 0)
-		printf("[SPIFI] program FAIL adr=0x%08x sz=%u rc=%d\n", (unsigned)adr, (unsigned)sz, (int)rc);
+	if (rc != 0) {
+		printf("[SPIFI] program FAIL adr=0x%08x sz=%u rc=%d needErase=%u\n",
+		       (unsigned)adr, (unsigned)sz, (int)rc, (unsigned)needErase);
+		prgDiagDump("old", oldv, n);
+		prgDiagDump("new", buf, n);
+		prgDiagDump("now", mp, n);
+	}
+	else if (needErase) {
+		/* 성공했지만 ROM 이 섹터 지우기를 끼워 넣은 경우 — 가설 A 확인용 */
+		printf("[SPIFI] program ERASE_REQD ok adr=0x%08x sz=%u needErase=%u\n",
+		       (unsigned)adr, (unsigned)sz, (unsigned)needErase);
+		prgDiagDump("old", oldv, n);
+		prgDiagDump("new", buf, n);
+	}
 	return (rc == 0) ? (__TRUE) : (__FALSE);
 }
 

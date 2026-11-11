@@ -2030,7 +2030,7 @@ typedef struct {
 	float		Upp[4];			// +14 U12,U23,U31,평균		<- meter.Upp[0..3] (Upp[3]=선간전압 평균)
 	float		Uangle[3];		// +22 Angle U1,U2,U3 (V Phase)	<- meter.Uangle[0..2]  (260812 신설)
 	float		I[4];			// +28 I1,I2,I3,평균		<- meter.I[0..3] (I[3]=상전류 평균, cbStatus 기준)
-	float		In;				// +36 누설전류			<- meter.In
+	float		Ig;				// +36 Ig 누설전류		<- meter.Ig (맵 261110: In→Ig, 단상 피더는 0)
 	float		Iangle[3];		// +38 Angle I1,I2,I3 (Cur Phase)	<- meter.Iangle[0..2]  (260812 신설)
 	float		P[3];			// +44 P1,P2,P3			<- meter.P[0..2]
 	float		Ptot;			// +50 P total			<- meter.P[3]

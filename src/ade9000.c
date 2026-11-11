@@ -316,6 +316,11 @@ void setGainU(int id, float ref)
 		uGainSel(id, i, &z[i], &pt[i]);
 		if (meter[id].meter.U[i] <= 0)
 			continue;
+		/* [26/11/10] 전류·전력·In 과 같은 ±20% 가드 — 기준값 오입력(예: 소스 110V·기준 220)이 그대로 저장되는 것 방지 */
+		if (fabs(ref/meter[id].meter.U[i] - 1) > 0.2) {
+			printf("vg : M%d slot%d skip (ref %.1f / meas %.1f > 20%%)\n", id, i, ref, meter[id].meter.U[i]);
+			continue;
+		}
 		pvg[i][z[i]][pt[i]] = gainCompose(pvg[i][z[i]][pt[i]], ref/meter[id].meter.U[i]);
 	}
 
@@ -333,12 +338,15 @@ void setGainUpp(int id, float ref)
 
 	uGainSel(id, 0, NULL, &pt);		/* 3P3W 는 미터 통째 — 피더 PT2 */
 
-	if (meter[id].meter.U[0] > 0)
+	/* [26/11/10] ±20% 가드(setGainU 와 동일) */
+#define UPP_OK(m)	((m) > 0 && fabs(ref/(m) - 1) <= 0.2)
+	if (UPP_OK(meter[id].meter.U[0]))
 		pvg[0][0][pt] = gainCompose(pvg[0][0][pt], ref/meter[id].meter.U[0]);
-	if (meter[id].meter.U[1] > 0)
+	if (UPP_OK(meter[id].meter.U[1]))
 		pvg[2][2][pt] = gainCompose(pvg[2][2][pt], ref/meter[id].meter.U[1]);
-	if (meter[id].meter.U[2] > 0)
+	if (UPP_OK(meter[id].meter.U[2]))
 		pvg[1][1][pt] = gainCompose(pvg[1][1][pt], ref/meter[id].meter.U[2]);
+#undef UPP_OK
 
 	meter[id].cntl.wCalF[0] = meter[id].cntl.wCalF[1] = 1;
 	printf("vpp_g : ref(%f), %d, %d, %d\n", ref, pvg[0][0][pt], pvg[1][1][pt], pvg[2][2][pt]);
@@ -1753,9 +1761,8 @@ void calcRmsAngle(int id) {
 #ifdef	VFRMS
 	int fsum[3], fmean;
 #endif
-	float rms, fv;
 	METER_REGS *preg = &ade9000[id].sr[ade9000[id].re];
-	
+
 	if (meter[id].cntl.rmsInit) {
 		
 		meter[id].cntl.Isum = 0;
@@ -1800,17 +1807,20 @@ void calcRmsAngle(int id) {
 
 		}
 		
-		meter[id].cntl.Isum = rms;
+		/* [26/11/10 버그수정] 종전 'cntl.Isum = rms;'(미초기화 rms)가 상전류 합을 덮어써
+		 *  거의 항상 0 분기 → In·Is(=3P4W Ig) 0. 덮어쓰기 제거 */
 		// Isum = IA + IB + IC
 		if(meter[id].cntl.Isum == 0.) {
 			meter[id].cntl.In = meter[id].cntl.Is = 0;
 		}
 		else {
-			insum = average_without_min_max(preg->inrms, 10);
-			meter[id].cntl.In1 = scaleIgrms1(id, insum/8);	
-			meter[id].cntl.In = scaleIgrms(id, insum/8);		// 3P4W에서는 Neutral Current 이지만, 3P3W에서는 누설전류가 된다 
-			issum = average_without_min_max(preg->isrms, 10);
-			meter[id].cntl.Is = scaleIrms(id, issum/8);			// 일반전류와 같은 scale 사용한다 
+			/* [26/11/10 버그수정] 버퍼는 [6]·유효 샘플 0..4(5개) → 종전 10개 평균은 배열 밖(urms_1012 등) 읽음.
+			 *  5개 중 최소·최대 제외 3개 평균 */
+			insum = average_without_min_max(preg->inrms, 5);
+			meter[id].cntl.In1 = scaleIgrms1(id, insum/3);
+			meter[id].cntl.In = scaleIgrms(id, insum/3);		// 3P4W에서는 Neutral Current 이지만, 3P3W에서는 누설전류가 된다
+			issum = average_without_min_max(preg->isrms, 5);
+			meter[id].cntl.Is = scaleIrms(id, issum/3);			// 일반전류와 같은 scale 사용한다
 		}
 							
 		// Freq		
@@ -1967,20 +1977,18 @@ void calcRmsAngle(int id) {
 			meter[id].meter.Upp[0] = calcLineVolt(id, 0);
 			meter[id].meter.Upp[1] = calcLineVolt(id, 1);
 			meter[id].meter.Upp[2] = calcLineVolt(id, 2);		
-			meter[id].meter.Upp[3] = average(meter[id].meter.Upp, 3);		
-			meter[id].meter.Ig = meter[id].meter.Isum;	
+			meter[id].meter.Upp[3] = average(meter[id].meter.Upp, 3);
+			/* [26/11/10] 메모리맵 261110 #1CH 72: Ig = In(Measured) — N채널 = ZCT(I1+I2+I3+In) 누설.
+			 *  종전 Isum(Ia+Ib+Ic 벡터합 = 계산 중성선전류)은 In(Calculated)@70 으로만 제공 */
+			meter[id].meter.Ig = meter[id].meter.In;
 		}
 		else if (db.pt[id].wiring == WM_3LL3CT || db.pt[id].wiring == WM_3LL2CT) {
 			meter[id].meter.Upp[0] = meter[id].meter.U[0];	// U12
 			meter[id].meter.Upp[1] = meter[id].meter.U[1];	// U23
 			meter[id].meter.Upp[2] = meter[id].meter.U[2];	// U31		
 			meter[id].meter.Upp[3] = average(meter[id].meter.Upp, 3);
-#if 1
-			fv = meter[id].meter.In;
-			if(fv>2)
-				fv = 2;
-			meter[id].meter.Ig = fv;	
-#endif
+			/* [26/11/10] 메모리맵 261110: Ig = In(Measured) — QZ3CT 의 ZCT(I1+I2+I3) 누설. 종전 2A 상한 제거 */
+			meter[id].meter.Ig = meter[id].meter.In;
 		}
 		else if (db.pt[id].wiring == WM_1LL2CT) {
 			meter[id].meter.Upp[0] = meter[id].meter.U[0];	//V1-V2

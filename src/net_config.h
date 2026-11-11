@@ -223,5 +223,7 @@
 #define HTTP_SERVER_PERSISTENT_CONN_SUPPORT ENABLED
 //지속 커넥션 idle 타임아웃 — 다음 요청 대기(재사용은 1s 주기라 유지, 여분 커넥션은 3s 후 해제)
 #define HTTP_SERVER_IDLE_TIMEOUT 3000
+//gzip 응답 — 내장 웹(web.c serveIndex)을 압축본(INDEX_HTML_GZ)으로 보내 내부 플래시 절약(Content-Encoding: gzip)
+#define HTTP_SERVER_GZIP_TYPE_SUPPORT ENABLED
 
 #endif

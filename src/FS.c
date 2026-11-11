@@ -542,6 +542,22 @@ static void cmd_wgain(char *par) {
 	setGainW(0, 220, 1.6);
 }
 
+/* [26/11/10] In(ZCT) 진단: 설정·스케일·칩게인·오프셋모델과 단계별 값.
+ *  In1 = 원시RMS×igscale(오프셋 전), cntl.In = 오프셋·기울기 차감 후, meter.In = ×zctScale/1000 */
+static void cmd_indiag(char *par) {
+	int id;
+	for (id = 0; id < METER_CH_COUNT; id++) {
+		printf("[INDIAG M%d] CT2=%d zctType=%d zctScale=%d pga_in=%d igscale=%e iscale=%e\n", id,
+			db.ct[id].CT2, db.ct[id].zctType, db.ct[id].zctScale, meter[id].cntl.pga_ingain,
+			meter[id].cntl.igscale, meter[id].cntl.iscale);
+		printf("[INDIAG M%d] Ingain=%d In_offset=%e In_Slope=%e Iavg=%.4f\n", id,
+			pcal->Ingain[id][0], pcal->In_offset[id][0], pcal->In_Slope[id][0], meter[id].meter.I[3]);
+		printf("[INDIAG M%d] raw=%.0f In1=%.5f cntl.In=%.5f meter.In=%.5f Isum(calc)=%.5f\n", id,
+			(meter[id].cntl.igscale > 0) ? meter[id].cntl.In1 / meter[id].cntl.igscale : 0.f,
+			meter[id].cntl.In1, meter[id].cntl.In, meter[id].meter.In, meter[id].meter.Isum);
+	}
+}
+
 static void cmd_clrvgain(char *par) {
 	clrGainU(0);
 }
@@ -1111,6 +1127,7 @@ static const SCMD cmd[] = {
 	"IG", cmd_igain,
 	"PH", cmd_phgain,
 	"WG", cmd_wgain,
+	"INDIAG", cmd_indiag,		/* In(ZCT) 계측 경로 진단 */
 	"CLRVG", cmd_clrvgain,
 	"CLRIG", cmd_clrigain,
 	"CLRPH", cmd_clrph,

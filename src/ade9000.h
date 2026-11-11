@@ -551,7 +551,15 @@ extern ADE9000_REG ade9000[];
 #define	I_SCALE_RCT_50Hz (I_FULL_RCT_50Hz/RMS_MAX)
 #define	CFxDEN_100mA		 (3030 + 60)	//(0xbd6)
 
-#define	IZ_FULL				(3.571)	// 200mA:1.5mA, 4x 기준
+/* ZCT Type 2 = 200mA:1.5mA. [26/11/10] 종전 3.571 은 부담 6.6Ω 기준 → V082(3.2Ω)에선 1/2.06 으로 표시.
+ *  0.7071/4/3.2Ω×(200/1.5) = 7.366A (IZ_FULL_2000 과 같은 근거) */
+#define	IZ_FULL				(0.7071/4/3.2*(200/1.5))
+/* ZCT Type 0·1(기본값 1 = 200mA:100mV 전압출력) — V082 미검증이라 종전 상수 유지 */
+#define	IZ_FULL_LEGACY		(3.571)
+/* [26/11/10] ZCT Type 3 = 200mA:0.1mA(2000:1, QZ3CT). 보드 V082 CT#4(N) 부담저항 RB 1.6Ω×2 = 3.2Ω(상 CT 와 동일),
+ *  칩 입력 최대 0.7071Vrms@1x(I_FULL_100mA 와 같은 근거) → PGA 4x: 0.7071/4/3.2Ω×2000 = 110.5A.
+ *  실측(1A 잔류) 역산 113.3A 와 +2.5% — 잔차는 Neutral Cali 로 보정 */
+#define	IZ_FULL_2000		(0.7071/4/3.2*2000)
 
 // 0.001 -> 0.0005로 변경
 #define	I_NOLOAD_5A			(1.0*0.0005)	// (2.5*0.0005)
