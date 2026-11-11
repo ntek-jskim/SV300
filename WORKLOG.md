@@ -9,6 +9,23 @@
 
 ---
 
+# 2026-11-11
+버전: **V00.04** (내장웹만 변경, 펌웨어 계측 로직 변경 없음)
+
+## 1. 내장웹 레이아웃 정리 (`6ead302` update1, 11/10)
+- Dashboard 를 한 화면에 맞춤: 상·하 2단 카드가 화면 높이를 꽉 채우고, 1100px 이하에서는 1열·자동 높이
+- 값 글자 확대(평균 V/I/Hz, 상별 V/I, Unbalance, THD/TDD, PF 게이지 가변), Alarm/Event 목록은 카드 안 스크롤
+- Feeder 카드 3열 고정·값 확대, IO 표 값 확대, 라이트 테마 색 보정, 화면 폭 제한 해제
+
+## 2. Dashboard 채널 선택·전력량 (`7a65987`)
+- `/api/dashboard?ch=N` — CH1~3 순시치(없음/범위 밖 → CH1), 응답에 `ch`·`imp_kwh`·`exp_kwh` 추가. IOM 은 CH1 고정(IO 페이지 호환)
+- 제목 `Dashboard - CHn` 옆에 CH1/CH2/CH3 버튼(2채널 모델은 CH3 숨김), 버튼 글자색 = 채널별 활성 알람 OR(적색 있음 / 그린 없음, 3초 주기 갱신)
+- Power 카드 → `Power Factor · Power · Energy`, P/Q/S 아래 Imp./Exp. 한 박스, 단위 kWh → MWh → GWh 자동 변환
+- 사이드 메뉴 마우스오버 밑줄 제거
+- 내장 JS 문법만 확인(node), Keil 빌드·실기 화면 확인 필요 → [TODO.md](TODO.md) 3.8
+
+---
+
 # 2026-11-10
 버전: **V00.04** (초기 납품 버전, main = web)
 

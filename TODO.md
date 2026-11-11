@@ -108,6 +108,17 @@
   4. 한 상만 전류를 빼고 `4` → 그 상은 `skip (no current…)`, 기존 값 유지
   5. PF 1(0°)에서 실수로 `4` → angle ≈0° 로 찍히고, 무효전력 부호에 따라 `REJECT` 또는 `skip (angle -60… out of range)`, 어느 쪽이든 보정값 변화 없음
 
+### 3.8 내장웹 Dashboard 채널 선택·전력량 (`6ead302`, `7a65987`)
+- **상태**: 코드 반영, 내장 JS 문법(node --check)만 확인. Keil 빌드·실기 화면 미확인
+- **현상(수정 전)**: Dashboard 는 CH1 값만 보였고 전력량 표시가 없었음
+- **해결(반영됨)** ([web.c](src/web.c)): `/api/dashboard?ch=N`, 제목 옆 CH1~3 버튼(알람 OR 색), Power 카드 Imp./Exp. kWh/MWh/GWh 자동 단위
+- **시험 방법**
+  1. Keil 빌드 0E/0W, 플래시 여유 확인(내장 HTML 약 +1KB)
+  2. CH1·CH2·CH3 버튼 → 제목 `Dashboard - CHn` 과 값이 Feeder 화면의 해당 채널과 일치, Imp. 값이 Feeder `Import` 와 일치
+  3. 한 채널에만 알람 발생 → 그 버튼만 적색(최대 3초 지연), 알람 해제 → 그린
+  4. 2채널 모델에서 CH3 버튼 숨김, `/api/dashboard?ch=3`·`?ch=9` → CH1 값
+  5. 낮은 해상도(높이 768px 이하)·라이트 테마에서 Power 박스 4줄이 잘리지 않는지
+
 ---
 
 ## 4. 장시간 운전 안정성

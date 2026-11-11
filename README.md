@@ -13,7 +13,7 @@ CycloneTCP(웹·Modbus TCP·FTP·mDNS·SNMP·MQTT) + RTX, 내장웹(web.c) + 외
 ### 1.1 작업 기록
 | 문서 | 내용 |
 |---|---|
-| [WORKLOG.md](WORKLOG.md) | 날짜별 작업 요약 (최신이 위) |cl
+| [WORKLOG.md](WORKLOG.md) | 날짜별 작업 요약 (최신이 위) |
 | [TODO.md](TODO.md) | 미해결 / 별건 / 실기 검증 대기 작업 |
 | [FWUPDATE](FWUPDATE) | 파일·함수 단위 상세 변경 이력 (커밋마다 갱신) |
 | [src/README.TXT](src/README.TXT) | 2026-02 ~ 10-07 버전별 이력 원본 — **보존용, 더 이상 갱신 안 함** |
