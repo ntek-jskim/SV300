@@ -156,6 +156,17 @@
   4. 소스 220 V 에서 Volt 기준 110 입력 → Voltage Cali → 콘솔 `vg : … skip`, 전압 표시 변화 없음
   5. 기준 220 으로 되돌려 Voltage Cali → 정상 교정(`vg :` 값 갱신)
 
+### 3.11 단상 피더 4~9 배정 (26/11/12 수정)
+- **상태**: Keil 빌드(`SV300_3CH_app_16M`) 0E/0W, 실기 미확인
+- **현상(수정 전)**: PT 1~9 를 1P2W 로 저장·재부팅해도 CH2~3 전압 위상이 0/240/120, 내장웹 Feeder 화면에 3개만 표시
+- **문제(수정 전)**: `buildFeederMap` 이 `feeder_cnt`(기본값 3)개만 스캔, 부팅 시 칩 초기화가 `feeder_cnt` 재계산보다 먼저 실행
+- **해결(반영됨)**: [meter.c `buildFeederMap`](src/meter.c) PT 전체 스캔(NOT_USED 건너뜀), [web.c `apiFeeders`](src/web.c) 피더 단위 출력
+- **시험 방법**
+  1. PT 1~9 = 1P2W L1 저장·재부팅 → Channel 화면 CH1~3 Angle U 모두 0/0/0, 채널마다 세 상 전압 동일
+  2. Feeder 화면 #1~#9 표시, 각 피더 L1 자리에만 전압·전류, Import 가 피더별로 다름
+  3. PT 1~3 = 3P4W 로 되돌림 → Feeder 3개, 위상 0/240/120(회귀 없음)
+  4. 1P2W L1/L2/L3 혼합 결선 → 각 슬롯 전압이 지정 상과 일치, Modbus Simple 맵(50000~) 값과 Feeder 화면 일치
+
 ---
 
 ## 4. 장시간 운전 안정성

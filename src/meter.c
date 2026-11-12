@@ -1171,25 +1171,26 @@ uint16_t countFeeders(PT_DEF *pt)
 	return n;
 }
 
-/* pdb->pt[0..feeder_cnt-1].wiring 을 순차 스캔해 논리 피더를 물리 미터/CT슬롯에 배정.
+/* pdb->pt[0..MAX_CH-1].wiring 을 순차 스캔해 논리 피더를 물리 미터/CT슬롯에 배정 (NOT_USED 는 건너뜀·valid=0).
  *  단상(IS_WM_1LN1CT)은 미터 하나의 CT 슬롯 0/1/2를 순차 소비, 이미 쓴 슬롯이면 다음 미터로.
  *  그 외 활성 배선은 미터를 통째로 사용. meter >= METER_CH_COUNT 이면 valid=0(초과분 미배정).
+ *  feeder_cnt 에 의존하지 않음 — 부팅 시 initADE9000(ADC_REDIRECT/UGAIN)이 copySimpleMap 의
+ *  feeder_cnt 갱신보다 먼저 돌아 기본값(METER_CH_COUNT)으로 1~3 피더만 배정되던 문제 수정.
  *  반환: 유효 배정된 피더 수. */
 int buildFeederMap(FEEDER_MAP map[MAX_CH])
 {
 	int f, nvalid=0;
-	int nfeeder = pdb->feeder_cnt;
 	int meterIdx = -1;		/* 현재 미터 인덱스 */
 	int slot = 3;			/* 현재 단상 미터에서 다음 CT 슬롯(3=열린 미터 없음) */
 	int curSingle = 0;
 
-	if (nfeeder > MAX_CH)
-		nfeeder = MAX_CH;
-
 	memset(map, 0, sizeof(FEEDER_MAP) * MAX_CH);
 
-	for (f = 0; f < nfeeder; f++) {
+	for (f = 0; f < MAX_CH; f++) {
 		uint16_t wm = pdb->pt[f].wiring;
+
+		if (wm == NOT_USED)
+			continue;
 
 		if (IS_WM_1LN1CT(wm)) {
 			if (!curSingle || slot >= 3) {

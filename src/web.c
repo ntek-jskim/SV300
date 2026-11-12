@@ -428,38 +428,63 @@ static error_t apiDashboard(HttpConnection *c)
 /* HWMODEL 채널 수(측정 루프 바운드) — getHwCh(2/3)를 배열 크기(METER_CH_COUNT)로 캡 */
 static int webNch(void) { int n = getHwCh(); return (n > METER_CH_COUNT) ? METER_CH_COUNT : n; }
 
-/* GET /api/feeders — 채널(피더)별 3상 계측 + 전력·에너지 */
+/* GET /api/feeders — 논리 피더(buildFeederMap, 최대 MAX_CH)별 계측 + 전력·에너지
+ *  3상 피더: 미터 통째. 단상 피더: CT 슬롯(slot) 값을 wiring 상(vphase) 자리에 넣고 나머지 상은 0
+ *  (Simple 맵 smpFill1ph 와 동일 규칙, Ig/Upp/불평형은 단상에서 0). */
 static error_t apiFeeders(HttpConnection *c)
 {
 	char b[256];
-	int i, first = 1;
+	FEEDER_MAP map[MAX_CH];
+	int f, k, first = 1;
 
+	buildFeederMap(map);
 	if (beginJson(c)) return ERROR_WRITE_FAILED;
 	w(c, "{\"ok\":true,\"feeders\":[");
-	for (i = 0; i < webNch(); i++) {
-		METERING *m = &meter[i].meter;
-		double kwh  = (double)meter[i].egy.Ereg64.cell[0][0][0] / 1000.0;   /* TOTAL,KWH,IMPORT (Wh→kWh) */
-		double kwhM = (double)meter[i].egy.Ereg32[1].cell[0][0][0] * 0.1;   /* THIS_MONTH (0.1kWh) */
-		unsigned wiring = (unsigned)meter[0].setting.pt[i].wiring;
+	for (f = 0; f < MAX_CH; f++) {
+		METERING *m;
+		int id = map[f].meter, s = map[f].slot, g;	/* g: 에너지 그룹(0=Total, 1+slot=상) */
+		float u[3] = {0}, upp[3] = {0}, cur[3] = {0}, thdu[3] = {0}, thdi[3] = {0}, tddi[3] = {0};
+		float ig = 0, pf, p, q, sv, uunb = 0, iunb = 0;
+		double kwh, kwhM;
 
-		if (wiring == NOT_USED) continue;	/* feeder_cnt 반영: 미사용(NOT_USED) 채널 제외 */
+		if (!map[f].valid || id >= webNch()) continue;	/* NOT_USED·미배정 피더 제외 */
+		m = &meter[id].meter;
+
+		if (map[f].is3ph) {
+			for (k = 0; k < 3; k++) {
+				u[k] = m->U[k]; upp[k] = m->Upp[k]; cur[k] = m->I[k];
+				thdu[k] = m->THD_U[k]; thdi[k] = m->THD_I[k]; tddi[k] = m->TDD_I[k];
+			}
+			ig = m->Ig;	/* 맵 261110: 피더 In→Ig */
+			pf = m->PF[3]; p = m->P[3]; q = m->Q[3]; sv = m->S[3];
+			uunb = m->Ubal[0]; iunb = m->Ibal[0];
+			g = 0;
+		} else {
+			k = map[f].vphase;	/* redirect로 U[slot]가 해당 상 전압 */
+			u[k] = m->U[s]; cur[k] = m->I[s];
+			thdu[k] = m->THD_U[s]; thdi[k] = m->THD_I[s]; tddi[k] = m->TDD_I[s];
+			pf = m->PF[s]; p = m->P[s]; q = m->Q[s]; sv = m->S[s];
+			g = 1 + s;
+		}
+		kwh  = (double)meter[id].egy.Ereg64.cell[g][0][0] / 1000.0;   /* KWH,IMPORT (Wh→kWh) */
+		kwhM = (double)meter[id].egy.Ereg32[1].cell[g][0][0] * 0.1;   /* THIS_MONTH (0.1kWh) */
 
 		snprintf(b, sizeof(b),
 			"%s{\"n\":%d,\"wiring\":%u,\"freq\":%.2f,"
 			"\"u\":[%.1f,%.1f,%.1f],\"upp\":[%.1f,%.1f,%.1f],"
-			"\"i\":[%.2f,%.2f,%.2f],\"ig\":%.2f,",	/* 맵 261110: 피더 In→Ig */
-			first ? "" : ",", i + 1, wiring, m->Freq,
-			m->U[0], m->U[1], m->U[2], m->Upp[0], m->Upp[1], m->Upp[2],
-			m->I[0], m->I[1], m->I[2], m->Ig);
+			"\"i\":[%.2f,%.2f,%.2f],\"ig\":%.2f,",
+			first ? "" : ",", f + 1, (unsigned)pdb->pt[f].wiring, m->Freq,
+			u[0], u[1], u[2], upp[0], upp[1], upp[2],
+			cur[0], cur[1], cur[2], ig);
 		w(c, b);
 		snprintf(b, sizeof(b),
 			"\"thdu\":[%.1f,%.1f,%.1f],\"thdi\":[%.1f,%.1f,%.1f],\"tddi\":[%.1f,%.1f,%.1f],"
 			"\"pf\":%.3f,\"p\":%.3f,\"q\":%.3f,\"s\":%.3f,\"uunb\":%.1f,\"iunb\":%.1f,"
 			"\"kwh\":%.2f,\"kwh_m\":%.2f,\"st\":%u}",
-			m->THD_U[0], m->THD_U[1], m->THD_U[2], m->THD_I[0], m->THD_I[1], m->THD_I[2],
-			m->TDD_I[0], m->TDD_I[1], m->TDD_I[2],
-			m->PF[3], m->P[3] / 1000.0f, m->Q[3] / 1000.0f, m->S[3] / 1000.0f,
-			m->Ubal[0], m->Ibal[0], kwh, kwhM, (unsigned)(m->meterStatus ? 1 : 0));
+			thdu[0], thdu[1], thdu[2], thdi[0], thdi[1], thdi[2],
+			tddi[0], tddi[1], tddi[2],
+			pf, p / 1000.0f, q / 1000.0f, sv / 1000.0f,
+			uunb, iunb, kwh, kwhM, (unsigned)(m->meterStatus ? 1 : 0));
 		w(c, b);
 		first = 0;
 	}
