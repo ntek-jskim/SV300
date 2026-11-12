@@ -450,8 +450,8 @@ void fft_average(int id, int cond) {
 /* ── [Goertzel 측정freq 엔진] 8k 창의 63고조파를 실측 h·f에서 직접 평가(coeff=2cos(2π·h·f/8000)). ──
    CZT(157ms×9)+리샘플(K-flip) 대체. 단일패스 63고조파 동시갱신, H1정규화, gain OOB회피 h<63.
    g_fftGoertzel=1(기본), 0=CZT 폴백(공칭 bin). RSTP 검증(CZT==GZ) 기반의 측정주파수 변형. */
-static float g_gzCoeff[64];
-static float g_gzS1[64], g_gzS2[64];
+static float g_gzCoeff[65];		/* [1..64] — 64차는 8개 묶음 계산용 여분(결과 미사용) */
+static float g_gzS1[65], g_gzS2[65];
 static float g_gzFreqM = 0;			/* 캐시된 측정주파수(변경시만 계수 재계산) */
 int g_fftGoertzel = 1;
 
@@ -464,17 +464,45 @@ float FFT_goertzel(float sample[], int n, float freq, int sel, uint16_t *pHD) {
 	float *cf = g_gzCoeff, *s1 = g_gzS1, *s2 = g_gzS2;
 
 	if (g_gzFreqM != freq) {		/* 측정주파수 변경시만: 각 고조파를 실측 h·f에서 평가(리샘플 불요) */
-		for (h=1; h<=63; h++)
+		for (h=1; h<=64; h++)		/* 64차는 8개 묶음용 여분 */
 			cf[h] = 2.0f * (float)cos(2.0*PI*(double)h*(double)freq/8000.0);
 		g_gzFreqM = freq;
 	}
-	for (h=1; h<=63; h++) { s1[h]=0; s2[h]=0; }
-	for (i=0; i<n; i++) {			/* [CM4최적화] 샘플 1회 읽고 63고조파 동시 갱신 */
-		float x = sample[i];
-		for (h=1; h<=63; h++) {
-			float s0 = x + cf[h]*s1[h] - s2[h];
-			s2[h] = s1[h]; s1[h] = s0;
+	/* [CPU 26/11/12, SV400 3a7762f 이식] 고조파 8개씩 묶어 상태(s1,s2)·계수를 레지스터에 두고 샘플 전체를 돈다.
+	 *  종전(샘플마다 63고조파 배열 load/store)은 FFTTEST 29ms → 7ms, SV400 전압+전류 1채널 CPU 72~76% → 33~34%.
+	 *  고조파별 연산식·순서는 종전과 동일(s0 = x + c*s1 - s2) → 결과 동일. 64차는 계산만 하고 버림. */
+	for (h=1; h<=64; h+=8) {
+		float c0=cf[h],   c1=cf[h+1], c2=cf[h+2], c3=cf[h+3];
+		float c4=cf[h+4], c5=cf[h+5], c6=cf[h+6], c7=cf[h+7];
+		float a0=0,a1=0,a2=0,a3=0,a4=0,a5=0,a6=0,a7=0;	/* s1 */
+		float b0=0,b1=0,b2=0,b3=0,b4=0,b5=0,b6=0,b7=0;	/* s2 */
+		float t;
+		/* 샘플 2개씩: 첫 샘플은 새 s1 을 b 에(이때 a 가 s2), 둘째 샘플은 다시 a 에 → 상태 교환 VMOV 제거.
+		 *  식은 그대로 x + c*s1 - s2. n 홀수면 마지막 1개는 아래에서 종전 방식. */
+		for (i=0; i+1<n; i+=2) {
+			float x = sample[i], y = sample[i+1];
+			b0 = x + c0*a0 - b0;  a0 = y + c0*b0 - a0;
+			b1 = x + c1*a1 - b1;  a1 = y + c1*b1 - a1;
+			b2 = x + c2*a2 - b2;  a2 = y + c2*b2 - a2;
+			b3 = x + c3*a3 - b3;  a3 = y + c3*b3 - a3;
+			b4 = x + c4*a4 - b4;  a4 = y + c4*b4 - a4;
+			b5 = x + c5*a5 - b5;  a5 = y + c5*b5 - a5;
+			b6 = x + c6*a6 - b6;  a6 = y + c6*b6 - a6;
+			b7 = x + c7*a7 - b7;  a7 = y + c7*b7 - a7;
 		}
+		for (; i<n; i++) {
+			float x = sample[i];
+			t = x + c0*a0 - b0; b0 = a0; a0 = t;
+			t = x + c1*a1 - b1; b1 = a1; a1 = t;
+			t = x + c2*a2 - b2; b2 = a2; a2 = t;
+			t = x + c3*a3 - b3; b3 = a3; a3 = t;
+			t = x + c4*a4 - b4; b4 = a4; a4 = t;
+			t = x + c5*a5 - b5; b5 = a5; a5 = t;
+			t = x + c6*a6 - b6; b6 = a6; a6 = t;
+			t = x + c7*a7 - b7; b7 = a7; a7 = t;
+		}
+		s1[h]=a0; s1[h+1]=a1; s1[h+2]=a2; s1[h+3]=a3; s1[h+4]=a4; s1[h+5]=a5; s1[h+6]=a6; s1[h+7]=a7;
+		s2[h]=b0; s2[h+1]=b1; s2[h+2]=b2; s2[h+3]=b3; s2[h+4]=b4; s2[h+5]=b5; s2[h+6]=b6; s2[h+7]=b7;
 	}
 	for (h=1; h<=63; h++)
 		mag[h] = (float)sqrt((double)(s1[h]*s1[h] + s2[h]*s2[h] - cf[h]*s1[h]*s2[h]));
