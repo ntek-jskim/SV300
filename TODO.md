@@ -176,6 +176,16 @@
   2. 전압+전류 인가 상태 `CPU` 부하가 최적화 전보다 크게 낮은지(가능하면 3채널 전류)
   3. 웹 Harmonics·THD 값이 최적화 전과 같은지
 
+### 3.13 SV400 이식분 — DI·온도·내장웹 글꼴 (26/11/12)
+- **상태**: 3CH 빌드 0E/0W(DI·글꼴). **2CH 온도 코드(`SV300_app`) 미컴파일**. SV400 에서 온도 4점·Temp Cali 실기 완료
+- **시험 방법**
+  1. `SV300_app`(2CH) 빌드 0E/0W 확인 (종전 `mci0_drv` 링크 오류는 별개)
+  2. 2CH: NTC 연결 시 IO 화면 TEMP 가 실내 온도(℃), 분리 시 0
+  3. 2CH: confWebApp Temp-ref 입력 → Temp Cali → TEMP1~4 가 기준으로, 재부팅 후 유지(TEMP4 = `ntcOfs4`), Temp Init → 원래 값
+  4. SV300_boot 로 MAC/SN 저장 후에도 TEMP4 오프셋 유지되는지(부트로더가 METER_CAL 을 읽어 다시 쓰는지)
+  5. DI: 부팅 직후 상태 변화 없음, IO 화면 Debounce 16
+  6. 내장웹 Feeder·IO 글꼴이 Channel 화면과 같은 크기·굵기
+
 ---
 
 ## 4. 장시간 운전 안정성

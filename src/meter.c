@@ -558,6 +558,13 @@ int initSettings(int id)
 
 		db.freq = 0;	/* 0:60Hz, 1:50Hz */
 		db.feeder_cnt = METER_CH_COUNT;
+
+		/* IO 설정 — DI Debounce 기본 16ms(운영범위 4~64, 종전엔 기본값 없어 0 표시) */
+		{
+			int k;
+			for (k = 0; k < (int)(sizeof(db.iom.debounce) / sizeof(db.iom.debounce[0])); k++)
+				db.iom.debounce[k] = 16;
+		}
 	}
 
 	db.pt[id].wiring = WM_3LN3CT;
@@ -599,6 +606,10 @@ int buildSettings(int id)
 	if (db.pt[id].vnorm == 0)   db.pt[id].vnorm = 220;		/* 정격전압 default 220 */
 	if (db.pt[id].PT1 == 0)     db.pt[id].PT1 = 220;
 	if (db.pt[id].PT2 == 0)     db.pt[id].PT2 = 220;
+	if (id == 0) {
+		for (i = 0; i < (int)(sizeof(db.iom.debounce) / sizeof(db.iom.debounce[0])); i++)
+			if (db.iom.debounce[i] == 0) db.iom.debounce[i] = 16;	/* DI Debounce default 16ms (기존 settings 0 보정) */
+	}
 
 	meter[id].meter.vType = (uint16_t)db.pt[id].wiring;
 

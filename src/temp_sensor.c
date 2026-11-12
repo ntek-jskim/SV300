@@ -15,20 +15,25 @@
  #include <string.h>
  #include <math.h>
  
- /** NTC: 10kΩ 직렬 저항, 25°C 기준 10kΩ NTC, Steinhart-Hart 계수 */
- #define NTC_SERIES_R_OHM    10000.0f
- #define NTC_VREF             3.3f
+ /** NTC 회로 (COMM 보드 EB02): 3.0V_NTC(U204 AP2120N-3.0) ─ NTC ─┬─ 10kΩ(R230 등) ─ GND
+  *                                                            └─ 1kΩ+0.1µF ─ ADC0_n
+  *  ADC 기준 = VDDA 3.3V(10-bit). NTC 는 GEMS3500 과 동일 부품(25°C 10kΩ) → 계수도 GEMS3500 io.h 그대로.
+  *  (26/11/12: 종전 코드는 분압 전원 3.3V 가정·C3 가 C1 복사 오타라 #if 1 로 원시값만 출력했음) */
+ #define NTC_SERIES_R_OHM    10000.0f  /* 아래쪽 고정저항 */
+ #define NTC_ADC_VREF         3.3f      /* ADC 기준(VDDA) */
+ #define NTC_SUPPLY_V         3.0f      /* 분압 전원 3.0V_NTC */
  #define NTC_ADC_MAX          1024.0f   /* 10-bit ADC */
- // #define NTC_C1A              0.001129148f
- // #define NTC_C2A              0.000234125f
- // #define NTC_C3A              0.0000000876743f
- #define NTC_C1A              0.002775575
- #define NTC_C2A              0.00024804
- #define NTC_C3A              0.002775575
+ /* Steinhart-Hart (R 단위 kΩ) — GEMS3500 io.h C1A/C2A/C3A. 10kΩ → 25.1°C */
+ #define NTC_C1A              0.002775575f
+ #define NTC_C2A              0.00024804f
+ #define NTC_C3A              4.90786E-07f
  #define NTC_K_TEMP           273.15f
+ /* 미연결(ADC≈0V)·단락(ADC≈3.0V) 판정 여유 — 이 범위 밖이면 0°C 로 출력(GEMS3500 과 같은 처리) */
+ #define NTC_V_MARGIN         0.02f
  
  static ADC_CLOCK_SETUP_T adcSetup;
  static bool s_initialized = false;
+ static bool s_valid[TEMP_SENSOR_NUM_CHANNELS];	/* 마지막 읽기에서 NTC 연결(미연결·단락 아님) 여부 — Temp Cali 판정용 */
  
  /** ADC0 channel 1~4 (ADC_CH1 ~ ADC_CH4) */
  static const ADC_CHANNEL_T s_adcChannels[TEMP_SENSOR_NUM_CHANNELS] = {
@@ -94,48 +99,50 @@
 	 s_initialized = true;
  }
  
- bool TempSensor_ReadTempC(int channel, int16_t *temp_c)
+ bool TempSensor_ReadTempCFloat(int channel, float *temp_c)
  {
 	 uint16_t raw;
 	 uint32_t sum = 0;
 	 int i, n=10;
-	 float tVolt, tCurr, tRVal, fval, temp, logval;
- 
+	 float tVolt, tRVal, logval;
+
 	 if (!s_initialized || !temp_c || channel < 0 || channel >= TEMP_SENSOR_NUM_CHANNELS)
 		 return false;
- 
- #if 1
-	 // 10 회 연속으로 읽고 평균
-	 /* Waiting for A/D conversion complete */
+
+	 /* 10 회 연속으로 읽고 평균 (버스트 모드: 채널별 DONE 대기) */
 	 for (i=0; i<n; i++) {
 		 while (Chip_ADC_ReadStatus(LPC_ADC0, s_adcChannels[channel], ADC_DR_DONE_STAT) != SET) {}
-		 /* Read ADC value */
 		 Chip_ADC_ReadValue(LPC_ADC0, s_adcChannels[channel], &raw);
 		 sum += raw;
-	 }				
-	raw = sum / n;
- #else	
-	 if (!readAdcRaw((uint8_t)s_adcChannels[channel], &raw))
-		 return false;
- #endif
-	 
- #if 1
-	 *temp_c = raw;
- #else
-	 /* NTC: V = ADC * 3.3/1024, I = V/10k, R_ntc = 3.3/I - 10k, Steinhart-Hart */
-	 tVolt = (float)raw / NTC_ADC_MAX * NTC_VREF;
-	 tCurr = tVolt / NTC_SERIES_R_OHM;
- 
-	 if (tCurr > 0.0f) {
-		 tRVal = NTC_VREF / tCurr - NTC_SERIES_R_OHM;
-		 fval = tRVal / 1000.0f;   /* kΩ */
-		 logval = (float)log((double)fval);
-		 temp = 1.0f / (NTC_C1A + NTC_C2A * logval + NTC_C3A * logval * logval * logval) - NTC_K_TEMP;
-		 *temp_c = (int16_t)(temp + (temp >= 0.0f ? 0.5f : -0.5f));
-	 } else {
-		 *temp_c = 0;
 	 }
- #endif
+	 raw = sum / n;
+
+	 /* V = ADC/1024 × 3.3, R_ntc = 10k × (3.0/V − 1), Steinhart-Hart(kΩ) */
+	 tVolt = (float)raw / NTC_ADC_MAX * NTC_ADC_VREF;
+	 if (tVolt <= NTC_V_MARGIN || tVolt >= NTC_SUPPLY_V - NTC_V_MARGIN) {
+		 *temp_c = 0.0f;			/* 미연결(≈0V) 또는 단락(≈3.0V) */
+		 s_valid[channel] = false;
+		 return true;
+	 }
+	 tRVal  = NTC_SERIES_R_OHM * (NTC_SUPPLY_V / tVolt - 1.0f);
+	 logval = (float)log((double)(tRVal / 1000.0f));		/* kΩ */
+	 *temp_c = 1.0f / (NTC_C1A + NTC_C2A * logval + NTC_C3A * logval * logval * logval) - NTC_K_TEMP;
+	 s_valid[channel] = true;
+	 return true;
+ }
+
+ bool TempSensor_IsValid(int channel)
+ {
+	 return (channel >= 0 && channel < TEMP_SENSOR_NUM_CHANNELS) ? s_valid[channel] : false;
+ }
+
+ bool TempSensor_ReadTempC(int channel, int16_t *temp_c)
+ {
+	 float t;
+
+	 if (!temp_c || !TempSensor_ReadTempCFloat(channel, &t))
+		 return false;
+	 *temp_c = (int16_t)(t + (t >= 0.0f ? 0.5f : -0.5f));
 	 return true;
  }
  

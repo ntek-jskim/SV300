@@ -23,6 +23,12 @@
 - 고조파 8개 묶음·레지스터 상태로 변경 → 1상 29ms → 7ms(SV400 FFTTEST), 결과 동일. SV400 CPU 72~76% → 33~34%
 - `SV300_3CH_app_16M` 빌드 0E/0W, SV300 실기 확인 필요 → [TODO.md](TODO.md) 3.12
 
+## 3. SV400 에서 확인한 수정 이식 (DI·온도·내장웹)
+- DI: 부팅 직후 가짜 상태 변화(초기값 반전) 수정, Debounce 기본 16ms(저장값 0 자동 보정)
+- 온도(2CH 전용): NTC ℃ 변환(GEMS3500 과 같은 NTC 계수, 분압 3.0V), Temp Cali 를 칩 온도 → IO NTC 로. TEMP4 오프셋은 METER_CAL 패딩 자리(`ntcOfs4`) 사용 — 크기 836B 그대로
+- 내장웹 Feeder·IO 글꼴을 SV400 과 동일하게(3열 유지)
+- 2CH 온도 코드는 미컴파일 → [TODO.md](TODO.md) 3.13
+
 ---
 
 # 2026-11-11

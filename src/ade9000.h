@@ -19,8 +19,10 @@
 #define	PI							3.14159265358979323846
 #define	SQRT_3					1.732051
 
-// Temp 교정 기준 온도(고정, ℃) — Temp Cali 시 측정온도를 이 값에 맞춤(tempOfs = TEMP_CAL_REF - rawTemp)
+// Temp 교정(IO 보드 NTC) 기준 온도 기본값(℃) — Temp-ref 미설정 시 사용. 오프셋 = ref - NTC(보정 전)
 #define	TEMP_CAL_REF			25
+// Temp 교정 오프셋 허용 한도(℃) — 넘으면 그 TEMP 는 교정 건너뜀(기준값 오입력·센서 이상 방지)
+#define	TEMP_CAL_MAX_OFS		10
 
 // scale factor
 //#define	V_FULL					(792.6667017)

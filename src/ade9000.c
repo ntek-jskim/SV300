@@ -1223,9 +1223,9 @@ void readTemp(uint8_t id) {
 	gain = -((trim & 0xffff) / 65536.);	
 	os   =  ((trim >> 16) & 0xffff) / 32.;
 	
-	// read temp_result (+ 사용자 Temp 교정 오프셋)
+	// read temp_result — 칩 내부 온도(보정 없음). Temp Cali 오프셋은 IO 보드 NTC 용(iom.c scanTemp)
 	read_reg16(id, 0x4b7, &wtemp);
-	meter[id].meter.Temp = (wtemp & 0xfff) * gain + os + pcal->tempOfs[id];
+	meter[id].meter.Temp = (wtemp & 0xfff) * gain + os;
 	//printf("readTemp : (%f)\n", meter[id].meter.Temp);
 	
 	// restart

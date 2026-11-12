@@ -1561,13 +1561,13 @@ typedef struct {
 	float		i_thd_offset;
 	float		In_offset[CAL_CH_MAX][3];		// offset
 	float		In_Slope[CAL_CH_MAX][3];		// 기울기
-	float		tempOfs[CAL_CH_MAX];			// Temp 교정 오프셋: 측정온도를 기준(TEMP_CAL_REF)에 맞춤
+	float		tempOfs[CAL_CH_MAX];			// Temp 교정 오프셋(℃): IO NTC TEMP1~3 (26/11/12 칩 온도 → NTC 로 변경, TEMP4 는 ntcOfs4)
 	int32_t		vdcos[CAL_CH_MAX][3], idcos[CAL_CH_MAX][3];	// waveform에서 DC offset 제거위해 사용한다
 
 	uint16_t 	hwModel;	// 0=3CH, 1=2CH (추후 HV/Rogowski 등 확장). 콘솔 'HWMODEL <n>' 로 설정, 여기(FRAM) 저장
 	uint16_t 	hwVer;	// hw version (U32->U16)
 	uint16_t 	fwVer;	// fw version (U32->U16)
-	uint16_t 	_rsv;	// 4바이트 정렬용 명시 패딩(뒤 sn[] uint32 정렬 — 숨은 패딩 방지)
+	int16_t 	ntcOfs4;	// NTC TEMP4 Temp 교정 오프셋(0.01℃, 2CH). 종전 _rsv(4바이트 정렬 패딩) 자리 — 크기·위치 동일(836B·부트로더 호환)
 	uint8_t 	mac[4];
 	uint32_t 	sn[2];
 	uint16_t 	magic, crc;
@@ -2416,5 +2416,12 @@ extern void getQualLastWeekFN(char *path, int id);
 
 extern volatile uint8_t g_meterReady;   /* 계측 준비완료(웹/Modbus 통신 허용) 플래그 */
 extern volatile uint8_t g_wfbQuiet;      /* [Quiet Capture] 1=파형 캡처중 → CPU 워커 양보. WV_QCAP */
+
+/* IO 보드 NTC(2CH TEMP 4점) Temp 교정 — iom.c. 3CH 는 TEMP 미탑재라 ok=0 으로 남음 */
+#define NTC_CNT		4
+extern float   g_ntcRaw[NTC_CNT];        /* NTC 보정 전 온도(℃) */
+extern uint8_t g_ntcOk[NTC_CNT];         /* NTC 연결 여부(미연결·단락 = 0) */
+extern float   ntcOfsGet(int ch);        /* TEMP1~3 = pcal->tempOfs[0~2], TEMP4 = pcal->ntcOfs4(0.01℃) */
+extern void    ntcOfsSet(int ch, float ofs);
 
 #endif

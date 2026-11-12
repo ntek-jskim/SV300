@@ -38,6 +38,12 @@ bool TempSensor_ReadTempC(int channel, int16_t *temp_c);
 bool TempSensor_ReadTempCFloat(int channel, float *temp_c);
 
 /**
+ * @brief 마지막 TempSensor_ReadTempCFloat 결과가 유효(NTC 연결, 미연결·단락 아님)인지
+ * @param channel Channel index 0~3
+ */
+bool TempSensor_IsValid(int channel);
+
+/**
  * @brief Read NTC resistance in ohms (for debugging/validation)
  * @param channel Channel index 0~3 (ADC0_1 ~ ADC0_4)
  * @param r_ohm   Output resistance in ohms (Ω)

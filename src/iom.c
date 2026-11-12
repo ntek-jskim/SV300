@@ -843,17 +843,42 @@ void scanKey(void)
 	}
 }
 
+/* NTC 보정 전 온도·연결 여부 (smb_rtu.c Temp Cali 가 오프셋 계산에 사용). 3CH 는 TEMP 미탑재라 0 유지 */
+float   g_ntcRaw[NTC_CNT];
+uint8_t g_ntcOk[NTC_CNT];
+
+/* NTC Temp 교정 오프셋(℃) 저장 위치 — METER_CAL(836B 고정·부트로더 공유)에 칸이 3개뿐이라
+ *  TEMP1~3 = tempOfs[0~2], TEMP4 = ntcOfs4(int16, 0.01℃ 단위, 종전 정렬 패딩 _rsv 자리) */
+float ntcOfsGet(int ch)
+{
+	if (ch >= 0 && ch < CAL_CH_MAX) return pcal->tempOfs[ch];
+	if (ch == 3) return (float)pcal->ntcOfs4 / 100.0f;
+	return 0.0f;
+}
+
+void ntcOfsSet(int ch, float ofs)
+{
+	if (ch >= 0 && ch < CAL_CH_MAX) pcal->tempOfs[ch] = ofs;
+	else if (ch == 3) pcal->ntcOfs4 = (int16_t)(ofs * 100.0f + (ofs >= 0.0f ? 0.5f : -0.5f));	/* ±10℃ 한도 → int16 충분 */
+}
+
 void scanTemp() {
 #ifndef CH3   /* 3CH: TEMP 미탑재(DI4만), 2CH: DI4+TEMP4 */
 	int ch;
-	int16_t temp_c, temp_c10;
+	float   tempF;
 	int16_t temp[TEMP_SENSOR_NUM_CHANNELS];
 
 	for (ch=0; ch<TEMP_SENSOR_NUM_CHANNELS; ch++) {
-		if (TempSensor_ReadTempC(ch, &temp_c)) {
-			temp[ch] = temp_c;
-			if (ch < 4) meter[0].iom.aiData[ch] = (float)temp_c;   /* IOM DATA TEMP */
-			if (ntDebugLevel==31) printf("ADC0_%d Temp : %d\n", ch + 1, (int)temp_c);
+		if (TempSensor_ReadTempCFloat(ch, &tempF)) {
+			temp[ch] = (int16_t)tempF;
+			if (ch < NTC_CNT) {
+				int ok = TempSensor_IsValid(ch);
+				g_ntcRaw[ch] = tempF;		/* 보정 전 값(Temp Cali 기준) */
+				g_ntcOk[ch]  = (uint8_t)ok;
+				/* IOM DATA TEMP (°C, 0.1 단위) = NTC + Temp Cali 오프셋. 미연결·단락은 0 그대로 */
+				meter[0].iom.aiData[ch] = ok ? tempF + ntcOfsGet(ch) : tempF;
+			}
+			if (ntDebugLevel==31) printf("ADC0_%d Temp : %.1f\n", ch + 1, tempF);
 		}
 		else
 			printf("ADC0_%d R Read Error\n", ch + 1);
@@ -876,7 +901,7 @@ void IOM_Task(void *arg)
 	TempSensor_Init();
 
 	for (i=0; i<4; i++) {
-		dibuf[i].lastVal = (uint8_t)(DI_Read(i) ? 1 : 0);
+		dibuf[i].lastVal = (uint8_t)(DI_Read(i) ? 0 : 1);	/* scanDI 와 같은 active-low 판정(종전 반대로 넣어 부팅 직후 가짜 1->0 변화) */
 		dibuf[i].accept  = 0;
 	}
 	keybuf[0].lastVal = (uint8_t)KEY_Read(0);

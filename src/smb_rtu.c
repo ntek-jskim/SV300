@@ -385,15 +385,29 @@ void calibration(int id, int code) {
 				clrDcOffset(id);
 			}
 			break;
-		case 17:	// Temp Cali — 측정온도를 기준온도(Temp-ref@7463, 미설정 시 TEMP_CAL_REF)에 맞추는 오프셋(idempotent)
+		case 17:	// Temp Cali — 연결된 IO 보드 NTC(TEMP1~4) 전부를 기준온도(Temp-ref, 미설정 시 TEMP_CAL_REF)에 맞추는 오프셋(idempotent)
+			/* 2CH 는 채널 명령이 CH1~2 뿐이라 NTC 4개를 채널에 대응시킬 수 없음 → 어느 채널 명령이든 전체 NTC 처리 */
 			if (pc->calEn) {
 				float tref = (pcntl->tref > 0) ? pcntl->tref : TEMP_CAL_REF;
-				pcal->tempOfs[id] = tref - (meter[id].meter.Temp - pcal->tempOfs[id]);
+				int t;
+				for (t = 0; t < NTC_CNT; t++) {
+					float ofs = tref - g_ntcRaw[t];		/* 보정 전 NTC 온도 기준 → 여러 번 눌러도 같은 결과 */
+					if (!g_ntcOk[t])
+						printf("tc : TEMP%d skip (NTC open/short)\n", t + 1);
+					else if (ofs > TEMP_CAL_MAX_OFS || ofs < -TEMP_CAL_MAX_OFS)
+						printf("tc : TEMP%d skip (ref %.1f, meas %.1f, ofs %.1f > %d)\n", t + 1, tref, g_ntcRaw[t], ofs, TEMP_CAL_MAX_OFS);
+					else {
+						ntcOfsSet(t, ofs);
+						printf("tc : TEMP%d ref %.1f, meas %.1f -> ofs %.2f\n", t + 1, tref, g_ntcRaw[t], ofs);
+					}
+				}
 			}
 			break;
-		case 18:	// Temp Init — 오프셋 클리어
+		case 18:	// Temp Init — NTC TEMP1~4 오프셋 클리어
 			if (pc->calEn) {
-				pcal->tempOfs[id] = 0;
+				int t;
+				for (t = 0; t < NTC_CNT; t++)
+					ntcOfsSet(t, 0);
 			}
 			break;
 	}

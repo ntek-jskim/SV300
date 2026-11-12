@@ -68,7 +68,7 @@
           <BeforeMake>
             <RunUserProg1>1</RunUserProg1>
             <RunUserProg2>0</RunUserProg2>
-            <UserProg1Name>powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$P..\tools\gen_web_gz.ps1&quot;</UserProg1Name>
+            <UserProg1Name>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$P..\tools\gen_web_gz.ps1"</UserProg1Name>
             <UserProg2Name></UserProg2Name>
             <UserProg1Dos16Mode>0</UserProg1Dos16Mode>
             <UserProg2Dos16Mode>0</UserProg2Dos16Mode>
@@ -2165,7 +2165,7 @@
           <BeforeMake>
             <RunUserProg1>1</RunUserProg1>
             <RunUserProg2>0</RunUserProg2>
-            <UserProg1Name>powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$P..\tools\gen_web_gz.ps1&quot;</UserProg1Name>
+            <UserProg1Name>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$P..\tools\gen_web_gz.ps1"</UserProg1Name>
             <UserProg2Name></UserProg2Name>
             <UserProg1Dos16Mode>0</UserProg1Dos16Mode>
             <UserProg2Dos16Mode>0</UserProg2Dos16Mode>
@@ -4262,7 +4262,7 @@
           <BeforeMake>
             <RunUserProg1>1</RunUserProg1>
             <RunUserProg2>0</RunUserProg2>
-            <UserProg1Name>powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$P..\tools\gen_web_gz.ps1&quot;</UserProg1Name>
+            <UserProg1Name>powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$P..\tools\gen_web_gz.ps1"</UserProg1Name>
             <UserProg2Name></UserProg2Name>
             <UserProg1Dos16Mode>0</UserProg1Dos16Mode>
             <UserProg2Dos16Mode>0</UserProg2Dos16Mode>
