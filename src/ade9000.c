@@ -33,19 +33,6 @@ extern OsTaskId tid_wave[];
 extern OsTaskId tid_meter[];
 extern OsTaskId tid_metering;	/* [통합] RMSLog/PostScan/Energy 단일 태스크 */
 
-#ifdef WV_DIAG
-/* [캡처 밀림 추적] WV_DIAG(meter.h)로 활성. readWFB_Data에서 갱신, fft_radix2_czt.c의 WVF STAT(shell)에서 조회.
- *  page-lag: 읽는 순간 page가 정상점(7/15)에서 진행한 정도. ts-gap: readWFB 진입 간격(ms, 정상 16ms). */
-uint32_t wvfLagFrm[3];		/* readWFB 진입 횟수 */
-uint32_t wvfLagCnt[3];		/* lag>0(page 밀림) 횟수 */
-uint32_t wvfLagMax[3];		/* 최대 page-lag(페이지수, 1페이지=2ms) */
-uint8_t  wvfPageLast[3];	/* 마지막 읽은 page */
-uint32_t wvfTsPrev[3];		/* 이전 진입 시각(ms) */
-uint32_t wvfGapMax[3];		/* 최대 진입 간격(ms) = 최대 밀림 */
-uint32_t wvfGapLate[3];		/* 간격>24ms(밀림) 횟수 */
-uint32_t wvfGapSum[3];		/* 간격 합(평균 계산용) */
-#endif /* WV_DIAG */
-
 extern int maxMinRmsFreq(int id);
 extern int maxMinPower(int id);
 extern int maxMinTHD(int id);
@@ -2128,30 +2115,6 @@ void readWFB_Data(int id)
 	// 항상 "현재 쓰는 중이 아닌 안정된 절반"을 읽는다: writing=(page+1)&15, writing이 1st half면 2nd half(0x400) 읽기.
 	sp = ((((page + 1) & 15) < 8) ? 0x80*8 : 0);
 
-#ifdef WV_DIAG
-	/* [추적] 캡처 밀림 계측 (사용자 가설: 웨이브 캡처가 밀려 torn→스파이크?).
-	 *  ① page-lag: IRQ는 정상 page 7/15에서. 처리가 밀리면 page 진행(lag>0)한 상태로 읽음.
-	 *     lag가 크면 '쓰는 중 절반' 침범 위험. (직접: 읽는 순간의 밀림 정도)
-	 *  ② ts-gap: readWFB 진입 간격(ms). 정상=페이지IRQ 16ms. 밀리면 gap>16 (M1 처리 대기 등).
-	 *     '얼마나 밀렸나(ms)'를 직접 측정. M2만 gap/lag 크면 SSP1 공유버스 밀림 가설 확증. */
-	if (id >= 0 && id < 3) {
-		int d7 = (page - 7) & 15, d15 = (page - 15) & 15;
-		int lag = d7 < d15 ? d7 : d15;		/* 정상점(7/15)에서 진행한 페이지수. 0=정상, 1페이지=2ms */
-		uint32_t now = (uint32_t)sysTick64, gap;
-		wvfLagFrm[id]++;
-		if (lag > 0) wvfLagCnt[id]++;
-		if ((uint32_t)lag > wvfLagMax[id]) wvfLagMax[id] = (uint32_t)lag;
-		wvfPageLast[id] = (uint8_t)page;
-		if (wvfTsPrev[id]) {			/* 첫 진입 제외 */
-			gap = now - wvfTsPrev[id];	/* 이번 진입 간격(ms) */
-			if (gap > wvfGapMax[id]) wvfGapMax[id] = gap;
-			if (gap > 24) wvfGapLate[id]++;	/* 정상 16ms + 여유 → 24ms 초과 = 밀림 */
-			wvfGapSum[id] += gap;
-		}
-		wvfTsPrev[id] = now;
-	}
-#endif
-		
 	t1 = sysTick64;
 
 
@@ -2203,7 +2166,7 @@ void readWFB_Data(int id)
 	SSP_SSEL_Mode(id, 0);
 
 
-#if !defined(WV_STAGED) && !defined(WV_NO_DESPIKE)	/* despike. WV_STAGED(진단) 또는 WV_NO_DESPIKE(보정 OFF 방침) 시 우회 */
+#if !defined(WV_NO_DESPIKE)	/* despike. WV_NO_DESPIKE(보정 OFF 방침) 시 우회 */
 	/* [2층 마감] ①위 96워드 읽기 = 근본수정(0xC00 spill 원천 제거). ②아래 despike = 잔여 정리:
 	   readWFB 외 SPI·M1/M2 SSP1 커플링으로 남는 스파이크를 소스 wb 링에서 median 검출→복구(파형·FFT·
 	   고조파 함께 반영). 복구식이 핵심 — 단일샘플은 2차 포물선 (4(x-1+x+1)-(x-2+x+2))/6 로 라인·봉우리
@@ -2241,7 +2204,7 @@ void readWFB_Data(int id)
 			}
 		}
 	}
-#endif	/* despike (WV_STAGED 또는 WV_NO_DESPIKE 시 우회) */
+#endif	/* despike (WV_NO_DESPIKE 시 우회) */
 
 //	// 8 page 모두 읽은 후 transient task에 알린다
 //	if (tid_app[id] != 0) {
@@ -3049,15 +3012,7 @@ void meter_scan_proc(uint8_t id)
 	/* WFB(파형)은 연속성이 필요하므로 매 page-full(bit17)마다 읽는다(M0/M1/M2 동일). */
 	if (stat0 & (1<<17)) {
 		//(id ==0) ? readWFB_Data(id) : readWFB8k_Data(id);
-#ifndef WV_NO_M12_WFB
 		readWFB_Data(id);
-#else
-		/* [진단] M1/M2 파형캡처 skip(M0 커플링 격리) — 정식운전(미정의)엔 무관 */
-		if (id == 0)
-			readWFB_Data(id);
-		else
-			{ static uint32_t skc = 0; if ((skc++ % 300) == 0) printf("[WFB skip M%d]\n", id); }
-#endif
 	}
 
 //	Board_LED_On(3);	// 실행시간: 15us

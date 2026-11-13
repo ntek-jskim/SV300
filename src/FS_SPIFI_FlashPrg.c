@@ -71,6 +71,10 @@ static BOOL Init(U32 adr, U32 clk)
 		mhz = 40UL;
 	}
 	printf("[SPIFI] clk=%uHz use=%uMHz\n", (unsigned)clk, (unsigned)mhz);
+	/* [TODO 4.1 진단] 실제 SPIFI 클럭 확인용: ROM 에 넘긴 mhz 와 실제(BASE_SPIFI_CLK 소스·IDIVA 분주)가 다른지 */
+	printf("[SPIFI] core=%uHz BASE_SPIFI_CLK=0x%08x IDIVA_CTRL=0x%08x PLL1_CTRL=0x%08x\n",
+	       (unsigned)SystemCoreClock, (unsigned)LPC_CGU->BASE_SPIFI_CLK,
+	       (unsigned)LPC_CGU->IDIVA_CTRL, (unsigned)LPC_CGU->PLL1_CTRL);
 
 	/* 1) 정상 시도: QE=1(비휘발성)이면 pin7=SIO3라 RESET# 없음 → 성공(quad) */
 	rc = spifiRomInit(mhz);
@@ -166,13 +170,44 @@ static void prgDiagDump(const char *tag, const volatile uint8_t *p, uint32_t n)
 	printf("\n");
 }
 
+/* [TODO 4.1 진단] ROM 호출 시간 측정 — DWT CYCCNT(코어 클럭). ade9000.c IPD 진단과 같은 레지스터(켜기만 함) */
+#define PRG_DEMCR	(*(volatile uint32_t *)0xE000EDFCUL)
+#define PRG_DWTCTRL	(*(volatile uint32_t *)0xE0001000UL)
+#define PRG_CYCCNT	(*(volatile uint32_t *)0xE0001004UL)
+#define PRG_CYC_ON()	do { PRG_DEMCR |= (1UL << 24); PRG_DWTCTRL |= 1UL; } while (0)
+#define PRG_US(cyc)	((cyc) / (SystemCoreClock / 1000000UL))
+
+/* 플래시(메모리 모드) 내용과 buf 의 첫 불일치 위치. 모두 같으면 sz */
+static U32 prgMismatch(const volatile uint8_t *p, const U8 *buf, U32 sz)
+{
+	U32 i;
+	for (i = 0; i < sz; i++)
+		if (p[i] != buf[i])
+			break;
+	return i;
+}
+
+/* 칩 내부 쓰기가 끝날 때까지 대기(명령 모드 필요) 후 메모리 모드 복귀. 반환: wait_busy rc */
+static int32_t prgWaitBusy(void)
+{
+	int32_t rc = 0;
+	s_rom->cancel_mem_mode(&s_spifi_obj);
+	if (s_rom->wait_busy != NULL)
+		rc = s_rom->wait_busy(&s_spifi_obj, 0);
+	s_rom->set_mem_mode(&s_spifi_obj);
+	return rc;
+}
+
 static BOOL ProgramPage(U32 adr, U32 sz, U8 *buf)
 {
 	SPIFIopers opers;
-	int32_t rc;
+	int32_t rc, wb;
 	uint8_t oldv[PRG_DIAG_N];
 	const volatile uint8_t *mp;
-	uint32_t i, n, needErase = 0;
+	uint32_t i, n, needErase = 0, off0, off;
+	uint32_t c0, c1;
+	uint16_t st0;
+	uint8_t bz0;
 
 	if (s_rom == NULL || buf == NULL || sz == 0U) {
 		return (__FALSE);
@@ -206,8 +241,12 @@ static BOOL ProgramPage(U32 adr, U32 sz, U8 *buf)
 	}
 
 	g_sdBusy = 1;		/* [Quiet Capture] flash 쓰기 활동 표시 */
+	PRG_CYC_ON();
 	s_rom->cancel_mem_mode(&s_spifi_obj);
+	c0 = PRG_CYCCNT;
 	rc = s_rom->spifi_program(&s_spifi_obj, (char *)buf, &opers);
+	c1 = PRG_CYCCNT;
+	st0 = s_spifi_obj.stat.hw; bz0 = s_spifi_obj.busy;	/* ROM 이 마지막으로 읽은 상태(set_mem_mode 전) */
 	s_rom->set_mem_mode(&s_spifi_obj);
 	if (rc != 0) {
 		printf("[SPIFI] program FAIL adr=0x%08x sz=%u rc=%d needErase=%u\n",
@@ -215,6 +254,48 @@ static BOOL ProgramPage(U32 adr, U32 sz, U8 *buf)
 		prgDiagDump("old", oldv, n);
 		prgDiagDump("new", buf, n);
 		prgDiagDump("now", mp, n);
+		/* [TODO 4.1 진단 11/13] ROM 이 본 칩 상태·걸린 시간: 즉시 실패인지, 기다리다 시간 초과인지,
+		 *  상태 레지스터(MX25L: bit0 WIP, bit1 WEL, bit6 QE)가 어떻게 읽혔는지 */
+		printf("[SPIFI]   rom: t=%uus stat=0x%04x busy=%u errCheck=0x%08x opts=0x%08x\n",
+		       (unsigned)PRG_US(c1 - c0), (unsigned)st0, (unsigned)bz0,
+		       (unsigned)s_spifi_obj.errCheck, (unsigned)s_spifi_obj.opts);
+		/* [TODO 4.1] 11/13 실측: rc=0x20003(시간 초과)인데 플래시 내용은 쓰려던 값과 같음(거짓 실패).
+		 *  다시 읽어 같으면 성공 처리, 다르면 불일치 위치부터 1회 재기록 후 다시 확인 → 파일시스템이 거짓 실패로 쓰기를 중단하지 않게 함.
+		 *  SV400 11/12 21:29 실측: 페이지 경계 뒤가 비어 있는 부분 기록도 있음. 칩이 아직 쓰는 중일 때 읽거나
+		 *  다시 쓰면(ROM 이 지우기 판단) 섹터 손상 위험 → 반드시 wait_busy 후 확인.
+		 *  off0=반환 직후 불일치 위치, off=완료 대기 후 불일치 위치 (off0<sz 이고 off==sz 면 "칩이 늦게 끝남") */
+		off0 = prgMismatch(mp, buf, sz);
+		c0 = PRG_CYCCNT;
+		wb = prgWaitBusy();
+		c1 = PRG_CYCCNT;
+		printf("[SPIFI]   wait_busy: rc=%d t=%uus stat=0x%04x busy=%u\n", (int)wb,
+		       (unsigned)PRG_US(c1 - c0), (unsigned)s_spifi_obj.stat.hw, (unsigned)s_spifi_obj.busy);
+		off = prgMismatch(mp, buf, sz);
+		if (off == sz) {
+			printf("[SPIFI] program FAIL->verified ok adr=0x%08x off0=%u wb=%d\n",
+			       (unsigned)adr, (unsigned)off0, (int)wb);
+			rc = 0;
+		}
+		else {
+			opers.dest = (char *)(uintptr_t)(adr + off);
+			opers.length = (uint32_t)(sz - off);
+			s_rom->cancel_mem_mode(&s_spifi_obj);
+			rc = s_rom->spifi_program(&s_spifi_obj, (char *)(buf + off), &opers);
+			s_rom->set_mem_mode(&s_spifi_obj);
+			wb = prgWaitBusy();
+			if (prgMismatch(mp, buf, sz) == sz) {
+				printf("[SPIFI] program retry ok adr=0x%08x off0=%u off=%u rc=%d wb=%d\n",
+				       (unsigned)adr, (unsigned)off0, (unsigned)off, (int)rc, (int)wb);
+				rc = 0;
+			}
+			else {
+				printf("[SPIFI] program retry FAIL adr=0x%08x off0=%u off=%u rc=%d wb=%d\n",
+				       (unsigned)adr, (unsigned)off0, (unsigned)off, (int)rc, (int)wb);
+				prgDiagDump("now", mp + off, (sz - off < PRG_DIAG_N) ? (sz - off) : PRG_DIAG_N);
+				if (rc == 0)
+					rc = -1;	/* 내용 불일치 → 실패 반환 */
+			}
+		}
 	}
 	else if (needErase) {
 		/* 성공했지만 ROM 이 섹터 지우기를 끼워 넣은 경우 — 가설 A 확인용 */

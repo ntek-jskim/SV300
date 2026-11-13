@@ -191,21 +191,32 @@
 ## 4. 장시간 운전 안정성
 
 ### 4.1 플래시 쓰기 실패(`[SPIFI] program FAIL`) — 3~4시간마다
-- **상태**: 미해결 — 16MB 보드에서도 재현(11/10 18:30~11/11 08:40, 14시간에 6회). 진단 출력 추가(11/11), 재시험 대기
-- **현상**: 실패 위치가 모두 64KB 블록의 마지막 4KB(파일시스템이 파일 위치 정보를 적는 곳), 크기 4·8바이트, `rc=0x20003`(LPCOpen 기준 `ERR_SPIFI_TIMEOUT` 추정, UM10503 확인 필요). 어떤 기록(에너지·수요·PQ)이든 상관없이 남. 블록 앞쪽(파일 내용)에서는 실패 없음. 실패 후 리셋·멈춤 없음
-  - 16MB 보드 실패 주소: 0x5FFDC, 0x7FF54, 0x7FE94, 0x9FC84, 0xBFDAC, 0xCFFE8 — 모두 처음 1MB 안
+- **상태**: 원인 = ROM 의 **거짓 실패 보고**로 판단, 우회 수정(실패 보고 후 다시 읽어 확인) 반영(11/13), 재시험 대기
+- **현상**: `rc=0x20003`(LPCOpen 기준 `ERR_SPIFI_TIMEOUT` 추정), 크기 4·8·16바이트. 실패 후 리셋·멈춤 없음. 11/13 까지는 모두 64KB 블록의 마지막 4KB(할당 기록)였으나 **11/13 블록 앞쪽(파일 내용)에서도 발생** → 위치 한정 아님
+  - 16MB 보드 실패: 11/10~11 14시간 6회(0x5FFDC, 0x7FF54, 0x7FE94, 0x9FC84, 0xBFDAC, 0xCFFE8), 11/11~12 13시간 0회(전압 입력 없음), 11/12~13 17시간 1회(219V 입력)
+  - 시각: 15분 경계 +2분(04:02·05:02·06:32·07:17 = egy15 파일 재기록 시점) 또는 매시·자정 기록 시점
+  - **11/13 05:02 진단 출력**: `adr=0x29FEB8 sz=4 needErase=0`, `old 16 00 00 00` → `new 00 00 00 00`, **실패 후 `now 00 00 00 00` = 쓰려던 값** → 쓰기는 성공했는데 ROM 만 시간 초과를 보고. 이미 써 둔 할당 기록을 0 으로 덮어 무효화하는 쓰기
+  - **11/13 진단 출력(우회 수정 후)**: `adr=0x2C1354 sz=16 needErase=0`, `old` 전부 FF(빈 자리) → `new "sys_demand.d1"…`(수요 파일 이름 기록), `now`=new, `FAIL->verified ok off0=16 wb=131075` → 반환 순간 이미 다 써져 있었고(off0=sz), **칩이 쉬는 중인데 `wait_busy` 도 시간 초과** → ROM 의 칩 상태 읽기(완료 확인) 자체가 간헐 실패
 - **문제**
-  - **용량 부족 가설 제외**(16MB 칩 거의 빈 상태에서도 남), `91ed84c`(EraseSector 수정) 후에도 남
-  - 후보 A(유력): `ProgramPage` 의 `options = S_NO_VERIFY`(0)가 실제로는 `S_ERASE_AS_REQD`(0) → 기존 기록을 덮어쓸 때 0→1 비트가 있으면 ROM 이 4KB 섹터를 지우고 다시 씀 → 시간 초과. "블록 끝 4KB·작은 쓰기에서만" 패턴과 맞음
-  - 후보 B: FTP 서버 경로([fs_port_rtx.c](common/fs_port_rtx.c))에 `fsFileLock` 이 없어 쓰기 중 끼어들 수 있음
+  - 제외: 용량 부족(16MB 에서도 남), 후보 A "ROM 이 몰래 섹터 지우기"(`needErase=0`, 17시간 `ERASE_REQD` 0회), 후보 B "FTP 끼어듦"(접속 프로그램 없었음), 내부 태스크 끼어듦(평상시 쓰기 경로 모두 `fsFileLock` 안)
+  - 제외(11/13): "이미 써 둔 자리를 다시 쓸 때만" — 빈 자리 첫 기록에서도 남
+  - 남은 원인: ROM 의 칩 상태 읽기(완료 확인)가 간헐적으로 시간 초과(ROM 내부라 직접 확인 불가). 피해는 파일시스템이 거짓 실패를 받아 그 파일 쓰기를 중단하는 것(우회 수정으로 방지)
+  - 의심(근거 약함): ROM 에 넘기는 클럭 값은 40MHz 로 제한([FS_SPIFI_FlashPrg.c Init](src/FS_SPIFI_FlashPrg.c))하지만 실제 SPIFI 클럭은 PLL1/3(주석상 약 60MHz, [system_lpc43xx.c:467](src/system_lpc43xx.c#L467))일 수 있음 → ROM 의 시간 초과 계산이 어긋날 가능성
 - **해결**
-  - (완료 11/11) 실패 시 기존(old)/새(new)/쓴 후(now) 내용과 `needErase`(0→1 필요 바이트 수)를 출력. 실패가 아니어도 지우기가 필요했던 쓰기는 `program ERASE_REQD ok` 로 출력
-  - 진단 결과 `needErase>0` 이면 options 를 `S_ERASE_NOT_REQD`(8)로 바꾸고 파일시스템이 왜 덮어쓰는지 확인. `needErase=0` 인데도 실패하면 후보 B(FTP 잠금) 확인
-- **위치**: [FS_SPIFI_FlashPrg.c:184](src/FS_SPIFI_FlashPrg.c#L184)
+  - (완료 11/11) 실패 시 old/new/now 내용과 `needErase` 출력, 지우기가 필요했던 쓰기는 `program ERASE_REQD ok` 출력
+  - (완료 11/13) 실패 보고 시 다시 읽어 쓰려던 값과 같으면 성공 처리(`program FAIL->verified ok`), 다르면 1회 재기록 후 확인(`program retry ok` / `program retry FAIL`)
+  - (보강 11/13, SV400 과 동일 코드) SV400 11/12 21:29 로그에서 페이지 경계 뒤가 비어 있는 **실제 부분 기록** 확인 → 거짓 실패만은 아님.
+    칩이 쓰는 중일 때 읽거나 재기록하면(ROM 이 지우기 판단) 섹터 손상 위험이 있어 확인 전 `wait_busy` 로 칩 완료 대기, 재기록은 불일치 위치부터만.
+    로그에 `off0`(반환 직후 불일치 위치)·`off`(대기 후)·`wb`(wait_busy rc) 추가 — off0<sz 인데 verified ok 면 "칩이 늦게 끝남"
+  - (진단 추가 11/13) 실패 시 `rom: t=…us stat=… busy=… errCheck=… opts=…`(ROM 쓰기에 걸린 시간·마지막으로 읽은 상태 레지스터), `wait_busy: rc=… t=…us stat=… busy=…` 출력. 부팅 시 `[SPIFI] core=…Hz BASE_SPIFI_CLK=… IDIVA_CTRL=… PLL1_CTRL=…` 로 실제 SPIFI 클럭 확인
+    - 판정: t 가 수 µs 면 "즉시 실패"(상태 읽기 경로 이상), 수 ms 이상이면 "기다리다 시간 초과". stat bit0(WIP)=1 이면 칩이 바쁘다고 읽힌 것
+    - 실제 SPIFI 클럭이 40MHz 와 다르면 ROM 에 실제 값을 넘기거나 클럭을 40MHz 로 낮춰 비교 시험
+- **위치**: [FS_SPIFI_FlashPrg.c ProgramPage](src/FS_SPIFI_FlashPrg.c)
 - **시험 방법**
-  1. 16MB 플래시 보드에 16MB 빌드(`SV300_3CH_app_16M`) 다운로드
+  1. 16MB 플래시 보드에 16MB 빌드(`SV300_3CH_app_16M`) 다운로드, 부팅 로그부터 받아 빌드 날짜 확인
   2. 3채널 정상 입력, 콘솔 로그를 켠 상태로 **24시간 이상** 운전
-  3. 로그에서 `program FAIL` 검색 → 0회면 합격. 나오면 주소·시각·직전 `FS, write(...)` 줄을 함께 기록
+  3. 판정: `program FAIL` 이 나도 모두 바로 뒤에 `verified ok` 또는 `retry ok` 면 합격. `retry FAIL` 이 나오면 주소·시각·old/new/now 기록
+  4. 실패가 난 시각의 15분 에너지(egy15) 슬롯 값이 웹·Modbus 에서 정상인지 확인
 
 ---
 

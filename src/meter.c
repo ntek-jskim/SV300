@@ -17,7 +17,7 @@
 #define	FW_VER	0004
 #define	FW_BUILD_YEAR 26
 #define	FW_BUILD_MON  11
-#define	FW_BUILD_DAY  11
+#define	FW_BUILD_DAY  13
 
 #define	SQRT_2	 1.414213562 
 
@@ -2548,42 +2548,6 @@ int copyFftData(int id, WAVE_WINDOW *pww,	uint32_t *ptick_10s)
 }
 
 // Meter_Scan Task로 부터 매 200ms 마다 호출된다
-#ifdef WV_WINDESPIKE
-/* [파형 A수정·폐기보류] 조립된 연속 윈도우(hU/hI 1600샘플)에 median 복구 1패스.
-   ※실측 결과 80K 임계에서도 윈도우당 20~69샘플 과다검출 → 실신호 왜곡으로 파형이 오히려 악화.
-   ÷2 확대의 거칠음은 고립 글리치가 아니라 광범위(고조파/노이즈 or 커플링)였음. A안(윈도우 despike)
-   폐기, WV_WINDESPIKE 미정의로 OFF. 코드는 참고용 보존. 복구식: 단일=2차포물선, 클러스터=선형. */
-static int despikeWindow(WAVE_WINDOW *pww)
-{
-	static char mk[L_LFWVWIN];
-	int32_t *arr[6];
-	int c, k, kl, kr, cnt = 0;
-	arr[0]=pww->hU.w[0]; arr[1]=pww->hU.w[1]; arr[2]=pww->hU.w[2];
-	arr[3]=pww->hI.w[0]; arr[4]=pww->hI.w[1]; arr[5]=pww->hI.w[2];
-	for (c = 0; c < 6; c++) {
-		int32_t *seq = arr[c];
-		mk[0] = mk[L_LFWVWIN-1] = 0;
-		for (k = 1; k < L_LFWVWIN-1; k++) {
-			int a = seq[k-1], b = seq[k], d = seq[k+1];
-			int lo = a<d?a:d, hi = a<d?d:a, med = b<lo?lo:(b>hi?hi:b), dev = b-med;
-			if (dev < 0) dev = -dev;
-			mk[k] = (dev > 80000) ? 1 : 0;
-		}
-		for (k = 1; k < L_LFWVWIN-1; k++) {
-			if (!mk[k]) continue;
-			for (kl = k-1; kl > 0          && mk[kl]; kl--) ;
-			for (kr = k+1; kr < L_LFWVWIN-1 && mk[kr]; kr++) ;
-			if (kr - kl == 2 && kl >= 1 && kr <= L_LFWVWIN-2 && !mk[kl-1] && !mk[kr+1])
-				seq[k] = (int)(((int64_t)4 * (seq[kl] + seq[kr]) - (seq[kl-1] + seq[kr+1])) / 6);
-			else
-				seq[k] = seq[kl] + (int)((int64_t)(seq[kr] - seq[kl]) * (k - kl) / (kr - kl));
-			cnt++;
-		}
-	}
-	return cnt;
-}
-#endif /* WV_WINDESPIKE */
-
 void Wave_Task(void *arg)
 {
 	int id, i, j, dx, sx, initF=0, bx, bF=0, wr, re, mask,cnt;
@@ -2651,15 +2615,6 @@ void Wave_Task(void *arg)
 
 				// 32k -> 6400sample(400 pg), 8k -> 1600 sample(100 pg)
 				wr = copyToWaveWindow(id, &wQ[id], pww);
-
-#ifdef WV_WINDESPIKE
-				// [파형 A수정·폐기보류] 윈도우 despike — 과다검출로 악화, OFF. WV_WINDESPIKE로만 켜짐.
-				{	int nfix = despikeWindow(pww);
-					static uint32_t wvdCnt = 0;
-					if (nfix > 0 || (wvdCnt++ % 30) == 0)
-						printf("[WVDSP] id=%d fix=%d\n", id, nfix);
-				}
-#endif
 
 				// down sampleing
 				downSampling(pww, wQ[id].hs);
@@ -5339,27 +5294,6 @@ void Metering_Task(void *arg)
 #endif
 }
 
-
-#ifdef WV_EN_DUMMY
-/* [단계검증] 순수 CPU 부하 더미(HIGH) — I/O·flash·크리티컬섹션·SPI 전혀 없음.
-   RMSLog/PostScan와 동일 우선순위로 CPU만 소모. 이걸로 M0가 깨지면 원인은
-   '특정 I/O'가 아니라 '일반 CPU/스케줄 부하'(readWFB 타이밍 교란)로 확정된다. */
-void Dummy_Task(void *arg)
-{
-	volatile double x = 1.0;
-	int i;
-	while (1) {
-#ifdef WV_QCAP
-		while (g_wfbQuiet) osDelayTask(5);	/* 조용창: 양보 */
-#endif
-		for (i = 0; i < 30000; i++) {		/* ~1-2ms busy math */
-			x = x * 1.0000001 + 0.5;
-			if (x > 1.0e6) x = 1.0;
-		}
-		osDelayTask(10);					/* PostScan처럼 주기적 wake */
-	}
-}
-#endif
 
 #if 0	/* [통합] RMSLog_Task는 Metering_Task로 통합됨(롤백 대비 보존). */
 void RMSLog_Task(void *arg)

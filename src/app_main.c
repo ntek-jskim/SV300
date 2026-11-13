@@ -608,23 +608,13 @@ void app_init(void *params) {
 		{
 			TRACE_ERROR("Failed to create task(Wave)\r\n");
 		}
-		/* [통합] RMSLog + PostScan + Energy → 단일 Metering_Task(HIGH).
-		 * WV_STAGED 단계검증 시 세 게이트(RMSLOG/POST/ENERGY) 중 하나라도 켜지면 생성(OR). */
-#if !defined(WV_STAGED) || defined(WV_EN_RMSLOG) || defined(WV_EN_POST) || defined(WV_EN_ENERGY)
-		// Metering (RMSLog+PostScan+Energy)
+		/* [통합] RMSLog + PostScan + Energy → 단일 Metering_Task(HIGH). */
 		taskParams.priority = OS_TASK_PRIORITY_HIGH;
 		tid_metering  = osCreateTask("metering", Metering_Task, NULL, &taskParams);
 		if(tid_metering == OS_INVALID_TASK_ID)
 		{
 			TRACE_ERROR("Failed to create task(Metering)\r\n");
 		}
-#endif
-#ifdef WV_EN_DUMMY	/* [단계검증] 순수 CPU 부하 더미(HIGH) — I/O 없이 부하만 */
-		{	extern void Dummy_Task(void *);
-			taskParams.priority = OS_TASK_PRIORITY_HIGH;
-			osCreateTask("dummy", Dummy_Task, NULL, &taskParams);
-		}
-#endif
 		taskParams.priority = OS_TASK_PRIORITY_NORMAL;
 		taskParams.stackSize = 256;
 		tid_cmd = osCreateTask("cmd", CmdProc_Task, NULL, &taskParams);
@@ -645,7 +635,6 @@ void app_init(void *params) {
 			TRACE_ERROR("Failed to create task(Meter)!\r\n");
 		}
 #ifndef CH1
-#if !defined(WV_STAGED) || defined(WV_EN_M1)	/* [단계검증] M12 (4단계) */
 		/* [W3 버스별 스레드] M1·M2(SSP1 공유)를 단일 Meter12_Task로 통합.
 		 * M2 채널 유무는 Meter12_Task 내부의 #ifdef CH3로 결정(getHwCh 무관).
 		 * 우선순위 REALTIME(Meter0와 동급) — 한 스레드만 SSP1 접근하여 W2 락 제거 대비.
@@ -657,7 +646,6 @@ void app_init(void *params) {
 		{
 			TRACE_ERROR("Failed to create task(Meter12)!\r\n");
 		}
-#endif	/* WV_EN_M1 */
 #endif /* CH1 */
 #endif /* 0 */
 
@@ -671,7 +659,6 @@ void app_init(void *params) {
 		}
 		
 #if 0	/* [태스크 통합] Trend_Task 제거 → FS_task(meter.c)가 흡수(checkTrendHeader 1회 + 루프마다 trendTick). 롤백 대비 보존. */
-#if !defined(WV_STAGED) || defined(WV_EN_TREND)	/* [단계검증] Trend */
 		// Trend
 		taskParams.priority = OS_TASK_PRIORITY_LOW;
 		tid_trend = osCreateTask("trend", Trend_Task, NULL, &taskParams);
@@ -679,15 +666,9 @@ void app_init(void *params) {
 		{
 			TRACE_ERROR("Failed to create task(Trend)!\r\n");
 		}
-#endif
 #endif	/* Trend_Task → FS_task 흡수 */
    	}
 
-#if defined(WV_STAGED) && !defined(WV_EN_RMSLOG)	/* RMSLog(=g_meterReady 세터)를 끈 단계시험에선 강제 세팅해 web/Modbus 살림. RMSLog 켜지면 기존 A안 폴백(10초 타임아웃) 정상 동작 */
-	{ extern volatile uint8_t g_meterReady; g_meterReady = 1; }
-#endif
-
-#if !defined(WV_STAGED) || defined(WV_EN_IOM)	/* [단계검증] IOM */
    // IOM
     taskParams.priority = OS_TASK_PRIORITY_LOW;
     tid_iom = osCreateTask("iom", IOM_Task, NULL, &taskParams);
@@ -696,7 +677,6 @@ void app_init(void *params) {
        //Debug message
        TRACE_ERROR("Failed to create task(iom)!\r\n");
     }
-#endif
 //    pdb->comm.comMode = 1;
 
 //	pdb->comm.gwEable = 0x03;	// gems3600 #1,2 enable	

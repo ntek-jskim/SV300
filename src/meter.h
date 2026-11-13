@@ -2,26 +2,10 @@
 
 #define	_METER_H
 
-/* [파형 진단 스캐폴딩] WV_STAGED = 진단 마스터 스위치. 정의 시: core(M0/Wave/FFT/web/network)만 기동
-   + 아래 WV_EN_*로 워커/타칩을 하나씩 ON + despike off + g_meterReady 강제. 어느 워커가 M0 파형에
-   커플링하는지 색출용. [결론] 워커 전원 무죄, THD는 전 구간 정상. M1/M2 WFB가 파형에 약간 커플링(THD 무관).
-   ▶ 정식 운전 = WV_STAGED OFF(전체 태스크 자동 ON). 재진단 시 WV_STAGED만 주석해제하면 아래 블록 재활성. */
-//#define	WV_STAGED		/* [정식운전] OFF. 재진단 시 이 줄만 주석해제 */
+/* [파형 보정 방침] 진단 스캐폴딩(WV_STAGED·WV_EN_*·WV_DIAG·WV_NO_M12_WFB·WV_WINDESPIKE)은 26/11/13 삭제.
+   [결론] 워커 전원 무죄, THD는 전 구간 정상. M1/M2 WFB가 파형에 약간 커플링(THD 무관). */
 #define	WV_NO_DESPIKE		/* [보정 OFF] despike 우회 유지(사용자 방침). despike 켜려면 이 줄 주석 처리 */
-//#define	WV_DIAG			/* [진단] 스파이크 검출·로그. FFT_Task(LLOW)에서 검출→Meter 오염 없음. 정식운전 시 주석 */
-
-/* ↓ WV_STAGED 진단모드 전용 — 정식운전(WV_STAGED OFF)에선 전부 무효. 재진단 시 필요한 것만 주석해제. */
-//#define	WV_EN_RMSLOG
-//#define	WV_EN_POST
-//#define	WV_EN_DUMMY
-//#define	WV_EN_ENERGY
-//#define	WV_EN_TREND
-//#define	WV_EN_IOM
-//#define	WV_EN_M1
-//#define	WV_EN_M2
-//#define	WV_WINDESPIKE	/* A안: 조립윈도우 median despike - 폐기/보류 */
 //#define	WV_QCAP		/* [보정 OFF] Quiet Capture off — raw 파형(사용자 방침). 켜려면 주석해제 */
-//#define	WV_NO_M12_WFB	/* [진단] M1/M2 WFB skip. 정식운전 OFF(=M1/M2 WFB 정상 캡처) */
 
 //#include <LPC43xx.h>
 #include "os_port.h"
@@ -166,14 +150,6 @@ uint32_t logCutoffKeyMonths(int months);	/* meter.c: months개월 전 월키(YYY
  *  둘 다 없음 → 2채널(M0,M1) */
 #ifdef CH1
 #define ACTIVE_METER_CH_COUNT 1
-#elif defined(WV_STAGED)
-  #if defined(WV_EN_M2)
-    #define ACTIVE_METER_CH_COUNT 3
-  #elif defined(WV_EN_M1)
-    #define ACTIVE_METER_CH_COUNT 2
-  #else
-    #define ACTIVE_METER_CH_COUNT 1	/* 2·3단계: M0 단독 */
-  #endif
 #else
 #define ACTIVE_METER_CH_COUNT METER_CH_COUNT
 #endif
