@@ -177,6 +177,9 @@ static void prgDiagDump(const char *tag, const volatile uint8_t *p, uint32_t n)
 #define PRG_CYC_ON()	do { PRG_DEMCR |= (1UL << 24); PRG_DWTCTRL |= 1UL; } while (0)
 #define PRG_US(cyc)	((cyc) / (SystemCoreClock / 1000000UL))
 
+#define PRG_SLOW_US	5000u		/* 성공한 쓰기라도 ROM 호출이 이 이상 걸리면 slow ok 출력 */
+static uint32_t s_prgCnt, s_prgSlow, s_prgMaxUs;	/* ROM 쓰기 호출 수 / slow 수 / 최대 시간(us) */
+
 /* 플래시(메모리 모드) 내용과 buf 의 첫 불일치 위치. 모두 같으면 sz */
 static U32 prgMismatch(const volatile uint8_t *p, const U8 *buf, U32 sz)
 {
@@ -205,7 +208,7 @@ static BOOL ProgramPage(U32 adr, U32 sz, U8 *buf)
 	uint8_t oldv[PRG_DIAG_N];
 	const volatile uint8_t *mp;
 	uint32_t i, n, needErase = 0, off0, off;
-	uint32_t c0, c1;
+	uint32_t c0, c1, tus;
 	uint16_t st0;
 	uint8_t bz0;
 
@@ -248,6 +251,19 @@ static BOOL ProgramPage(U32 adr, U32 sz, U8 *buf)
 	c1 = PRG_CYCCNT;
 	st0 = s_spifi_obj.stat.hw; bz0 = s_spifi_obj.busy;	/* ROM 이 마지막으로 읽은 상태(set_mem_mode 전) */
 	s_rom->set_mem_mode(&s_spifi_obj);
+	/* [TODO 4.1 진단 11/16] 성공한 쓰기도 ROM 호출이 오래 걸렸으면 출력 — 실패는 모두 25~39ms(칩은 WIP=0).
+	 *  성공인데 수~20ms 걸린 쓰기가 자주 보이면 = 우선순위 높은 태스크에 밀린 것(가설 a),
+	 *  성공은 늘 1ms 안팎이고 실패만 25ms 이상이면 = ROM 이 완료를 못 알아챔(가설 b) */
+	tus = PRG_US(c1 - c0);
+	s_prgCnt++;
+	if (tus > s_prgMaxUs)
+		s_prgMaxUs = tus;
+	if (rc == 0 && tus >= PRG_SLOW_US) {
+		s_prgSlow++;
+		printf("[SPIFI] slow ok adr=0x%08x sz=%u t=%uus (slow %u/%u, max %uus)\n",
+		       (unsigned)adr, (unsigned)sz, (unsigned)tus,
+		       (unsigned)s_prgSlow, (unsigned)s_prgCnt, (unsigned)s_prgMaxUs);
+	}
 	if (rc != 0) {
 		printf("[SPIFI] program FAIL adr=0x%08x sz=%u rc=%d needErase=%u\n",
 		       (unsigned)adr, (unsigned)sz, (int)rc, (unsigned)needErase);
@@ -257,7 +273,7 @@ static BOOL ProgramPage(U32 adr, U32 sz, U8 *buf)
 		/* [TODO 4.1 진단 11/13] ROM 이 본 칩 상태·걸린 시간: 즉시 실패인지, 기다리다 시간 초과인지,
 		 *  상태 레지스터(MX25L: bit0 WIP, bit1 WEL, bit6 QE)가 어떻게 읽혔는지 */
 		printf("[SPIFI]   rom: t=%uus stat=0x%04x busy=%u errCheck=0x%08x opts=0x%08x\n",
-		       (unsigned)PRG_US(c1 - c0), (unsigned)st0, (unsigned)bz0,
+		       (unsigned)tus, (unsigned)st0, (unsigned)bz0,
 		       (unsigned)s_spifi_obj.errCheck, (unsigned)s_spifi_obj.opts);
 		/* [TODO 4.1] 11/13 실측: rc=0x20003(시간 초과)인데 플래시 내용은 쓰려던 값과 같음(거짓 실패).
 		 *  다시 읽어 같으면 성공 처리, 다르면 불일치 위치부터 1회 재기록 후 다시 확인 → 파일시스템이 거짓 실패로 쓰기를 중단하지 않게 함.
