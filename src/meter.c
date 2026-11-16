@@ -5417,13 +5417,34 @@ void Metering_Task(void *arg)
 		}
 
 		/* [26/11/16 진단] 이더넷 수신 누락 프레임(DMA_MFRM_BUFOF, 읽으면 클리어) — 웹 무응답 시 패킷 유실 여부 확인.
-		 *  [15:0]=수신 디스크립터 부족으로 버린 프레임, [27:17]=FIFO 넘침으로 버린 프레임. 0 이 아니면 출력. */
+		 *  [15:0]=수신 디스크립터 부족으로 버린 프레임, [27:17]=FIFO 넘침으로 버린 프레임.
+		 *  카운터는 넘치지 않게 100ms(이 루프)마다 읽어 누적하고, 출력은 60초에 1줄 요약 — 사내망 브로드캐스트
+		 *  폭주(11/16 실측 10~30초 간격, 100ms 당 최대 63) 때 HIGH 태스크에서 printf 가 몰리지 않게 한다.
+		 *  bursts = 누락이 있던 100ms 횟수, max = 100ms 최대 누락, last = 마지막 누락 시각 */
 		{
+			static uint32_t ethMissD, ethMissF, ethBurst, ethMax, ethRptTs;
+			static int ethLastH, ethLastM, ethLastS;
 			uint32_t mf = LPC_ETHERNET->DMA_MFRM_BUFOF;
-			if (mf & ((DMA_MFRM_FMCMSK) | (0x7FFu << 17)))
-				printf("[ETHDIAG] rx missed: desc=%u fifo=%u (raw=0x%08x) @%02d:%02d:%02d\n",
-				       (unsigned)(mf & DMA_MFRM_FMCMSK), (unsigned)DMA_MFRM_FMA(mf), (unsigned)mf,
-				       meter[0].cntl.tod.tm_hour, meter[0].cntl.tod.tm_min, meter[0].cntl.tod.tm_sec);
+			uint32_t nd = mf & DMA_MFRM_FMCMSK, nf = DMA_MFRM_FMA(mf);
+
+			if (nd + nf) {
+				ethMissD += nd;
+				ethMissF += nf;
+				ethBurst++;
+				if (nd + nf > ethMax)
+					ethMax = nd + nf;
+				ethLastH = meter[0].cntl.tod.tm_hour;
+				ethLastM = meter[0].cntl.tod.tm_min;
+				ethLastS = meter[0].cntl.tod.tm_sec;
+			}
+			if ((uint32_t)(sysTick1s - ethRptTs) >= 60) {
+				if (ethBurst)
+					printf("[ETHDIAG] rx missed/60s: desc=%u fifo=%u bursts=%u max=%u last @%02d:%02d:%02d\n",
+					       (unsigned)ethMissD, (unsigned)ethMissF, (unsigned)ethBurst, (unsigned)ethMax,
+					       ethLastH, ethLastM, ethLastS);
+				ethRptTs = sysTick1s;
+				ethMissD = ethMissF = ethBurst = ethMax = 0;
+			}
 		}
 		/* [26/11/16] SPI 읽기 검증 통계 10분 주기 — retry/fail 이 늘었을 때만 출력(현장 버스 품질 확인용) */
 		if ((uint32_t)(sysTick1s - spiCrcRptTs) >= 600) {
