@@ -821,6 +821,12 @@ void cmd_meter(char *par) {
 	printf("I : %.3f, %.3f, %.3f\n", pmeter->I[0], pmeter->I[1], pmeter->I[2]);
 }
 
+/* [26/11/16] ADE9000 SPI 읽기 CRC 통계 출력 */
+extern void spiCrcReport(int force);
+void cmd_spicrc(char *par) {
+	spiCrcReport(1);
+}
+
 void cmd_saveenergy(char *par) {
 	//ENERGY_NVRAM *pEgyNvr = &egyNvr;
 
@@ -1117,6 +1123,7 @@ static const SCMD cmd[] = {
 	"CLRWG", cmd_clrwg,
 	"SAVECAL", cmd_savecal,
 	"SAVEENG", cmd_saveenergy,
+	"SPICRC", cmd_spicrc,
 	"CLROS", cmd_clrdcos,
 	"DCOS",  cmd_dcos,
 	"TIME", cmd_datetime,

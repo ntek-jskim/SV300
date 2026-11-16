@@ -896,6 +896,8 @@ void IOM_Task(void *arg)
 {
 	static int ch;
 	DI_BUF *pdi;
+	uint64_t lowT = 0;		/* [26/11/16 진단] LOW 우선순위 기아 감지(웹 HTTP 태스크와 같은 LOW) */
+	uint32_t lowGap;
 
 	// 초기화 (시작 시 한 번, 예: app_main 또는 Board 초기화에서)
 	TempSensor_Init();
@@ -915,6 +917,15 @@ void IOM_Task(void *arg)
 
 	while (1) {
 		pcntl->wdtTbl[Tid_Iom].count++;
+		/* [26/11/16 진단] 1ms 주기 루프가 1초 이상 벌어지면 같은 LOW(웹 HTTP 포함)가 CPU를 못 받은 것.
+		 *  OS_ROBIN=0 이라 같은 LOW 의 FS_task 가 오래 돌면 기아가 생긴다 — 웹 '----' 시각과 대조용. */
+		if (lowT != 0) {
+			lowGap = (uint32_t)(sysTick64 - lowT);
+			if (lowGap >= 1000)
+				printf("[LOWLAG] LOW task starved %ums @%02d:%02d:%02d\n", (unsigned)lowGap,
+				       pcntl->tod.tm_hour, pcntl->tod.tm_min, pcntl->tod.tm_sec);
+		}
+		lowT = sysTick64;
 #ifdef WV_QCAP
 		while (g_wfbQuiet) osDelayTask(5);	/* 조용창: 파형 캡처 중엔 양보 */
 #endif

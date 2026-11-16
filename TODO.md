@@ -186,6 +186,14 @@
   5. DI: 부팅 직후 상태 변화 없음, IO 화면 Debounce 16
   6. 내장웹 Feeder·IO 글꼴이 Channel 화면과 같은 크기·굵기
 
+### 3.14 데이터 튐 대비 — 전력량 증분 검사·ADE 리셋 감지·FRAM 교대 저장·SPI 검증 (26/11/16)
+- **상태**: 3CH 빌드 0E/0W. SPI 검증은 실기로 방식 확정(CRC_SPI = CCITT 초기값 0xFFFF·데이터 4B 100% 일치, echo 동작 중 불일치 0) 후 재시도 모드. 나머지 실기 미확인
+- **시험 방법**
+  1. 정상 부하에서 `[EGY] spike` 로그 없음. PT/CT 를 일부러 낮게 설정 → 3초 폐기 후 `over-limit sustained ... accepted` 로 통과
+  2. 디버거로 ADE `CONFIG1`=1(SWRST) 기록 → `[ADE] M? reset/config lost -> re-init` 후 계측·파형 계속, 전력량 튐 없음
+  3. 부팅 로그 `Energy loaded from FRAM @x (seq=n)` — 저장마다 `store Energy @0/@4096` 교대·seq 증가, 재부팅 후 값 유지
+  4. `SPICRC`: 부팅 직후 fail 칩당 약 5(부팅 시 반복값을 보내지 않는 init 레지스터)·이후 증가 없음, ZX timeout 로그 증가 없음
+
 ---
 
 ## 4. 장시간 운전 안정성

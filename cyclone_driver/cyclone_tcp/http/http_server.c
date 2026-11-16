@@ -49,6 +49,18 @@
 #include "http/mime.h"
 #include "http/ssi.h"
 #include "debug.h"
+#include <stdio.h>
+
+/* [SV300 26/11/16 진단] 웹 '----'(5~10초 무응답) 추적 — ping·Modbus TCP 는 정상이라 HTTP 계층 의심.
+ *  이상 상황만 [WEBDIAG] 로 출력한다:
+ *   - slots full : 동시 연결 슬롯(HTTP_SERVER_MAX_CONNECTIONS)이 모두 찬 채 WEBDIAG_SLOW_MS 이상 → 새 연결이 대기했음
+ *   - no request : 연결은 수락했는데 요청이 오지 않아 유휴 타임아웃(브라우저 선연결 등)까지 슬롯 점유
+ *   - read err   : 요청 수신 중 타임아웃·종료 외 오류
+ *   - slow req   : 요청 처리(콜백+응답 송신)가 WEBDIAG_SLOW_MS 이상
+ *   - slow close : 연결 종료(shutdown)가 WEBDIAG_SLOW_MS 이상 — 상대 FIN 대기로 슬롯 점유
+ *  11/16 결론: 끊김은 사내망 원인(PC 1:1 직결 시 미발생) → 기본 OFF. 재조사 시 1 로 켠다. */
+#define WEBDIAG				0
+#define WEBDIAG_SLOW_MS		500
 
 //Check TCP/IP stack configuration
 #if (HTTP_SERVER_SUPPORT == ENABLED)
@@ -287,6 +299,9 @@ void httpListenerTask(void *param)
    HttpServerContext *context;
    HttpConnection *connection;
    Socket *socket;
+#if WEBDIAG
+   systime_t dT0, dSemWait, dSemDone;
+#endif
 
    //Task prologue
    osEnterTask();
@@ -300,8 +315,15 @@ void httpListenerTask(void *param)
       //Debug message
       TRACE_INFO("Ready to accept a new connection...\r\n");
 
+#if WEBDIAG
+      dT0 = osGetSystemTime();
+#endif
       //Limit the number of simultaneous connections to the HTTP server
       osWaitForSemaphore(&context->semaphore, INFINITE_DELAY);
+#if WEBDIAG
+      dSemDone = osGetSystemTime();
+      dSemWait = dSemDone - dT0;	/* 슬롯이 모두 차 있던 시간 */
+#endif
 
       //Loop through the connection table
       for(i = 0; i < context->settings.maxConnections; i++)
@@ -321,6 +343,14 @@ void httpListenerTask(void *param)
                //Just for sanity
                (void) counter;
 
+#if WEBDIAG
+               /* 슬롯이 다 찬 동안 대기열(backlog)에 있던 연결이 바로 수락됨 = 그 클라이언트가 대기했음 */
+               if(dSemWait >= WEBDIAG_SLOW_MS && (osGetSystemTime() - dSemDone) < 50)
+               {
+                  printf("[WEBDIAG] slots full %ums -> queued client port %u got slot%u\n",
+                     (unsigned)dSemWait, (unsigned)clientPort, (unsigned)i);
+               }
+#endif
                //Debug message
                TRACE_INFO("Connection #%u established with client %s port %" PRIu16 "...\r\n",
                   counter, ipAddrToString(&clientIpAddr, NULL), clientPort);
@@ -364,6 +394,11 @@ void httpConnectionTask(void *param)
    error_t error;
    uint_t counter;
    HttpConnection *connection;
+#if WEBDIAG
+   systime_t dT0, dT1;
+   uint_t dSlot;
+   uint16_t dPort;
+#endif
 
    //Task prologue
    osEnterTask();
@@ -469,15 +504,37 @@ void httpConnectionTask(void *param)
             //Clear response header
             osMemset(&connection->response, 0, sizeof(HttpResponse));
 
+#if WEBDIAG
+            dT0 = osGetSystemTime();
+            dSlot = (uint_t)(connection - connection->serverContext->connections);
+            dPort = connection->socket->remotePort;
+#endif
             //Read the HTTP request header and parse its contents
             error = httpReadRequestHeader(connection);
             //Any error to report?
             if(error)
             {
+#if WEBDIAG
+               if(counter == 0)
+               {
+                  /* 수락 후 요청 한 번 없이 끝남 — 그동안 슬롯 하나를 점유 */
+                  printf("[WEBDIAG] slot%u port %u no request, held %ums (err=%d)\n",
+                     dSlot, (unsigned)dPort, (unsigned)(osGetSystemTime() - dT0), (int)error);
+               }
+               else if(error != ERROR_TIMEOUT && error != ERROR_END_OF_STREAM &&
+                  error != ERROR_CONNECTION_CLOSING)
+               {
+                  printf("[WEBDIAG] slot%u port %u read err=%d after %u req\n",
+                     dSlot, (unsigned)dPort, (int)error, (unsigned)counter);
+               }
+#endif
                //Debug message
                TRACE_INFO("No HTTP request received or parsing error...\r\n");
                break;
             }
+#if WEBDIAG
+            dT1 = osGetSystemTime();	/* 요청 헤더 수신 완료 */
+#endif
 
 #if (HTTP_SERVER_BASIC_AUTH_SUPPORT == ENABLED || HTTP_SERVER_DIGEST_AUTH_SUPPORT == ENABLED)
             //No Authorization header found?
@@ -611,6 +668,14 @@ void httpConnectionTask(void *param)
                }
             }
 
+#if WEBDIAG
+            if(osGetSystemTime() - dT1 >= WEBDIAG_SLOW_MS || error)
+            {
+               printf("[WEBDIAG] slot%u port %u %s %ums err=%d\n",
+                  dSlot, (unsigned)dPort, connection->request.uri,
+                  (unsigned)(osGetSystemTime() - dT1), (int)error);
+            }
+#endif
             //Internal error?
             if(error)
             {
@@ -646,8 +711,19 @@ void httpConnectionTask(void *param)
       {
          //Debug message
          TRACE_INFO("Graceful shutdown...\r\n");
+#if WEBDIAG
+         dT0 = osGetSystemTime();
+#endif
          //Graceful shutdown
          socketShutdown(connection->socket, SOCKET_SD_BOTH);
+#if WEBDIAG
+         if(osGetSystemTime() - dT0 >= WEBDIAG_SLOW_MS)
+         {
+            printf("[WEBDIAG] slot%u port %u slow close %ums\n",
+               (unsigned)(connection - connection->serverContext->connections),
+               (unsigned)connection->socket->remotePort, (unsigned)(osGetSystemTime() - dT0));
+         }
+#endif
 
          //Debug message
          TRACE_INFO("Closing socket...\r\n");

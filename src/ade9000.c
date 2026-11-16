@@ -1258,7 +1258,7 @@ void readPhaseEnergy(uint8_t id, METER_EH_REGS *peh)
 		
 	// read wh, varh, vah, fwh, fvarh, fvah
 	for (addr = 0x2e7, i=0; i<18; i++, addr+=0xa) {
-		read_reg32(id, addr, (uint32_t *)&pegy[i]); 
+		read_reg32_crc(id, addr, (uint32_t *)&pegy[i]); 	/* [26/11/16] CRC_SPI 검증(집계 모드) */
 	}
 }
 
@@ -2970,6 +2970,57 @@ void meter_scan(uint8_t id)
 	meter_scan_proc(id);
 }
 
+/* [26/11/16] ADE9000 리셋·설정 소실 감지 → 재초기화.
+ *  칩이 순간 저전압·노이즈로 리셋되면 설정(RUN·EGY_TIME·게인 등)이 기본값으로 돌아가 계측이 멈추거나 틀어진다.
+ *  STATUS1.RSTDONE(bit16)이 서면 즉시, 아니면 1초마다 RUN(=1)·EGY_TIME(=7999)을 읽어 확인한다.
+ *  두 번 연속 불일치일 때만 리셋으로 판정(SPI 일시 오류 오검출 방지) → initADE9000 재실행,
+ *  파형 큐 리셋, 첫 전력량 증분 폐기(energyInit=0). 재초기화 후 ADE_REINIT_HOLD 초는 재검사하지 않는다
+ *  (칩 무응답 시 재초기화 반복 방지). 진단: adeReinitCnt. MASK가 지워져 IRQ가 끊겨도
+ *  meter_scan·Meter12_Task 의 ZX timeout 경로에서 meter_scan_proc 가 계속 호출되므로 검출된다. */
+#define ADE_STATUS1_RSTDONE	(1u<<16)
+#define ADE_REINIT_HOLD		5
+uint32_t adeReinitCnt[METER_CH_COUNT];
+static uint32_t adeChkTs[METER_CH_COUNT];
+static uint8_t  adeHold[METER_CH_COUNT];
+
+static int adeConfigLost(uint8_t id)
+{
+	uint16_t run = 0, egyTime = 0;
+
+	read_reg16(id, AD9X_RUN, &run);
+	read_reg16(id, AD9X_EGY_TIME, &egyTime);
+	return (run != 1 || egyTime != 7999);
+}
+
+/* 반환 1 = 재초기화함(이번 스캔 처리 생략) */
+static int adeCheckReset(uint8_t id, uint32_t stat1)
+{
+	uint32_t now = sysTick1s;
+
+	if (adeHold[id]) {
+		if ((uint32_t)(now - adeChkTs[id]) < ADE_REINIT_HOLD)
+			return 0;
+		adeHold[id] = 0;
+	}
+	else if (!(stat1 & ADE_STATUS1_RSTDONE) && now == adeChkTs[id]) {
+		return 0;		/* 정기 검사는 초당 1회 */
+	}
+	adeChkTs[id] = now;
+
+	if (!adeConfigLost(id) || !adeConfigLost(id))
+		return 0;
+
+	adeReinitCnt[id]++;
+	printf("[ADE] M%d reset/config lost (status1=0x%08x) -> re-init (cnt=%u)\n",
+		id, stat1, (unsigned)adeReinitCnt[id]);
+	initADE9000(id);
+	wQ[id].fr = wQ[id].re = 0;			/* 파형 연속성 끊김 */
+	meter[id].cntl.energyInit = 0;		/* 재초기화 직후 첫 전력량 증분 폐기 */
+	adeHold[id] = 1;
+	adeChkTs[id] = sysTick1s;
+	return 1;
+}
+
 /* 칩 1개 IRQ 처리(대기 없음) */
 void meter_scan_proc(uint8_t id)
 {
@@ -3001,6 +3052,9 @@ void meter_scan_proc(uint8_t id)
 	   WFB page-full(bit17)까지 함께 지워져 그 절반을 건너뛰어 파형 seam(불연속)이 생긴다.
 	   이후 핸들러는 로컬 stat0 스냅샷으로 처리하므로 조기 클리어가 안전. */
 	write_reg32(id, AD9X_STATUS0, &stat0);
+
+	if (adeCheckReset(id, stat1))
+		return;
 
 	// Energy READY, period = 1s
 	if (stat0 & (1<<0)) {

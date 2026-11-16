@@ -14,10 +14,10 @@
 #include "snmp_trap.h"
 #include "snmp_cfg.h"
 
-#define	FW_VER	0004
+#define	FW_VER	0005
 #define	FW_BUILD_YEAR 26
 #define	FW_BUILD_MON  11
-#define	FW_BUILD_DAY  13
+#define	FW_BUILD_DAY  16
 
 #define	SQRT_2	 1.414213562 
 
@@ -79,6 +79,8 @@ int		saveLockEnergy=0;
 static uint32_t egyLastSave = 0;	/* [에너지 저장 스로틀] 마지막 storeEnergy 시각(sysTick1s) */
 static int      egyDirty = 0;		/* 전력량 변화 누적(미저장) 표시 */
 #define EGY_SAVE_SEC 300			/* 변화 있으면 5분마다 1회 저장(월변경/클리어는 즉시) */
+#define EGY_SAVE_RETRY_SEC 10		/* FRAM 기록 실패 시 재시도 간격 */
+static uint32_t spiCrcRptTs;		/* SPI CRC 통계 주기 출력 시각 */
 volatile uint8_t g_meterReady = 0;   /* 계측 M0~M(ACTIVE-1) Buffer Ready 완료 → 웹/Modbus 통신 게이트 */
 volatile uint8_t g_wfbQuiet = 0;     /* [Quiet Capture] 1=조용창(파형 캡처중) → CPU 워커(RMSLog/PostScan/FFT/Dummy)는 양보. WV_QCAP */
 volatile uint8_t g_sdBusy = 0;       /* [Quiet Capture] sticky: flash ProgramPage/EraseSector가 1로 세움(XIP정지·인터럽트지연으로 M0 교란). Wave_Task가 감시창마다 리셋→체크(활동 있으면 그 캡처 폐기·재시도). WV_QCAP */
@@ -2966,13 +2968,26 @@ static void trimFixedRecordFileFs(const char *path, uint32_t recSize, uint32_t k
 static void demandIoTick(void);
 static void egyIoTick(void);
 
+/* [26/11/16 진단] FS_task 구간별 소요시간 — FSLAG_MS 이상이면 출력.
+ *  웹 HTTP 태스크가 FS_task 와 같은 LOW 이고 OS_ROBIN=0 이라, FS_task 가 오래 돌면 웹이 응답하지 못한다('----').
+ *  [LOWLAG](iom.c) 시각과 함께 보아 어느 구간이 원인인지 확정한다. */
+#define FSLAG_MS	1000
+static void fsLagChk(const char *tag, uint64_t t0)
+{
+	uint32_t dt = (uint32_t)(sysTick64 - t0);
+
+	if (dt >= FSLAG_MS)
+		printf("[FSLAG] %s %ums @%02d:%02d:%02d\n", tag, (unsigned)dt,
+		       meter[0].cntl.tod.tm_hour, meter[0].cntl.tod.tm_min, meter[0].cntl.tod.tm_sec);
+}
+
 void FS_task(void *arg)
 {
 	FILE *fp=NULL;
 	FS_MSG *pmsg;
 	uint8_t *ptr;
 	int length, cnt=0, i, ix, id=0;
-	uint64_t t1, t2;
+	uint64_t t1, t2, tl;
 	uint32_t t3;
 	uint32_t notificationValue;
 	EVENT_U elog;
@@ -3005,7 +3020,8 @@ void FS_task(void *arg)
 		t3 = sysTick32;
 		
 		meter[0].cntl.wdtTbl[Tid_Fs].count++;
-		
+
+		tl = sysTick64;
 		if (fsQ.fr != fsQ.re) {
 			fsFileLock();
 			while (fsQ.fr != fsQ.re) {
@@ -3133,19 +3149,29 @@ void FS_task(void *arg)
 			printf("[[reboot: external WDT reset ...]]\n");
 		}
 
+		fsLagChk("fsQ/cmd", tl);
+
 		/* [태스크 통합] 옛 Trend_Task 루프 본문 흡수. tm_min 이 바뀐 뒤 최대 100ms(폴링주기)
 		 *  안에 1분 1회만 실제 동작하고, 같은 분이면 즉시 return 이라 매 루프 호출해도 무해.
 		 *  fsQ 처리와 같은 태스크라 flash write 가 순차 실행되어 경합이 없다. */
+		tl = sysTick64;
 		trendTick();
+		fsLagChk("trend", tl);
 
 		/* [26/11/04] PQ 10분 기록(ql/qw)을 미터 태스크(REALTIME)에서 넘겨받아 처리 + 하루 1회 정리 */
+		tl = sysTick64;
 		pqIoTick();
+		fsLagChk("pq", tl);
 
 		/* [26/11/04] 15분 demand 파일 기록(Metering_Task 에서 넘겨받음) */
+		tl = sysTick64;
 		demandIoTick();
+		fsLagChk("demand", tl);
 
 		/* [26/11/05] 에너지 로그(1시간/egy15/월 아카이브) 파일 기록(Metering_Task 에서 넘겨받음) */
+		tl = sysTick64;
 		egyIoTick();
+		fsLagChk("energy", tl);
 	}
 
 	// wait forever
@@ -3655,12 +3681,46 @@ int loadDemandNVR() {
 #define EGY_NVR_OS2			4096
 #define EGY_NVR_OS_LEGACY	512
 
-void storeEnergyNVR(ENERGY_NVRAM *pEgyNvr) {
-	if (FramWrite(pEgyNvr, EGY_NVR_OS1, sizeof(ENERGY_NVRAM)) == 0)
-		printf("FramWrite failed(%d, %d)\n", EGY_NVR_OS1, sizeof(ENERGY_NVRAM));
+/* [26/11/16] 교대 저장 + 순번 + 쓰기 후 검증.
+ *  종전: 같은 내용을 두 슬롯에 연속 기록 → 기록 중 전원 이상이면 두 사본이 같이 오염될 수 있었다.
+ *  변경: 매번 "마지막 정상 슬롯의 반대편" 한쪽에만 seq+1 로 기록하고 다시 읽어 비교(최대 3회).
+ *  실패하면 정상 슬롯은 그대로 남고, 다음 시도도 같은 반대편 슬롯에 한다(정상 사본 보존).
+ *  부팅 시 CRC·magic·범위가 정상인 슬롯 중 seq 가 큰 쪽을 쓴다(loadEnergyNVR). */
+#define EGY_NVR_WR_RETRY	3
+#define EGY_NVR_SEQ(p)		((uint32_t)(p)->seqLo | ((uint32_t)(p)->seqHi << 16))
+static const int egyNvrOs[2] = { EGY_NVR_OS1, EGY_NVR_OS2 };
+static int      egyNvrSlot = 1;			/* 마지막 정상 기록 슬롯(0=OS1, 1=OS2) */
+static uint32_t egyNvrSeq;				/* 마지막 정상 기록 순번 */
+static ENERGY_NVRAM egyNvrImg, egyNvrChk;	/* 기록 이미지·검증/로드 버퍼(1168B, 스택 회피) */
+uint32_t egyNvrWrFail;					/* 진단: 재시도 소진 실패 횟수 */
 
-	if (FramWrite(pEgyNvr, EGY_NVR_OS2, sizeof(ENERGY_NVRAM)) == 0)
-		printf("FramWrite failed(%d, %d)\n", EGY_NVR_OS2, sizeof(ENERGY_NVRAM));
+/* 반환 0 = 기록·검증 성공, -1 = 실패 */
+int storeEnergyNVR(ENERGY_NVRAM *pEgyNvr) {
+	int slot = egyNvrSlot ^ 1, os = egyNvrOs[slot], n;
+	uint32_t seq = egyNvrSeq + 1;
+
+	memcpy(&egyNvrImg, pEgyNvr, sizeof(ENERGY_NVRAM));	/* 기록 중 RAM 갱신과 분리된 스냅샷 */
+	egyNvrImg.seqLo = (uint16_t)seq;
+	egyNvrImg.seqHi = (uint16_t)(seq >> 16);
+	egyNvrImg.crc = gencrc_modbus((uint8_t *)&egyNvrImg, sizeof(ENERGY_NVRAM)-2);
+
+	for (n = 0; n < EGY_NVR_WR_RETRY; n++) {
+		if (FramWrite(&egyNvrImg, os, sizeof(ENERGY_NVRAM)) &&
+		    FramRead(&egyNvrChk, os, sizeof(ENERGY_NVRAM)) &&
+		    memcmp(&egyNvrImg, &egyNvrChk, sizeof(ENERGY_NVRAM)) == 0) {
+			egyNvrSlot = slot;
+			egyNvrSeq  = seq;
+			pEgyNvr->seqLo = egyNvrImg.seqLo;
+			pEgyNvr->seqHi = egyNvrImg.seqHi;
+			pEgyNvr->crc   = egyNvrImg.crc;
+			return 0;
+		}
+		printf("[EGY] FRAM write/verify fail @%d (try %d)\n", os, n+1);
+	}
+	egyNvrWrFail++;
+	printf("[EGY] FRAM store failed @%d, keep slot %d (fail cnt=%u)\n",
+		os, egyNvrSlot, (unsigned)egyNvrWrFail);
+	return -1;
 }
 
 
@@ -3887,52 +3947,67 @@ int loadEnergyLogFs(void)
 	return 0;
 }
 
-int loadEnergyNVR(ENERGY_NVRAM *pEgyNvr) {
-	uint16_t crc;
-	int id, grp, mode, sign, ret=0;
+/* 슬롯 이미지 검사: CRC·magic·Ereg64 범위. 반환 0 = 정상 */
+static int checkEnergyNvrImg(const ENERGY_NVRAM *p, int os)
+{
+	int id, grp, mode, sign;
 
-	FramRead(pEgyNvr, EGY_NVR_OS1, sizeof(ENERGY_NVRAM));
-	crc = gencrc_modbus((uint8_t *)pEgyNvr, sizeof(ENERGY_NVRAM));
-	if (crc) {
-		printf(">>Error on 1st Energy Register <<<\n");
-		FramRead(pEgyNvr, EGY_NVR_OS2, sizeof(ENERGY_NVRAM));
-		crc = gencrc_modbus((uint8_t *)pEgyNvr, sizeof(ENERGY_NVRAM));
-		if (crc) {
-			printf(">>Error on 2nd Energy Register <<<\n");
-			/* 이전 펌웨어 배치(2번째 사본 @512) — 업데이트 후 첫 부팅 1회. 다음 storeEnergy()가 새 위치에 기록 */
-			FramRead(pEgyNvr, EGY_NVR_OS_LEGACY, sizeof(ENERGY_NVRAM));
-			crc = gencrc_modbus((uint8_t *)pEgyNvr, sizeof(ENERGY_NVRAM));
-			if (crc) {
-				printf(">>Error on legacy Energy Register(@%d) <<<\n", EGY_NVR_OS_LEGACY);
-				return -1;
-			}
-			printf(">>Energy loaded from legacy FRAM @%d (migrate) <<<\n", EGY_NVR_OS_LEGACY);
-		}
-	}
-
-	if (pEgyNvr->magic != ENERGY_NVRAM_MAGIC) {
-		printf(">>Energy NVRAM magic mismatch(%x) <<<\n", (unsigned)pEgyNvr->magic);
+	if (gencrc_modbus((uint8_t *)p, sizeof(ENERGY_NVRAM))) {
+		printf(">>Energy FRAM @%d CRC error <<<\n", os);
 		return -1;
 	}
-	
-	if (crc == 0) {
-		for (id=0; id<ENERGY_CH_COUNT; id++) {
-			for (grp=0; grp<ENERGY_GROUP_COUNT; grp++) {
-				for (mode=0; mode<ENERGY_MODE_COUNT; mode++) {
-					for (sign=0; sign<ENERGY_SIGN_COUNT; sign++) {
-						if (EGY_VAL(pEgyNvr->Ereg64[id], mode, sign, grp) > MAX_EREG64) {
-							printf(">>Error on Ereg64[%d] grp=%d mode=%d sign=%d = %lld<<\n",
-								id, grp, mode, sign,
-								EGY_VAL(pEgyNvr->Ereg64[id], mode, sign, grp));
-							ret = -1;
-						}
+	if (p->magic != ENERGY_NVRAM_MAGIC) {
+		printf(">>Energy FRAM @%d magic mismatch(%x) <<<\n", os, (unsigned)p->magic);
+		return -1;
+	}
+	for (id=0; id<ENERGY_CH_COUNT; id++) {
+		for (grp=0; grp<ENERGY_GROUP_COUNT; grp++) {
+			for (mode=0; mode<ENERGY_MODE_COUNT; mode++) {
+				for (sign=0; sign<ENERGY_SIGN_COUNT; sign++) {
+					if (EGY_VAL(p->Ereg64[id], mode, sign, grp) > MAX_EREG64) {
+						printf(">>Energy FRAM @%d Ereg64[%d] grp=%d mode=%d sign=%d = %lld<<\n",
+							os, id, grp, mode, sign, EGY_VAL(p->Ereg64[id], mode, sign, grp));
+						return -1;
 					}
 				}
 			}
 		}
 	}
-	
-	return ret;
+	return 0;
+}
+
+/* 두 슬롯 중 정상이고 seq 가 큰 쪽을 로드(같으면 OS1 — 종전 펌웨어의 동일 이중 사본). 반환 0/-1 */
+int loadEnergyNVR(ENERGY_NVRAM *pEgyNvr) {
+	int i, sel = -1;
+	uint32_t seq, selSeq = 0;
+
+	for (i = 0; i < 2; i++) {
+		if (!FramRead(&egyNvrChk, egyNvrOs[i], sizeof(ENERGY_NVRAM)) ||
+		    checkEnergyNvrImg(&egyNvrChk, egyNvrOs[i]) < 0)
+			continue;
+		seq = EGY_NVR_SEQ(&egyNvrChk);
+		if (sel < 0 || (int32_t)(seq - selSeq) > 0) {
+			sel = i;
+			selSeq = seq;
+			memcpy(pEgyNvr, &egyNvrChk, sizeof(ENERGY_NVRAM));
+		}
+	}
+
+	if (sel < 0) {
+		/* 이전 펌웨어 배치(2번째 사본 @512) — 업데이트 후 첫 부팅 1회. 다음 storeEnergy()가 새 위치에 기록 */
+		if (!FramRead(pEgyNvr, EGY_NVR_OS_LEGACY, sizeof(ENERGY_NVRAM)) ||
+		    checkEnergyNvrImg(pEgyNvr, EGY_NVR_OS_LEGACY) < 0)
+			return -1;
+		printf(">>Energy loaded from legacy FRAM @%d (migrate) <<<\n", EGY_NVR_OS_LEGACY);
+		egyNvrSlot = 1;		/* 다음 기록 → OS1 */
+		egyNvrSeq  = EGY_NVR_SEQ(pEgyNvr);
+		return 0;
+	}
+
+	egyNvrSlot = sel;
+	egyNvrSeq  = selSeq;
+	printf(">>Energy loaded from FRAM @%d (seq=%u) <<<\n", egyNvrOs[sel], (unsigned)selSeq);
+	return 0;
 }
 
 
@@ -4023,18 +4098,19 @@ void loadEnergyLog15Fs(void)
 
 // energy
 
-void storeEnergy(void) {
-	int	i;
+/* 반환 0 = FRAM 기록·검증 성공, -1 = 실패(정상 사본은 유지됨) */
+int storeEnergy(void) {
+	int	ret;
 	egyNvr.ts = sysTick1s;
-	egyNvr.crc = gencrc_modbus((uint8_t *)&egyNvr, sizeof(ENERGY_NVRAM)-2);	
-	storeEnergyNVR(&egyNvr);
-	
+	ret = storeEnergyNVR(&egyNvr);		/* seq·crc 는 storeEnergyNVR 이 설정 */
+
 	if (egyNvr.magic != ENERGY_NVRAM_MAGIC) {
 		printf("&&& storeEnergyNVR. bad magic number(%x) &&&\n", (unsigned)egyNvr.magic);
-	}		
-	else {
-		printf("+++ store Energy, crc=%x(%x)\n", egyNvr.crc, gencrc_modbus((uint8_t *)&egyNvr, sizeof(ENERGY_NVRAM)));		
 	}
+	else if (ret == 0) {
+		printf("+++ store Energy @%d, seq=%u, crc=%x\n", egyNvrOs[egyNvrSlot], (unsigned)egyNvrSeq, egyNvr.crc);
+	}
+	return ret;
 }
 
 
@@ -4470,13 +4546,68 @@ void putEnergyLog15(int id, int q)
 }
 
 
+/* [26/11/16] 전력량 증분 타당성 검사(정격 기반).
+ *  ADE9000 EGY_TIME=7999(1초), EP_CFG EGY_LD_ACCM → 에너지 레지스터는 매 1초분으로 덮어씀 → 1회 증분 = 1초 에너지.
+ *  상별 |Wh|·|varh|·|VAh| ×3600(=1초 평균 W/var/VA) 이 정격 상한 vnorm × CT1 × EGY_SPIKE_K 를 넘으면
+ *  SPI 읽기 오류·전원 이상 등에 의한 비정상 값으로 보고 해당 1초 증분(전 상·전 모드)을 0 처리한다.
+ *  같은 초과가 EGY_SPIKE_PERSIST 초 연속이면 실제 부하(또는 정격 설정 오류)로 간주해 통과시킨다
+ *  — 정격 오설정 시 전력량이 계속 누락되는 것 방지. 진단: egySpikeCnt(폐기 횟수), 콘솔 로그.
+ *  CNTL_DATA(METER_DEF 오버레이) 크기 변경을 피하려고 별도 전역으로 둔다. */
+#define EGY_SPIKE_K			3.0f	/* 상한 여유: 과전압·CT 과부하 포함 */
+#define EGY_SPIKE_PERSIST	3		/* 연속 초과 N초 → 실제값으로 통과 */
+uint32_t egySpikeCnt[METER_CH_COUNT];
+static uint16_t egySpikeRun[METER_CH_COUNT];
+
+/* 반환 1 = 이번 1초 증분 폐기 */
+static int checkEnergySpike(int id, METER_EH_REGS *ereg)
+{
+	float	lim = (float)db.pt[id].vnorm * (float)db.ct[id].CT1 * EGY_SPIKE_K;	/* 상당 W */
+	float	v, vmax = 0;
+	int32_t	raw[3];
+	int		i, k;
+
+	for (i=0; i<3; i++) {
+		if (meter[id].cntl.I[i] == 0)
+			continue;		/* energy_scan 과 동일: 무전류 상은 0 처리되므로 제외 */
+		if (i == 1 && (db.pt[id].wiring == WM_3LL3CT || db.pt[id].wiring == WM_3LL2CT ||
+		               db.pt[id].wiring == WM_1LL2CT))
+			continue;		/* 2CT 계열: 2상 미사용 */
+		raw[0] = ereg[i].wh;
+		raw[1] = ereg[i].varh;
+		raw[2] = ereg[i].vah;
+		for (k=0; k<3; k++) {
+			v = fabsf(scaleEnergy(id, raw[k])) * 3600.0f;
+			if (v > vmax) vmax = v;
+		}
+	}
+
+	if (vmax <= lim) {
+		egySpikeRun[id] = 0;
+		return 0;
+	}
+
+	if (egySpikeRun[id] < 0xffff)
+		egySpikeRun[id]++;
+	if (egySpikeRun[id] >= EGY_SPIKE_PERSIST) {
+		if (egySpikeRun[id] == EGY_SPIKE_PERSIST)
+			printf("[EGY] M%d over-limit sustained %ds -> accepted (%.0f > %.0f W/ph, check vnorm/CT1)\n",
+				id, EGY_SPIKE_PERSIST, (double)vmax, (double)lim);
+		return 0;
+	}
+
+	egySpikeCnt[id]++;
+	printf("[EGY] M%d spike discarded: %.0f > %.0f W/ph (cnt=%u)\n",
+		id, (double)vmax, (double)lim, (unsigned)egySpikeCnt[id]);
+	return 1;
+}
+
 // 1초 마다 호출
 void energy_scan(int id, METER_EH_REGS *ereg, ENERGY_NVRAM *pEgyNvr) {
 	//static int initF=0;
 	float	dval,freq;
 	float	dtP_ph[3], dtQ_ph[3], dtS_ph[3];
 	int32_t	wh, varh, vah, es[3];
-	int		i, ewF=0, wF=0;
+	int		i, ewF=0, wF=0, spike;
 	uint16_t phnoload;
 	struct tm lto;//, ltn;
 	DEMAND *pdm;
@@ -4501,11 +4632,13 @@ void energy_scan(int id, METER_EH_REGS *ereg, ENERGY_NVRAM *pEgyNvr) {
 	//유효전력, 무효전력
 	// dval : 3상 적산전력 합 계산
 	
+	spike = checkEnergySpike(id, ereg);		/* 1 = 비정상 증분 → 이번 1초 전력량 0 */
+
 	es[0] = es[1] = es[2] = 0;
-	for (i=0; i<3; i++) {			
-		wh   = (meter[id].cntl.I[i] == 0) ? 0 : ereg[i].wh;
-		varh = (meter[id].cntl.I[i] == 0) ? 0 : ereg[i].varh;
-		vah  = (meter[id].cntl.I[i] == 0) ? 0 : ereg[i].vah;
+	for (i=0; i<3; i++) {
+		wh   = (spike || meter[id].cntl.I[i] == 0) ? 0 : ereg[i].wh;
+		varh = (spike || meter[id].cntl.I[i] == 0) ? 0 : ereg[i].varh;
+		vah  = (spike || meter[id].cntl.I[i] == 0) ? 0 : ereg[i].vah;
 		
 		meter[id].cntl.wh[i]   = wh;
 		meter[id].cntl.varh[i] = varh;
@@ -4686,9 +4819,14 @@ void energy_scan(int id, METER_EH_REGS *ereg, ENERGY_NVRAM *pEgyNvr) {
 	if (egyDirty && saveLockEnergy == 0) {
 		if ((ewF & (1<<3)) || (uint32_t)(sysTick1s - egyLastSave) >= EGY_SAVE_SEC) {
 			for (i=0; i<ENERGY_CH_COUNT; i++) copyEreg32(i);
-			storeEnergy();
-			egyDirty = 0;
-			egyLastSave = sysTick1s;
+			if (storeEnergy() == 0) {
+				egyDirty = 0;
+				egyLastSave = sysTick1s;
+			}
+			else {
+				/* FRAM 기록 실패(전원 이상 등) → dirty 유지, EGY_SAVE_RETRY_SEC 뒤 재시도 */
+				egyLastSave = sysTick1s - (EGY_SAVE_SEC - EGY_SAVE_RETRY_SEC);
+			}
 		}
 	}
 
@@ -5054,8 +5192,22 @@ void Energy_Task(void *arg)
 				ade9000[id].ere ^= 1;
 			}
 		}
+		/* [26/11/16 진단] 이더넷 수신 누락 프레임(DMA_MFRM_BUFOF, 읽으면 클리어) — 웹 무응답 시 패킷 유실 여부 확인.
+		 *  [15:0]=수신 디스크립터 부족으로 버린 프레임, [27:17]=FIFO 넘침으로 버린 프레임. 0 이 아니면 출력. */
+		{
+			uint32_t mf = LPC_ETHERNET->DMA_MFRM_BUFOF;
+			if (mf & ((DMA_MFRM_FMCMSK) | (0x7FFu << 17)))
+				printf("[ETHDIAG] rx missed: desc=%u fifo=%u (raw=0x%08x) @%02d:%02d:%02d\n",
+				       (unsigned)(mf & DMA_MFRM_FMCMSK), (unsigned)DMA_MFRM_FMA(mf), (unsigned)mf,
+				       meter[0].cntl.tod.tm_hour, meter[0].cntl.tod.tm_min, meter[0].cntl.tod.tm_sec);
+		}
+		/* [26/11/16] SPI 읽기 검증 통계 10분 주기 — retry/fail 이 늘었을 때만 출력(현장 버스 품질 확인용) */
+		if ((uint32_t)(sysTick1s - spiCrcRptTs) >= 600) {
+			spiCrcRptTs = sysTick1s;
+			spiCrcReport(0);
+		}
 	}
-	
+
 	printf("Energy_Task stopped ...\n");
 #ifdef __FREERTOS
 	vTaskSuspend(NULL);

@@ -635,7 +635,8 @@ typedef struct {
 	ENERGY_REG64 Ereg64[ENERGY_CH_COUNT];
 	ENERGY_MONTH_WH month_wh[ENERGY_CH_COUNT];
 	ENERGY_REG32 Ereg32_last[ENERGY_CH_COUNT];
-	uint16_t _r[3], crc;
+	uint16_t seqLo, seqHi;	/* [26/11/16] FRAM 교대 저장 순번(구 _r[0..1], 크기 불변) */
+	uint16_t _r, crc;
 } ENERGY_NVRAM;
 
 
@@ -2353,7 +2354,7 @@ extern void setMeterInfo(void);
 extern int loadMaxMin(void);
 extern void copyEreg64(ENERGY_REG64 *, ENERGY_REG64 *);
 extern void copyEreg32(int id);
-extern void storeEnergy(void);
+extern int storeEnergy(void);
 extern void applyEregEdit(int id);
 extern int updateEhGrp(int id, int mode, int group, float diff);
 extern int fwCheckUsrApp(uint32_t *psize);	/* [FW UPDATE] 업로드 usrApp.bin 검증(0=OK) */

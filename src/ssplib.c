@@ -1,6 +1,7 @@
 #include "board.h"
 #include "stdio.h"
 #include "os.h"
+#include "ssplib.h"
 
 #define LPC_GPDMA_SSP_TX  GPDMA_CONN_SSP0_Tx
 #define LPC_GPDMA_SSP_RX  GPDMA_CONN_SSP0_Rx
@@ -524,20 +525,124 @@ int dma_read32n(uint8_t mid, uint16_t cmd, uint32_t *buf, int n)
 //	return 1;
 //}
 
+/* [26/11/16] ADE9000 SPI 읽기 검증.
+ *  1차 실기(11/16): read_reg16/32 가 데이터 뒤에 더 읽는 2바이트는 CRC 가 아니라 데이터 반복이었다
+ *   (16bit: rx==data, 32bit: rx==data 상위 16bit). → 2단계로 변경:
+ *   ① echo 검사(모든 읽기, 추가 SPI 없음): 추가 2바이트가 데이터 상위 16bit 와 같은지.
+ *      32bit 는 하위 16bit 가 보호되지 않는 부분 검사다.
+ *   ② CRC_SPI(0x4A9) 별도 읽기(read_reg32_crc — 전력량 레지스터만, SPI 1회 추가):
+ *      CRC-16-CCITT(x^16+x^12+x^5+1, MSB 우선). 초기값·계산 범위 미확정이라 후보 4가지 집계.
+ *  2차 실기(11/16, 3칩): CRC_SPI = CRC-16-CCITT 초기값 0xFFFF, 데이터 4바이트(F4) 100% 일치(n=558~576).
+ *   echo 는 동작 중 불일치 0 — 부팅 시 init 레지스터(PGA_GAIN 0x4B9 등) 일부만 반복하지 않음
+ *   (칩당 r16 2건·r32 3건 고정). → MODE 1 전환: 불일치 시 최대 SPI_CRC_RETRY 회 다시 읽는다.
+ *   부팅 시 그 init 레지스터들은 재시도 후 fail 로 집계되므로 fail 기준값이 칩당 약 5 이다(값은 종전과 동일하게 사용).
+ *  주의: 읽으면 값이 리셋되는 레지스터가 있다면 재시도가 값을 잃는다 — 현재 EP_CFG=0x11 은
+ *  RD_RST_EN 미설정(EGY_LD_ACCM)이라 에너지 레지스터 재읽기 안전. */
+#define SPI_CRC_MODE	1
+#define SPI_CRC_SEL		0		/* CRC 후보: 0 = 초기값 0xFFFF·데이터 4B (실기 확정) */
+#define SPI_CRC_RETRY	3
+#define SPI_CRC_NCH		3
+#define AD9X_CRC_SPI	0x4A9
+
+SPI_CRC_STAT spiCrcStat[SPI_CRC_NCH];
+
+static const uint16_t crcNib[16] = {
+	0x0000, 0x1021, 0x2042, 0x3063, 0x4084, 0x50A5, 0x60C6, 0x70E7,
+	0x8108, 0x9129, 0xA14A, 0xB16B, 0xC18C, 0xD1AD, 0xE1CE, 0xF1EF
+};
+
+static uint16_t crc16ccitt(uint16_t crc, const uint8_t *p, int n)
+{
+	while (n--) {
+		crc = (uint16_t)(crc << 4) ^ crcNib[((crc >> 12) ^ (*p >> 4)) & 0xF];
+		crc = (uint16_t)(crc << 4) ^ crcNib[((crc >> 12) ^ (*p & 0xF)) & 0xF];
+		p++;
+	}
+	return crc;
+}
+
+/* ① echo 검사 + 집계. rb: 수신(데이터 n바이트 + 추가 2바이트), n=2|4. 반환 1 = 통과 */
+static int spiEchoCheck(uint8_t mid, uint16_t cmd, const uint8_t *rb, int n)
+{
+	SPI_CRC_STAT *s;
+	int w = (n == 4), ok = (rb[n] == rb[0] && rb[n+1] == rb[1]);
+
+	if (mid >= SPI_CRC_NCH)
+		return 1;
+	s = &spiCrcStat[mid];
+	s->reads[w]++;
+	if (ok) {
+		s->echoOk[w]++;
+	}
+	else {
+		s->lastCmd  = cmd;
+		s->lastRx   = (uint16_t)(rb[n]<<8 | rb[n+1]);
+		s->lastData = (n == 4) ? ((uint32_t)rb[0]<<24 | (uint32_t)rb[1]<<16 | rb[2]<<8 | rb[3])
+		                       : (uint32_t)(rb[0]<<8 | rb[1]);
+	}
+#if SPI_CRC_MODE
+	return ok;
+#else
+	return 1;
+#endif
+}
+
+/* force=0: 직전 출력 이후 retry/fail 이 늘었을 때만 출력(주기 호출용), 1: 항상(콘솔) */
+void spiCrcReport(int force)
+{
+	static uint32_t lastSum;
+	uint32_t sum = 0;
+	int i;
+	SPI_CRC_STAT *s;
+
+	for (i = 0; i < SPI_CRC_NCH; i++)
+		sum += spiCrcStat[i].retry + spiCrcStat[i].fail;
+	if (!force && sum == lastSum)
+		return;
+	lastSum = sum;
+
+	for (i = 0; i < SPI_CRC_NCH; i++) {
+		s = &spiCrcStat[i];
+		if (s->reads[0] == 0 && s->reads[1] == 0)
+			continue;
+		printf("[SPICRC] M%d echo r16=%u/%u r32=%u/%u (last ng cmd=0x%03x data=0x%08x rx=0x%04x)\n",
+		       i, (unsigned)s->echoOk[0], (unsigned)s->reads[0],
+		       (unsigned)s->echoOk[1], (unsigned)s->reads[1],
+		       s->lastCmd, (unsigned)s->lastData, s->lastRx);
+		printf("[SPICRC] M%d crc n=%u F4=%u Z4=%u F6=%u Z6=%u retry=%u fail=%u"
+		       " (last ng cmd=0x%03x data=0x%08x rx=0x%04x calcF4=0x%04x)\n",
+		       i, (unsigned)s->crcReads, (unsigned)s->crcOk[0], (unsigned)s->crcOk[1],
+		       (unsigned)s->crcOk[2], (unsigned)s->crcOk[3],
+		       (unsigned)s->retry, (unsigned)s->fail,
+		       s->crcLastCmd, (unsigned)s->crcLastData, s->crcLastRx, s->crcLastCalc);
+	}
+}
+
 int read_reg16(uint8_t mid, uint16_t cmd, uint16_t *pdata) {
 	uint8_t tb[8], rb[8];
 	uint8_t bus = meterToSspBus(mid);
 	uint16_t crc, c = (cmd << 4) | (1<<3);
-	
+	int t;
+
 	*(uint16_t *)tb = __REV16(c);
 
-	/* W2: SSP1은 Meter12 단일 스레드 전담 접근 → SSP 락 불요. CS 토글만 수행. */
-	selectMeter(mid);
-	spiIO8_Polling(_sspBase[bus], tb, 2, rb, 4);
-	deSelectMeter(mid);
+	for (t = 0; ; t++) {
+		/* W2: SSP1은 Meter12 단일 스레드 전담 접근 → SSP 락 불요. CS 토글만 수행. */
+		selectMeter(mid);
+		spiIO8_Polling(_sspBase[bus], tb, 2, rb, 4);
+		deSelectMeter(mid);
+
+		crc = __REV16(*(uint16_t *)&rb[2]);
+		if (spiEchoCheck(mid, cmd, rb, 2))
+			break;
+		if (t >= SPI_CRC_RETRY - 1) {
+			if (mid < SPI_CRC_NCH) spiCrcStat[mid].fail++;
+			break;
+		}
+		if (mid < SPI_CRC_NCH) spiCrcStat[mid].retry++;
+	}
 
 	*pdata = __REV16(*(uint16_t *)rb);
-	crc = __REV16(*(uint16_t *)&rb[2]);
 	return crc;
 }
 
@@ -546,17 +651,79 @@ int read_reg32(uint8_t mid, uint16_t cmd, uint32_t *pdata)
 	uint8_t tb[10], rb[10];
 	uint8_t bus = meterToSspBus(mid);
 	uint16_t crc, c = (cmd << 4) | (1<<3);
+	int t;
 
 	*(uint16_t *)tb = __REV16(c);
 
-	/* W2: SSP1은 Meter12 단일 스레드 전담 접근 → SSP 락 불요. CS 토글만 수행. */
-	selectMeter(mid);
-	spiIO8_Polling(_sspBase[bus], tb, 2, rb, 6);
-	deSelectMeter(mid);
+	for (t = 0; ; t++) {
+		/* W2: SSP1은 Meter12 단일 스레드 전담 접근 → SSP 락 불요. CS 토글만 수행. */
+		selectMeter(mid);
+		spiIO8_Polling(_sspBase[bus], tb, 2, rb, 6);
+		deSelectMeter(mid);
+
+		crc = __REV16(*(uint16_t *)&rb[4]);
+		if (spiEchoCheck(mid, cmd, rb, 4))
+			break;
+		if (t >= SPI_CRC_RETRY - 1) {
+			if (mid < SPI_CRC_NCH) spiCrcStat[mid].fail++;
+			break;
+		}
+		if (mid < SPI_CRC_NCH) spiCrcStat[mid].retry++;
+	}
 
 	*pdata = __REV(*(uint32_t *)rb);
-	crc = __REV16(*(uint16_t *)&rb[4]);	
 	return crc;
+}
+
+/* ② 32bit 읽기 + CRC_SPI(0x4A9) 별도 읽기 검증 — 중요 레지스터(전력량)용. SPI 1회 추가.
+ *  CRC_SPI 를 읽는 동작 자체가 다음 "마지막 읽기"가 되므로 대상 레지스터 직후 바로 읽는다. */
+int read_reg32_crc(uint8_t mid, uint16_t cmd, uint32_t *pdata)
+{
+	uint8_t tb[10], rb[10];
+	uint8_t bus = meterToSspBus(mid);
+	uint16_t rx, cand[4], c = (cmd << 4) | (1<<3);
+	SPI_CRC_STAT *s = (mid < SPI_CRC_NCH) ? &spiCrcStat[mid] : 0;
+	int t, k, ok;
+
+	*(uint16_t *)tb = __REV16(c);
+
+	for (t = 0; ; t++) {
+		selectMeter(mid);
+		spiIO8_Polling(_sspBase[bus], tb, 2, rb, 6);
+		deSelectMeter(mid);
+		ok = spiEchoCheck(mid, cmd, rb, 4);
+
+		read_reg16(mid, AD9X_CRC_SPI, &rx);
+
+		cand[0] = crc16ccitt(0xFFFF, rb, 4);
+		cand[1] = crc16ccitt(0x0000, rb, 4);
+		cand[2] = crc16ccitt(0xFFFF, rb, 6);
+		cand[3] = crc16ccitt(0x0000, rb, 6);
+		if (s) {
+			s->crcReads++;
+			for (k = 0; k < 4; k++)
+				if (cand[k] == rx) s->crcOk[k]++;
+			if (cand[0] != rx) {
+				s->crcLastCmd  = cmd;
+				s->crcLastRx   = rx;
+				s->crcLastCalc = cand[0];
+				s->crcLastData = (uint32_t)rb[0]<<24 | (uint32_t)rb[1]<<16 | rb[2]<<8 | rb[3];
+			}
+		}
+#if SPI_CRC_MODE
+		ok = ok && (cand[SPI_CRC_SEL] == rx);
+#endif
+		if (ok)
+			break;
+		if (t >= SPI_CRC_RETRY - 1) {
+			if (s) s->fail++;
+			break;
+		}
+		if (s) s->retry++;
+	}
+
+	*pdata = __REV(*(uint32_t *)rb);
+	return 0;
 }
 
 
