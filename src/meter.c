@@ -5192,20 +5192,6 @@ void Energy_Task(void *arg)
 				ade9000[id].ere ^= 1;
 			}
 		}
-		/* [26/11/16 진단] 이더넷 수신 누락 프레임(DMA_MFRM_BUFOF, 읽으면 클리어) — 웹 무응답 시 패킷 유실 여부 확인.
-		 *  [15:0]=수신 디스크립터 부족으로 버린 프레임, [27:17]=FIFO 넘침으로 버린 프레임. 0 이 아니면 출력. */
-		{
-			uint32_t mf = LPC_ETHERNET->DMA_MFRM_BUFOF;
-			if (mf & ((DMA_MFRM_FMCMSK) | (0x7FFu << 17)))
-				printf("[ETHDIAG] rx missed: desc=%u fifo=%u (raw=0x%08x) @%02d:%02d:%02d\n",
-				       (unsigned)(mf & DMA_MFRM_FMCMSK), (unsigned)DMA_MFRM_FMA(mf), (unsigned)mf,
-				       meter[0].cntl.tod.tm_hour, meter[0].cntl.tod.tm_min, meter[0].cntl.tod.tm_sec);
-		}
-		/* [26/11/16] SPI 읽기 검증 통계 10분 주기 — retry/fail 이 늘었을 때만 출력(현장 버스 품질 확인용) */
-		if ((uint32_t)(sysTick1s - spiCrcRptTs) >= 600) {
-			spiCrcRptTs = sysTick1s;
-			spiCrcReport(0);
-		}
 	}
 
 	printf("Energy_Task stopped ...\n");
@@ -5428,6 +5414,21 @@ void Metering_Task(void *arg)
 				energy_scan(id, ade9000[id].energy[ade9000[id].ere], &egyNvr);
 				ade9000[id].ere ^= 1;
 			}
+		}
+
+		/* [26/11/16 진단] 이더넷 수신 누락 프레임(DMA_MFRM_BUFOF, 읽으면 클리어) — 웹 무응답 시 패킷 유실 여부 확인.
+		 *  [15:0]=수신 디스크립터 부족으로 버린 프레임, [27:17]=FIFO 넘침으로 버린 프레임. 0 이 아니면 출력. */
+		{
+			uint32_t mf = LPC_ETHERNET->DMA_MFRM_BUFOF;
+			if (mf & ((DMA_MFRM_FMCMSK) | (0x7FFu << 17)))
+				printf("[ETHDIAG] rx missed: desc=%u fifo=%u (raw=0x%08x) @%02d:%02d:%02d\n",
+				       (unsigned)(mf & DMA_MFRM_FMCMSK), (unsigned)DMA_MFRM_FMA(mf), (unsigned)mf,
+				       meter[0].cntl.tod.tm_hour, meter[0].cntl.tod.tm_min, meter[0].cntl.tod.tm_sec);
+		}
+		/* [26/11/16] SPI 읽기 검증 통계 10분 주기 — retry/fail 이 늘었을 때만 출력(현장 버스 품질 확인용) */
+		if ((uint32_t)(sysTick1s - spiCrcRptTs) >= 600) {
+			spiCrcRptTs = sysTick1s;
+			spiCrcReport(0);
 		}
 
 		/* ── (4) SMP_MAP(#1,2,3 Simple) 갱신: 100ms 웨이크 × 5 = 500ms ── */
