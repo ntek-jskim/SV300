@@ -36,6 +36,19 @@
 - 실수 수정: `[ETHDIAG]`·SPICRC 주기 출력을 처음에 `#if 0` 으로 꺼진 `Energy_Task` 에 넣어 실행되지 않던 것 → `Metering_Task` 로 이동
 - `SV300_3CH`·`SV300_3CH_app` 0E/0W, 필드 타깃 0x51DE4/0x60000
 
+## 5. 원격 대시보드 서명링크 (Ed25519 + 장비 nonce)
+- `/auth/remoteNonce` → `/dashboard/{ntek|sv300}?nonce=&sig=` 검증 성공 시 로그인 쿠키 + 302. 기존 ID/PW 로그인은 그대로
+- **7420 Remote Signed Link**(기본 OFF, OFF면 404). 접속 기록 20건(`/api/remotelog`, General 'Remote Link' 카드)
+- 계측 영향 최소화: 검증 0.22초 동안 우선순위 낮춤 + 수 ms마다 양보, 요청 횟수 제한
+- ★공개키는 연구소 **시험키** — 필드 배포 전 운영키 교체 필요. 실기 시험 통과
+
+## 6. 납품 준비 — 내장웹 정리·사용자 매뉴얼
+- 내장웹: 레지스터 주소·내부 용어 문구 삭제, CT 교정값 4종 감춤, Transient(미지원)·Disturbance 탭 제외, Trend Version 감춤·채널 드롭다운, Waveform Pre 입력 시 Post 자동(합 30사이클), Trans V/I 이벤트 이름 삭제
+- 사용자 매뉴얼 `document/SV300_웹서버_사용자매뉴얼_v0.3.docx`(접속·IP 설정·모니터링 간이판)
+- 메모리맵 `_261116`: 7420 추가, 미지원 항목 이름·설명 비움(#1~#3CH)
+- ★남은 결정: 납품 기본 DHCP + 라벨 `sv300-XXXXXXXXX.local` — **PC 1:1 직결 시 장비에 IP가 없어 첫 접속 불가**(AutoIP 꺼짐). DHCP 실패 시 고정 IP 전환 / AutoIP 중 선택 후 FW·매뉴얼 3장 반영
+- `SV300_3CH_app` 0E/0W, ROM 344,576B
+
 ---
 
 # 2026-11-13

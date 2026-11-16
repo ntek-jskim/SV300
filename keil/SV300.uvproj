@@ -1909,6 +1909,21 @@
               <FilePath>..\cyclone_driver\cyclone_crypto\cipher_modes\cfb.c</FilePath>
             </File>
             <File>
+              <FileName>sha512.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_crypto\hash\sha512.c</FilePath>
+            </File>
+            <File>
+              <FileName>curve25519.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_crypto\ecc\curve25519.c</FilePath>
+            </File>
+            <File>
+              <FileName>ed25519.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_crypto\ecc\ed25519.c</FilePath>
+            </File>
+            <File>
               <FileName>asn1.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\cyclone_driver\cyclone_crypto\encoding\asn1.c</FilePath>
@@ -3980,6 +3995,21 @@
               <FilePath>..\cyclone_driver\cyclone_crypto\cipher_modes\cfb.c</FilePath>
             </File>
             <File>
+              <FileName>sha512.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_crypto\hash\sha512.c</FilePath>
+            </File>
+            <File>
+              <FileName>curve25519.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_crypto\ecc\curve25519.c</FilePath>
+            </File>
+            <File>
+              <FileName>ed25519.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_crypto\ecc\ed25519.c</FilePath>
+            </File>
+            <File>
               <FileName>asn1.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\cyclone_driver\cyclone_crypto\encoding\asn1.c</FilePath>
@@ -6049,6 +6079,21 @@
               <FileName>cfb.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\cyclone_driver\cyclone_crypto\cipher_modes\cfb.c</FilePath>
+            </File>
+            <File>
+              <FileName>sha512.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_crypto\hash\sha512.c</FilePath>
+            </File>
+            <File>
+              <FileName>curve25519.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_crypto\ecc\curve25519.c</FilePath>
+            </File>
+            <File>
+              <FileName>ed25519.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_crypto\ecc\ed25519.c</FilePath>
             </File>
             <File>
               <FileName>asn1.c</FileName>

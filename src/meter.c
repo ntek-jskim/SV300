@@ -495,6 +495,9 @@ void commCfgNormalize(COMM_CFG *c)
 	/* SNTP — Timezone UTC-12:00 ~ +14:00 */
 	if (c->useSntp > 1)     c->useSntp = 0;
 	if (c->timezone < -720 || c->timezone > 840) c->timezone = 540;
+
+	/* 원격 대시보드 서명링크 — 0/1 이외는 OFF(기본 꺼짐) */
+	if (c->remoteEn > 1)    c->remoteEn = 0;
 }
 
 int initSettings(int id)
@@ -3076,6 +3079,10 @@ void FS_task(void *arg)
 					if ((strcmp(pmsg->mode, "ab") == 0) &&
 						(strncmp(pmsg->fname, EVENT_LIST_FILE, strlen(EVENT_LIST_FILE)) == 0)) {
 						trimFixedRecordFileFs(pmsg->fname, sizeof(EVENT_LOG), EVENT_LOG_CAP);
+					}
+					/* 원격 링크 로그인 기록(web.c) — 최근 REMOTE_LOG_KEEP건만 유지 */
+					else if ((strcmp(pmsg->mode, "ab") == 0) && (strcmp(pmsg->fname, REMOTE_LOG_FILE) == 0)) {
+						trimFixedRecordFileFs(pmsg->fname, REMOTE_LOG_REC, REMOTE_LOG_KEEP);
 					}
 					/* [로테이션] PQ 캡처: W계열/D계열 각각 최근 CAP_KEEP_EVENTS 이벤트만 유지.
 					 *  하드코딩 9 제거 — 접두어 길이(플랫 "tpq_W"=5 vs FAT "\trg_pq\W"=9)에 맞춰 sizeof-1 사용. */

@@ -368,6 +368,385 @@ static error_t apiMe(HttpConnection *c)
 	return httpCloseStream(c);
 }
 
+/*============ 원격 대시보드 서명링크 (Ed25519 공개키 서명 + 장비 발급 nonce) ============
+ *  연구소 합의(26/11/16). 순서:
+ *   1) 서버 → GET /auth/remoteNonce
+ *        → {"success":true,"nonce":<hex32>,"ttl_sec":300,"alg":"ed25519"}
+ *   2) 서버가 sig = Ed25519(서버 개인키, "sv-remote/v1|{계정}|{nonce}") 로 링크 생성
+ *   3) 사용자 → /dashboard/{계정}[/{언어}]?nonce=..&sig=..
+ *        성공 = sid 쿠키(ID/PW 로그인과 같은 webMakeToken) + 302 "/"
+ *        실패 = 302 "/"(로그인 화면). 형식·계정·nonce 없음/만료/사용됨·서명오류·횟수제한 모두 동일
+ *  계정: ntek=admin, sv300=viewer 만. 언어는 무시(내장웹 단일 언어).
+ *  nonce: 16바이트, RAM 최대 5개(넘치면 가장 오래된 것부터 버림), 유효 300초,
+ *         검증 성공 시에만 폐기(서명 틀린 요청으로는 지우지 않음). 재부팅 시 소멸.
+ *
+ *  ★기본 성능 보호 — 계측·기록·통신에 영향이 없어야 한다:
+ *   - 검증 1회 약 0.22s(LPC4357 실측, 11/16). 웹 연결 태스크(LOW)에서 검증 동안만
+ *     우선순위를 LLOW로 낮추고, ed25519Mul 8비트(약 3ms)마다 os_tsk_pass()로 양보
+ *     → FS·IOM·FTP 등 LOW 이상 태스크는 대기하지 않는다(OS_ROBIN=0이라 양보가 필수).
+ *   - 값싼 검사(형식→계정→nonce 유효)를 통과해야만 서명 연산. 동시 1건, 2초에 1회.
+ *   - nonce 발급 1초에 1회. 제한 초과는 연산 없이 즉시 실패.
+ *   - 상태는 RAM만(FS 접근 없음). 검증 작업버퍼(~1.1KB)는 CycloneCRYPTO가 SDRAM 힙(1MB)에서
+ *     할당/해제한다(CRYPTO_STATIC_MEM_SUPPORT는 이를 태스크 스택에 잡으므로 쓰지 않음 — 스택 2.5KB).
+ *   - 시간 판정은 업타임(osGetSystemTime, ms) 기준 — RTC/SNTP 시각 변경과 무관.
+ *  난수: LPC4357은 하드웨어 RNG가 없어 SHA-512 풀에 장치키·MAC·부팅/요청 시각(DWT 사이클)·
+ *        요청 주소·서명값을 계속 섞는다. 계측 하드웨어(ADC/SSP)는 건드리지 않는다.
+ */
+#include "ecc/curve25519.h"
+#include "ecc/ed25519.h"
+#include "hash/sha512.h"
+
+/* 연구소 운영 공개키(26/11/16 수령, poc_pub.key). 시험용 공개키는 운영 펌웨어에 남기지 않음. */
+#define REMOTE_PK_IS_TEST   0
+static const char REMOTE_PK_HEX[] = "89d17528f67a2815c465ed5925e502e4b345b6a7e78dc467d40375dd71a9cfa4";
+
+#define RN_SLOTS          5
+#define RN_TTL_MS         (300u * 1000u)
+#define RN_ISSUE_GAP_MS   1000u        /* nonce 발급 최소 간격 */
+#define RN_VERIFY_GAP_MS  2000u        /* 서명 검증 최소 간격 */
+#define RN_LOG_GAP_MS     1000u        /* 실패 로그 최소 간격(UART 출력 폭주 방지) */
+#define RN_YIELD_BITS     8            /* ed25519Mul 양보 주기(비트) */
+
+#define RN_DEMCR   (*(volatile uint32_t *)0xE000EDFCUL)
+#define RN_DWTCTRL (*(volatile uint32_t *)0xE0001000UL)
+#define RN_CYCCNT  (*(volatile uint32_t *)0xE0001004UL)
+
+typedef struct {
+	uint8_t   n[16];
+	systime_t t;          /* 발급 시각(업타임 ms) */
+	uint8_t   used;
+} RemoteNonce;
+
+static RemoteNonce rnTab[RN_SLOTS];
+static OsMutex     rnMutex;
+static uint8_t     rnPool[64];        /* 엔트로피 풀(SHA-512 상태) */
+static uint32_t    rnCtr;
+static systime_t   rnLastIssue, rnLastVerify, rnLastLog;
+static uint8_t     rnIssued, rnVerified, rnLogged, rnBusy;
+static volatile uint8_t rnYield;      /* 1=ed25519Mul에서 양보(원격 검증 중) */
+
+/* hex 문자열 → n바이트(대소문자 허용). 비 hex면 -1 */
+static int rnHexBytes(const char *s, uint8_t *out, int n)
+{
+	uint32_t v;
+	int i;
+	for (i = 0; i < n; i++) {
+		if (hexParse(s + i * 2, 2, &v)) return -1;
+		out[i] = (uint8_t)v;
+	}
+	return 0;
+}
+
+static void rnToHex(const uint8_t *in, int n, char *out)
+{
+	static const char hx[] = "0123456789abcdef";
+	int i;
+	for (i = 0; i < n; i++) {
+		out[i * 2]     = hx[in[i] >> 4];
+		out[i * 2 + 1] = hx[in[i] & 0xf];
+	}
+	out[n * 2] = 0;
+}
+
+/* 풀에 시각·카운터·추가값을 섞는다(풀 = SHA-512(풀 || 시각들 || x)). rnMutex 안 또는 초기화 시 호출 */
+static void rnStir(const void *x, size_t n)
+{
+	Sha512Context h;
+	uint32_t t[4];
+	t[0] = RN_CYCCNT;
+	t[1] = osGetSystemTime();
+	t[2] = sysTick1s;
+	t[3] = ++rnCtr;
+	sha512Init(&h);
+	sha512Update(&h, rnPool, sizeof(rnPool));
+	sha512Update(&h, t, sizeof(t));
+	if (x != NULL) sha512Update(&h, x, n);
+	sha512Final(&h, rnPool);
+}
+
+/*---- 원격 접속 기록 — PQ 이벤트 로그와 분리된 전용 기록 ----
+ *  RAM 링 최근 REMOTE_LOG_KEEP(20)건: 로그인 성공 + 서명 불일치(검증까지 간 요청).
+ *  파일(REMOTE_LOG_FILE)에는 성공만 추가(FS_task가 기록·20건 트림) — 서명 공격이 와도
+ *  플래시 쓰기가 늘지 않게(파형 캡처 g_sdBusy·NOR 수명). 값싼 거부(형식·계정·nonce·횟수)는 개수만 센다. */
+typedef struct {
+	uint32_t ts;          /* sysTick1s(장비 로컬 시각, 이벤트와 동일 기준) */
+	uint8_t  ip[4];       /* 접속 IPv4 */
+	uint8_t  acct;        /* 1=ntek, 2=sv300 */
+	uint8_t  ok;          /* 1=로그인 성공, 0=서명 불일치 */
+	uint16_t ms;          /* 검증 소요(ms, 양보 포함) */
+	uint32_t _r;
+} RemoteLogRec;
+typedef char rlog_rec_check[(sizeof(RemoteLogRec) == REMOTE_LOG_REC) ? 1 : -1];
+
+static RemoteLogRec rlog[REMOTE_LOG_KEEP];
+static int          rlogHead, rlogN;          /* head=다음 기록 위치 */
+static uint32_t     rlRejectCnt;             /* 부팅 후 값싼 거부 횟수 */
+
+static void rlogPush(const RemoteLogRec *r)
+{
+	rlog[rlogHead] = *r;
+	rlogHead = (rlogHead + 1) % REMOTE_LOG_KEEP;
+	if (rlogN < REMOTE_LOG_KEEP) rlogN++;
+}
+
+/* 부팅 시 파일의 성공 기록을 RAM 링으로(rnInit에서 1회) */
+static void rlogLoad(void)
+{
+	RemoteLogRec r;
+	FILE *fp;
+	fsFileLock();
+	fp = fopen(REMOTE_LOG_FILE, "rb");
+	if (fp != NULL) {
+		while (fread(&r, sizeof(r), 1, fp) == 1)
+			rlogPush(&r);
+		fclose(fp);
+	}
+	fsFileUnlock();
+}
+
+/* 검증 결과 기록 — rnMutex 밖에서 호출. 성공만 FS_task로 파일 추가 */
+static void rlogAdd(HttpConnection *c, uint8_t role, int ok, uint32_t ms)
+{
+	RemoteLogRec r;
+	memset(&r, 0, sizeof(r));
+	r.ts   = sysTick1s;
+	memcpy(r.ip, c->socket->remoteIpAddr.addr, 4);
+	r.acct = (role == ROLE_ADMIN) ? 1 : 2;
+	r.ok   = ok ? 1 : 0;
+	r.ms   = (uint16_t)((ms > 65535u) ? 65535u : ms);
+	osAcquireMutex(&rnMutex);
+	rlogPush(&r);
+	osReleaseMutex(&rnMutex);
+	if (ok) {
+		FS_MSG m;
+		memset(&m, 0, sizeof(m));
+		strcpy(m.fname, REMOTE_LOG_FILE);
+		strcpy(m.mode, "ab");
+		m.pbuf = &r;
+		m.size = sizeof(r);
+		putFsQ(&m);		/* 내용은 큐에 복사됨(16B ≤ FS_MSG_DATA_SZ) */
+	}
+}
+
+/* GET /api/remotelog (admin) — 사용 여부·거부 횟수·최근 기록(최신순) */
+static error_t apiRemoteLog(HttpConnection *c)
+{
+	RemoteLogRec L[REMOTE_LOG_KEEP];
+	char b[128];
+	int i, n, head;
+	uint32_t rej;
+
+	if (webRole(c) != ROLE_ADMIN)
+		return webJsonStatus(c, 403, "{\"ok\":false,\"error\":\"admin\"}");
+	osAcquireMutex(&rnMutex);
+	memcpy(L, rlog, sizeof(L));
+	n = rlogN; head = rlogHead; rej = rlRejectCnt;
+	osReleaseMutex(&rnMutex);
+
+	if (beginJson(c)) return ERROR_WRITE_FAILED;
+	snprintf(b, sizeof(b), "{\"ok\":true,\"en\":%u,\"rejected\":%u,\"log\":[",
+		(unsigned)(pdb->comm.remoteEn == 1), (unsigned)rej);
+	w(c, b);
+	for (i = 0; i < n; i++) {
+		const RemoteLogRec *r = &L[(head - 1 - i + REMOTE_LOG_KEEP) % REMOTE_LOG_KEEP];
+		snprintf(b, sizeof(b), "%s{\"ts\":%u,\"ip\":\"%u.%u.%u.%u\",\"acct\":\"%s\",\"ok\":%u,\"ms\":%u}",
+			i ? "," : "", (unsigned)r->ts, r->ip[0], r->ip[1], r->ip[2], r->ip[3],
+			r->acct == 1 ? "ntek" : "sv300", (unsigned)r->ok, (unsigned)r->ms);
+		w(c, b);
+	}
+	w(c, "]}");
+	return httpCloseStream(c);
+}
+
+static int rnExpired(const RemoteNonce *s, systime_t now)
+{
+	return (systime_t)(now - s->t) >= RN_TTL_MS;
+}
+
+/* 부팅 시 1회 — webKeyLoad() 이후 호출(장치키를 풀에 섞음) */
+static void rnInit(NetInterface *it)
+{
+	RN_DEMCR   |= (1UL << 24);	/* TRCENA */
+	RN_DWTCTRL |= 1UL;			/* CYCCNTENA(이미 동작 중이면 그대로) */
+	osCreateMutex(&rnMutex);
+	rnStir(webKey, sizeof(webKey));
+	rnStir(&it->macAddr, sizeof(it->macAddr));
+	rlogLoad();
+	printf("[REMOTE] signed link %s (comm.remoteEn, 7420), %d login record(s)\n",
+		pdb->comm.remoteEn == 1 ? "ENABLED" : "disabled", rlogN);
+#if REMOTE_PK_IS_TEST
+	printf("[REMOTE] *** TEST public key in use — replace with production key before field release ***\n");
+#endif
+}
+
+/* ed25519.c의 __weak ed25519Mul 재정의(CycloneCRYPTO 2.4.4 구현과 동일 + 양보만 추가).
+ * 원격 검증 중(rnYield=1)에만 RN_YIELD_BITS 비트마다 같은 우선순위 태스크에 CPU를 넘긴다. */
+void ed25519Mul(Ed25519State *state, Ed25519Point *r, const uint8_t *k, const Ed25519Point *p)
+{
+	int_t i;
+	uint8_t b;
+
+	curve25519SetInt(state->u.x, 0);
+	curve25519SetInt(state->u.y, 1);
+	curve25519SetInt(state->u.z, 1);
+	curve25519SetInt(state->u.t, 0);
+
+	for (i = CURVE25519_BIT_LEN - 1; i >= 0; i--) {
+		b = (k[i / 8] >> (i % 8)) & 1;
+		ed25519Double(state, &state->u, &state->u);
+		ed25519Add(state, &state->v, &state->u, p);
+		curve25519Select(state->u.x, state->u.x, state->v.x, b);
+		curve25519Select(state->u.y, state->u.y, state->v.y, b);
+		curve25519Select(state->u.z, state->u.z, state->v.z, b);
+		curve25519Select(state->u.t, state->u.t, state->v.t, b);
+		if (rnYield && (i % RN_YIELD_BITS) == 0)
+			os_tsk_pass();
+	}
+
+	curve25519Copy(r->x, state->u.x);
+	curve25519Copy(r->y, state->u.y);
+	curve25519Copy(r->z, state->u.z);
+	curve25519Copy(r->t, state->u.t);
+}
+
+/* GET /auth/remoteNonce — 인증 없음. 1초에 1회 초과 시 {"success":false} */
+static error_t apiRemoteNonce(HttpConnection *c)
+{
+	uint8_t n[16];
+	char hx[33], b[112];
+	systime_t now;
+	int i, slot = -1, old = 0, ok = 0;
+
+	osAcquireMutex(&rnMutex);
+	now = osGetSystemTime();
+	if (!rnIssued || (systime_t)(now - rnLastIssue) >= RN_ISSUE_GAP_MS) {
+		rnIssued = 1;
+		rnLastIssue = now;
+		rnStir(&c->socket->remoteIpAddr, sizeof(c->socket->remoteIpAddr));
+		memcpy(n, rnPool + 48, sizeof(n));
+		rnStir(NULL, 0);					/* 내보낸 값과 다음 풀 상태 분리 */
+		/* 빈 슬롯 또는 만료 슬롯 우선, 없으면 가장 오래된 슬롯 */
+		for (i = 0; i < RN_SLOTS; i++) {
+			if (!rnTab[i].used || rnExpired(&rnTab[i], now)) { slot = i; break; }
+			if ((systime_t)(now - rnTab[i].t) > (systime_t)(now - rnTab[old].t)) old = i;
+		}
+		if (slot < 0) slot = old;
+		memcpy(rnTab[slot].n, n, sizeof(n));
+		rnTab[slot].t = now;
+		rnTab[slot].used = 1;
+		ok = 1;
+	}
+	osReleaseMutex(&rnMutex);
+
+	if (beginJson(c)) return ERROR_WRITE_FAILED;
+	if (ok) {
+		rnToHex(n, sizeof(n), hx);
+		snprintf(b, sizeof(b),
+			"{\"success\":true,\"nonce\":\"%s\",\"ttl_sec\":%u,\"alg\":\"ed25519\"}",
+			hx, (unsigned)(RN_TTL_MS / 1000u));
+		w(c, b);
+	} else {
+		w(c, "{\"success\":false}");
+	}
+	return httpCloseStream(c);
+}
+
+/* 302 "/" — tok가 있으면 세션 쿠키 발급(성공), 없으면 쿠키 변경 없음(실패 → 로그인 화면) */
+static error_t remoteRedirect(HttpConnection *c, const char *tok)
+{
+	httpInitResponseHeader(c);
+	c->response.statusCode      = 302;
+	c->response.location        = "/";
+	c->response.contentType     = "text/plain";
+	c->response.chunkedEncoding = FALSE;
+	c->response.contentLength   = 0;
+	c->response.noCache         = TRUE;
+	c->response.keepAlive       = FALSE;
+	if (tok != NULL)
+		snprintf(c->response.setCookie, sizeof(c->response.setCookie),
+			"sid=%s; Path=/; Max-Age=28800; HttpOnly", tok);
+	if (httpWriteHeader(c)) return ERROR_WRITE_FAILED;
+	return httpCloseStream(c);
+}
+
+static void rnLogFail(const char *why)
+{
+	systime_t now = osGetSystemTime();
+	rlRejectCnt++;
+	if (rnLogged && (systime_t)(now - rnLastLog) < RN_LOG_GAP_MS) return;
+	rnLogged = 1;
+	rnLastLog = now;
+	printf("[REMOTE] link rejected: %s\n", why);
+}
+
+/* GET /dashboard/{계정}[/{언어}]?nonce=<hex32>&sig=<hex128> */
+static error_t apiRemoteDashboard(HttpConnection *c, const char *uri)
+{
+	char acct[8], nonceHx[40], sigHx[136], msg[64], tok[WEB_TOK_LEN + 1];
+	uint8_t n[16], sig[64], pk[32], role = ROLE_NONE;
+	const char *p = uri + 11;			/* "/dashboard/" 이후 */
+	const char *why = NULL;
+	systime_t now;
+	uint32_t c0, cyc;
+	int i, k, slot = -1;
+	error_t e;
+
+	/* 1) 형식·계정(값싼 검사) */
+	for (k = 0; p[k] && p[k] != '/' && k < (int)sizeof(acct) - 1; k++) acct[k] = p[k];
+	acct[k] = 0;
+	if (p[k] && p[k] != '/')              role = ROLE_NONE;
+	else if (!strcmp(acct, "ntek"))       role = ROLE_ADMIN;
+	else if (!strcmp(acct, "sv300"))      role = ROLE_VIEWER;
+	if (role == ROLE_NONE) why = "account";
+	else if (formField(c->request.queryString, "nonce", nonceHx, sizeof(nonceHx)) != 32 ||
+	         formField(c->request.queryString, "sig", sigHx, sizeof(sigHx)) != 128 ||
+	         rnHexBytes(nonceHx, n, 16) || rnHexBytes(sigHx, sig, 64))
+		why = "format";
+	if (why) { rnLogFail(why); return remoteRedirect(c, NULL); }
+
+	/* 2) nonce 유효 + 동시 1건 + 2초 1회 */
+	osAcquireMutex(&rnMutex);
+	now = osGetSystemTime();
+	for (i = 0; i < RN_SLOTS; i++)
+		if (rnTab[i].used && !rnExpired(&rnTab[i], now) && !memcmp(rnTab[i].n, n, 16)) { slot = i; break; }
+	if (slot < 0)                                                         why = "nonce";
+	else if (rnBusy)                                                      why = "busy";
+	else if (rnVerified && (systime_t)(now - rnLastVerify) < RN_VERIFY_GAP_MS) why = "rate";
+	else { rnBusy = 1; rnVerified = 1; rnLastVerify = now; rnStir(sig, sizeof(sig)); }
+	osReleaseMutex(&rnMutex);
+	if (why) { rnLogFail(why); return remoteRedirect(c, NULL); }
+
+	/* 3) 서명 검증 — 서명 대상의 nonce는 소문자 hex로 재구성. 검증 동안만 LLOW + 양보 */
+	rnToHex(n, 16, nonceHx);
+	snprintf(msg, sizeof(msg), "sv-remote/v1|%s|%s", acct, nonceHx);
+	rnHexBytes(REMOTE_PK_HEX, pk, 32);
+	c0 = RN_CYCCNT;
+	os_tsk_prio_self(OS_TASK_PRIORITY_LLOW);
+	rnYield = 1;
+	e = ed25519VerifySignature(pk, msg, strlen(msg), NULL, 0, 0, sig);
+	rnYield = 0;
+	os_tsk_prio_self(OS_TASK_PRIORITY_LOW);
+	cyc = RN_CYCCNT - c0;
+
+	/* 4) 성공 시에만 nonce 폐기(검증 중 발급 폭주로 이미 밀려났으면 그대로 소멸) */
+	osAcquireMutex(&rnMutex);
+	if (e == NO_ERROR)
+		for (i = 0; i < RN_SLOTS; i++)
+			if (rnTab[i].used && !memcmp(rnTab[i].n, n, 16)) rnTab[i].used = 0;
+	rnBusy = 0;
+	osReleaseMutex(&rnMutex);
+
+	printf("[REMOTE] link %s acct=%s (%u ms)\n", e == NO_ERROR ? "OK" : "bad signature",
+		acct, (unsigned)(cyc / 204000u));		/* 코어 204MHz(RTX OS_CLOCK) */
+	rlogAdd(c, role, e == NO_ERROR, cyc / 204000u);
+	if (e != NO_ERROR) return remoteRedirect(c, NULL);
+
+	webMakeToken(role, tok);
+	return remoteRedirect(c, tok);
+}
+
+/*============================ Dashboard 데이터 ==============================*/
+
 /*============================ Dashboard 데이터 ==============================*/
 static float favg3(const float *a) { return (a[0] + a[1] + a[2]) / 3.0f; }
 
@@ -1228,7 +1607,7 @@ typedef struct {
 	uint8_t     type, card, ro, nw;
 } GField;
 
-/* card: 0=Device Information, 1=Communication, 2=ETC, 3=Status, 4=SNMP, 5=MQTT
+/* card: 0=Device Information, 1=Communication, 2=ETC, 3=Status, 4=SNMP, 5=MQTT, 6=Remote Link
  * 설정 영역 주소는 MBAD_SET_FIELD()로 구조체에서 계산(2026-10-28 통신 설정 410워드 재배치). nw=문자열 워드 수 */
 #define SF(f)	MBAD_SET_FIELD(f)
 static const GField GEN[] = {
@@ -1279,6 +1658,8 @@ static const GField GEN[] = {
 	{ "mqtt_user",       "User",                 SF(comm.mqttUser),     WT_STR,  5, 0, COMM_STR_S / 2 },
 	{ "mqtt_pass",       "Password",             SF(comm.mqttPass),     WT_STR,  5, 0, COMM_STR_S / 2 },
 	{ "mqtt_topic",      "Topic",                SF(comm.mqttTopic),    WT_STR,  5, 0, COMM_STR_L / 2 },
+	/* card 6 = Remote Link — 원격 대시보드 서명링크(기본 꺼짐, 저장 즉시 반영). 접속 기록은 /api/remotelog로 덧붙임 */
+	{ "remote_link",     "Signed Link Login",    SF(comm.remoteEn),     WT_BOOL, 6, 0, 0 },
 	/* card 2 = ETC */
 	{ "freq",            "Frequency (Hz)",       SF(freq),              WT_U16,  2, 0, 0 },
 	{ "va_type",         "VA Type",              SF(etc.VA_type),       WT_U16,  2, 0, 0 },
@@ -1833,13 +2214,12 @@ static const char INDEX_HTML[] =
 "    <div id='chctl' style='display:none;margin:0 0 10px;align-items:center;gap:8px'>\n"
 "     <span class='ph2'>Option</span>\n"
 "     <select id='hopt' style='width:150px' onchange=\"harmOpt=this.value;pollLoop()\"><option value='pv'>Phase Voltage</option><option value='lv'>Line Voltage</option><option value='cur'>Current</option></select>\n"
-"     <span class='ph2' style='margin-left:6px'>Voltage: CH1 (M0~M2 shared) &middot; Current: CH1~3</span>\n"
 "    </div>\n"
 "    <div id='chbody'></div>\n"
 "   </div>\n"
 "   <div id='p-io' style='display:none'>\n"
 "    <h1 class='pgh'>IO (DI / TEMP)</h1>\n"
-"    <div class='dcard'><div class='dct'>IO DATA <span class='ph2'>7050~7069</span></div><div id='d-iom'></div></div>\n"
+"    <div class='dcard'><div class='dct'>IO DATA</div><div id='d-iom'></div></div>\n"
 "   </div>\n"
 "   <div id='p-setup' style='display:none'>\n"
 "    <div class='gp-head'><h1>Settings</h1><span class='gp-badge' id='setBadge'>Main Setting</span>\n"
@@ -1863,7 +2243,8 @@ static const char INDEX_HTML[] =
 "var $=function(i){return document.getElementById(i)};\n"
 "var IS_ADMIN=false, cur='dash', NCH=3, AUTHGEN=0;\n"
 "var AC=['Disabled','Temp','Freq','U1','U2','U3','U~','U12','U23','U31','Upp~','V.Unbal Uo','V.Unbal Uu','I1','I2','I3','I~','Itotal','In','P1','P2','P3','Ptotal','Q1','Q2','Q3','Qtot','D1','D2','D3','D','S1','S2','S3','Stot','PF1','PF2','PF3','PFtot','THD U1','THD U2','THD U3','THD U12','THD U23','THD U31','THD I1','THD I2','THD I3','DDmd P+','DDmd P-','DDmd Q+','DDmd Q-','DDmd S','DDmd I1','DDmd I2','DDmd I3','MDmd P+','MDmd P-','MDmd Q+','MDmd Q-','MDmd S','MDmd I1','MDmd I2','MDmd I3','UnderDev U1','UnderDev U2','UnderDev U3','OverDev U1','OverDev U2','OverDev U3','CF U1','CF U2','CF U3','CF U12','CF U23','CF U31','CF I1','CF I2','CF I3','KF I1','KF I2','KF I3','PSt1','PSt2','PSt3','Plt1','Plt2','Plt3','Sig.V1','Sig.V2','Sig.V3'];\n"
-"var ET={1:['Sag','sag'],2:['Swell','swell'],3:['S.Intr','intr'],4:['L.Intr','intr'],5:['OC','oc'],6:['RVC','tr'],7:['Trans V','tr'],8:['Trans I','tr'],9:['SOE','oc']};\n"
+/* 7=Trans V, 8=Trans I 는 과도(Transient) 기능 미지원이라 이름 목록에서 뺐다(발생 시 '#7'/'#8'로 표시) */
+"var ET={1:['Sag','sag'],2:['Swell','swell'],3:['S.Intr','intr'],4:['L.Intr','intr'],5:['OC','oc'],6:['RVC','tr'],9:['SOE','oc']};\n"
 "function acn(i){return AC[i]||('#'+i)}\n"
 /* 401(세션 만료/무효) 감지 시 로그인 화면 복귀 — 없으면 폴링이 계속 401을 받으며 read error로 고착됨.
    AUTHGEN: 로그인 직전에 떠난 요청의 늦은 401이 방금 성공한 로그인을 되돌리는 경합 방지 */
@@ -1964,24 +2345,31 @@ static const char INDEX_HTML[] =
 /* setup */
 "var OPTDIS={};\n"
 "var OPT={snmp_ver:{0:'v1/v2c',1:'v1/v2c/v3',2:'v3 only'},freq:{0:'60 Hz',1:'50 Hz'},va_type:{0:'RMS (S=VA)',1:'Vector'},pf_sign:{0:'IEC',1:'IEEE'},demand_interval:{0:'1 min',1:'5 min',2:'15 min',3:'30 min',4:'60 min'},minmax_reset:{0:'Daily',1:'Weekly',2:'Monthly'},timezone:{'-720':'UTC-12:00','-600':'Hawaii -10:00','-540':'Alaska -09:00','-480':'Pacific -08:00','-420':'Mountain -07:00','-360':'Central -06:00','-300':'Eastern -05:00','-180':'-03:00','0':'UTC +00:00','60':'Berlin +01:00','120':'Athens +02:00','180':'Moscow +03:00','210':'Tehran +03:30','240':'Dubai +04:00','300':'Karachi +05:00','330':'India +05:30','345':'Nepal +05:45','360':'Dhaka +06:00','420':'Bangkok +07:00','480':'Shanghai +08:00','540':'Seoul +09:00','570':'Adelaide +09:30','600':'Sydney +10:00','720':'Auckland +12:00'}};\n"
-"var CARDN=['Device Information','Communication','ETC','Status','SNMP','MQTT'],setCur='general';\n"
+"var CARDN=['Device Information','Communication','ETC','Status','SNMP','MQTT','Remote Link'],setCur='general';\n"
 "var WM={0:'not used',1:'3P4W',2:'3P3W(2CT)',3:'3P3W(3CT)',4:'1P2W(L1)',5:'1P2W(L2)',6:'1P2W(L3)',7:'1P3W',8:'SIM'};\n"
 "var CT2M={0:'5A',1:'100mA/333mV',2:'Rogowski'},ZCTM={1:'200mV:100mV',2:'200mV:1.5mA',3:'200mV:0.1mA'},DIM={0:'DI',1:'PI'},DIRM={0:'+',1:'-'};\n"
 "var PT_F=[{o:0,l:'Wiring Mode',t:'u16',opt:WM},{o:2,l:'V Nominal',t:'u32'},{o:4,l:'PT1',t:'u32'},{o:6,l:'PT2',t:'u16'}];\n"
-"var CT_F=[{o:0,l:'I Nominal (%)',t:'u16'},{o:1,l:'CT1',t:'u16'},{o:2,l:'CT2',t:'u16',opt:CT2M},{o:3,l:'Turns',t:'u16'},{o:4,l:'Start I',t:'u16',sc:1000},{o:5,l:'CT1 Dir',t:'u16',opt:DIRM},{o:6,l:'CT2 Dir',t:'u16',opt:DIRM},{o:7,l:'CT3 Dir',t:'u16',opt:DIRM},{o:8,l:'Rogowski',t:'u16'},{o:9,l:'Phase Ofs 1',t:'i16'},{o:10,l:'Phase Ofs 2',t:'i16'},{o:11,l:'Phase Ofs 3',t:'i16'},{o:12,l:'ZCT Type',t:'u16',opt:ZCTM},{o:13,l:'ZCT Scale',t:'u16'}];\n"
+/* hid:1 = 교정/제조사 값이라 화면에서 감춤(값은 그대로 유지·저장 안 건드림). 다시 노출하려면 hid:1만 지우면 된다 */
+"var CT_F=[{o:0,l:'I Nominal (%)',t:'u16'},{o:1,l:'CT1',t:'u16'},{o:2,l:'CT2',t:'u16',opt:CT2M},{o:3,l:'Turns',t:'u16',hid:1},{o:4,l:'Start I',t:'u16',sc:1000},{o:5,l:'CT1 Dir',t:'u16',opt:DIRM},{o:6,l:'CT2 Dir',t:'u16',opt:DIRM},{o:7,l:'CT3 Dir',t:'u16',opt:DIRM},{o:8,l:'Rogowski',t:'u16',hid:1},{o:9,l:'Phase Ofs 1',t:'i16',hid:1},{o:10,l:'Phase Ofs 2',t:'i16',hid:1},{o:11,l:'Phase Ofs 3',t:'i16',hid:1},{o:12,l:'ZCT Type',t:'u16',opt:ZCTM},{o:13,l:'ZCT Scale',t:'u16',hid:1}];\n"
 "var CMDS=[{g:'System',l:'Reboot',addr:7798,danger:1,note:'reboot'},{g:'System',l:'Save Set',addr:7799},{g:'System',l:'Init Settings',addr:7814,danger:2},{g:'System',l:'Set Time',addr:7788,utc:1}];\n"
 /* 'Command' 탭은 사이드바 Maintenance 페이지로 옮겼다 (loadCommand) */
 "var MAIN_TABS=[['general','General'],['pt','PT'],['ct','CT']];\n"
-"var CHAN_TABS=[['pqevent','PQ Event'],['transient','Transient'],['waveform','Waveform'],['disturb','Disturbance'],['trend','Trend'],['pqreport','PQ Report'],['almdef','Alarm Def'],['alarm','Alarm Settings']];\n"
+/* Transient 탭은 기능 미지원이라 화면에서 감춤(CSECT.transient 정의는 유지) — 다시 노출하려면 ['transient','Transient']를 PQ Event 뒤에 되살린다 */
+"var CHAN_TABS=[['pqevent','PQ Event'],['waveform','Waveform'],['trend','Trend'],['pqreport','PQ Report'],['almdef','Alarm Def'],['alarm','Alarm Settings']];\n"
 "var setMode='main';\n"
 "function setEnter(arg){setMode=(arg==='chan')?'chan':'main';$('setBadge').textContent=(setMode==='chan')?'Channel Setting':'Main Setting';$('si-setup').className='sitem'+(setMode==='main'?' active':'');$('si-chset').className='sitem'+(setMode==='chan'?' active':'');setTab(((setMode==='chan')?CHAN_TABS:MAIN_TABS)[0][0]);}\n"
 "function setTab(t){setCur=t;var L=(setMode==='chan')?CHAN_TABS:MAIN_TABS,h='';L.forEach(function(p){h+=\"<a class='gp-tab\"+(p[0]===t?' on':'')+\"' data-t='\"+p[0]+\"'>\"+esc(p[1])+'</a>';});var st=$('setTabs');st.innerHTML=h;st.onclick=function(e){var a=e.target.closest('a[data-t]');if(a)setTab(a.getAttribute('data-t'));};\n"
 " $('setSave').style.display=IS_ADMIN?'':'none';$('setRes').textContent='';$('setBody').innerHTML=\"<p class='stub'>loading...</p>\";reloadSet();}\n"
 "function reloadSet(){var t=setCur;if(t==='general')loadGeneral();else if(t==='pt')loadGroup('pt');else if(t==='ct')loadGroup('ct');else if(t==='alarm')loadAlarm();else loadCSect(t);}\n"
-"var CSECT={pqevent:[[6700,'Level','Over Current'],[6701,'Cycle','Over Current'],[6702,'Trigger Action','Over Current'],[6703,'holdOff Cycle','Over Current'],[6706,'Level(%)','Sag',1],[6707,'Cycle','Sag',1],[6708,'Trigger Action','Sag',1],[6709,'holdOff Cycle','Sag',1],[6712,'Level(%)','Swell',1],[6713,'Cycle','Swell',1],[6714,'Trigger Action','Swell',1],[6715,'holdOff Cycle','Swell',1],[6718,'Level(%)','Interruption',1],[6719,'Time(s)','Interruption',1],[6720,'Trigger Action','Interruption',1],[6721,'holdOff Cycle','Interruption',1]],transient:[[6724,'HoldOff(ms)','Voltage',1],[6725,'Abs Peak(%)','Voltage',1],[6726,'Fast Change','Voltage',1],[6727,'Trigger Action','Voltage',1],[6728,'HoldOff','Current'],[6729,'Abs Peak','Current'],[6730,'Fast Change','Current'],[6731,'Trigger Action','Current']],waveform:[[6746,'Pre trigger (cycle)'],[6747,'Post trigger (cycle)']],disturb:[[6748,'Resolution(HalfCyc)'],[6749,'Param(U/I)'],[6750,'Pre trig(smp)'],[6751,'Post trig(smp)']],pqreport:[[6844,'Active'],[6845,'Start Day']],almdef:[[6854,'compare Time Delay(s)']]};\n"
-"(function(){var t=[];[[1,6764,6766,6767],[2,6783,6785,6786],[3,6802,0,6805],[4,6821,0,6824]].forEach(function(g){var gn='Group '+g[0];t.push([g[1],'Active',gn]);t.push([g[1]+1,'Interval',gn]);if(g[2])t.push([g[2],'Version',gn]);for(var k=0;k<16;k++)t.push([g[3]+k,'Ch'+(k+1),gn]);});CSECT.trend=t;})();\n"
+"var CSECT={pqevent:[[6700,'Level','Over Current'],[6701,'Cycle','Over Current'],[6702,'Trigger Action','Over Current'],[6703,'holdOff Cycle','Over Current'],[6706,'Level(%)','Sag',1],[6707,'Cycle','Sag',1],[6708,'Trigger Action','Sag',1],[6709,'holdOff Cycle','Sag',1],[6712,'Level(%)','Swell',1],[6713,'Cycle','Swell',1],[6714,'Trigger Action','Swell',1],[6715,'holdOff Cycle','Swell',1],[6718,'Level(%)','Interruption',1],[6719,'Time(s)','Interruption',1],[6720,'Trigger Action','Interruption',1],[6721,'holdOff Cycle','Interruption',1]],transient:[[6724,'HoldOff(ms)','Voltage',1],[6725,'Abs Peak(%)','Voltage',1],[6726,'Fast Change','Voltage',1],[6727,'Trigger Action','Voltage',1],[6728,'HoldOff','Current'],[6729,'Abs Peak','Current'],[6730,'Fast Change','Current'],[6731,'Trigger Action','Current']],waveform:[[6746,'Pre trigger (cycle)'],[6747,'Post trigger (cycle)']],pqreport:[[6844,'Active'],[6845,'Start Day']],almdef:[[6854,'compare Time Delay(s)']]};\n"
+/* Trend: Version 행(g[2])은 내부값이라 화면에서 감춤 — 다시 노출하려면 주석 처리된 push를 되살린다 */
+"(function(){var t=[];[[1,6764,6766,6767],[2,6783,6785,6786],[3,6802,0,6805],[4,6821,0,6824]].forEach(function(g){var gn='Group '+g[0];t.push([g[1],'Active',gn]);t.push([g[1]+1,'Interval',gn]);/*if(g[2])t.push([g[2],'Version',gn]);*/for(var k=0;k<16;k++)t.push([g[3]+k,'Ch'+(k+1),gn]);});CSECT.trend=t;})();\n"
 /* CSECT 탭 중 Active 행을 토글 버튼으로 낼 것들. hide=1 이면 OFF 시 같은 그룹의 나머지 행을 숨긴다. */
 "var CSTOG={trend:{k:'Active',hide:1},pqreport:{k:'Active',hide:0}};\n"
+/* 파형 캡처 최대 길이(cycle) — 펌웨어 wavePreCaptureLF()가 pre+post를 30으로 클램프(N_LFCAP=30cyc@50Hz) */
+"var WF_MAX=30;\n"
+"function wfPre(el){if(el.value===''){setMark(el);return;}var v=Math.round(+el.value);if(isNaN(v)||v<0)v=0;if(v>WF_MAX)v=WF_MAX;if(+el.value!==v)el.value=v;\n"
+" var po=el.closest('.setcard').querySelector(\"[data-wf='post']\");if(po){po.value=WF_MAX-v;setMark(po);}setMark(el);}\n"
 "function loadCSect(key){var f=CSECT[key];if(!f){$('setBody').innerHTML=\"<p class='stub'>-</p>\";return;}var lo=f[0][0],hi=f[0][0];f.forEach(function(p){if(p[0]<lo)lo=p[0];if(p[0]>hi)hi=p[0];});var nn=hi-lo+1;\n"
 " var _chs=[];for(var _k=1;_k<=NCH;_k++)_chs.push(_k);\n"
 " Promise.all(_chs.map(function(ch){return j('/api/regs?addr='+(lo+(ch-1)*10000)+'&n='+nn).then(function(r){return (r.d&&r.d.ok)?r.d.words:null;}).catch(function(){return null;});})).then(function(bl){if(setCur!==key)return;\n"
@@ -1990,9 +2378,14 @@ static const char INDEX_HTML[] =
 "    f.forEach(function(p){if(ch>1&&p[3])return;var g=p[2]||'';if(g&&g!==pg){gi++;h+=\"<div class='sgrp'>\"+esc(g)+\"</div>\";}pg=g;\n"
 "     var addr=p[0]+(ch-1)*10000,v=wds[p[0]-lo]||0,gk=(tg&&tg.hide)?('g'+ch+'_'+gi):'',d=\"data-addr='\"+addr+\"' data-type='u16' data-orig='\"+v+\"'\",ctl;\n"
 "     if(tg&&p[1]===tg.k){ctl=togBtn(d,v==1,dis,gk,0,tg.hide);}\n"
+/* Trend Ch1~16 = 기록 항목 번호(almTbl 인덱스, Alarm Settings Channel과 같은 AC 목록) → 드롭다운 */
+"     else if(key==='trend'&&/^Ch\\d+$/.test(p[1])){ctl=\"<select \"+d+(gk?(\" data-k='\"+gk+\"'\"):'')+' '+dis+\" onchange='setMark(this)'>\";for(var ai=0;ai<AC.length;ai++)ctl+=\"<option value='\"+ai+\"'\"+(ai==v?' selected':'')+'>'+esc(AC[ai])+'</option>';if(v>=AC.length)ctl+=\"<option value='\"+v+\"' selected>#\"+v+'</option>';ctl+='</select>';}\n"
 "     else if(p[1]==='Trigger Action'){ctl=\"<select \"+d+' '+dis+\" onchange='setMark(this)'><option value='0'\"+(v==0?' selected':'')+\">NONE</option><option value='1'\"+(v==1?' selected':'')+\">EVENT</option><option value='2'\"+(v==2?' selected':'')+\">WAVE CAPTURE</option></select>\";}\n"
+/* Waveform: Pre만 입력, Post = WF_MAX - Pre 자동(읽기전용) */
+"     else if(key==='waveform'){var wpre=(p[0]===6746);ctl=\"<input type='number' min='0' max='\"+WF_MAX+\"' \"+d+\" data-wf='\"+(wpre?'pre':'post')+\"' value='\"+v+\"' \"+(wpre?(dis+\" oninput='wfPre(this)'\"):\"readonly tabindex='-1'\")+'>';}\n"
 "     else{ctl=\"<input type='number' \"+d+(gk?(\" data-k='\"+gk+\"'\"):'')+\" value='\"+v+\"' \"+dis+\" oninput='setMark(this)'>\";}\n"
-"     h+=\"<div class='srow'><span class='sk'>\"+esc(p[1])+\"</span>\"+ctl+\"</div>\";});}\n"
+"     h+=\"<div class='srow'><span class='sk'>\"+esc(p[1])+\"</span>\"+ctl+\"</div>\";});\n"
+"    if(key==='waveform')h+=\"<div class='setnote'>Max \"+WF_MAX+\" cycles (Pre + Post). Post is set automatically.</div>\";}\n"
 "   h+='</div>';}h+='</div>';$('setBody').innerHTML=h;togDeps($('setBody'));sn('Save & Apply.');});}\n"
 "function fmtV(f){return (f.type==='bool')?(f.val?'On':'Off'):esc(f.val)}\n"
 /* 0/1 항목은 체크박스 대신 토글 버튼(gems3500_keil5 참조). 값은 value 속성에 실리므로
@@ -2021,8 +2414,14 @@ static const char INDEX_HTML[] =
 " var cs=CARDN.map(function(){return [];});r.d.fields.forEach(function(f){cs[f.card].push(f)});var h=\"<div class='setgrid'>\";\n"
 " STF=cs[3];STLO=0;STN=0;STF.forEach(function(f){if(!STLO||f.addr<STLO)STLO=f.addr;});\n"
 " STF.forEach(function(f){if(f.addr-STLO+1>STN)STN=f.addr-STLO+1;});\n"
-" cs.forEach(function(fs,ci){h+=\"<div class='setcard'\"+(ci===4?\" id='snmpCard'\":'')+\"><h3>\"+CARDN[ci]+'</h3>';fs.forEach(function(f){h+=\"<div class='srow'><span class='sk'>\"+esc(f.label)+'</span>'+ctlOf(f)+'</div>';});h+='</div>';});\n"
-" h+='</div>';$('setBody').innerHTML=h;togDeps($('setBody'));sn('Save & Apply.');return loadSnmpStr();});}\n"
+" cs.forEach(function(fs,ci){h+=\"<div class='setcard'\"+(ci===4?\" id='snmpCard'\":ci===6?\" id='rlCard'\":'')+\"><h3>\"+CARDN[ci]+'</h3>';fs.forEach(function(f){h+=\"<div class='srow'><span class='sk'>\"+esc(f.label)+'</span>'+ctlOf(f)+'</div>';});h+='</div>';});\n"
+" h+='</div>';$('setBody').innerHTML=h;togDeps($('setBody'));sn('Save & Apply.');return loadSnmpStr().then(loadRemoteLog);});}\n"
+/* Remote Link 카드 — 서명링크 설명 + 최근 원격 로그인 기록(admin만, /api/remotelog) */
+"function loadRemoteLog(){var c=$('rlCard');if(!c)return;c.insertAdjacentHTML('beforeend',\"<div class='setnote'>Allows one-time signed links from the remote dashboard server. <b>Off by default.</b> Applies on Save.</div>\");\n"
+" if(!IS_ADMIN)return;return j('/api/remotelog').then(function(r){if(!r.d||!r.d.ok)return;var h=\"<table class='settbl'><tr><th>Time</th><th>Account</th><th>From</th><th>Result</th></tr>\";\n"
+"  if(!r.d.log.length)h+=\"<tr><td colspan='4'>No remote login</td></tr>\";\n"
+"  r.d.log.forEach(function(e){h+='<tr><td>'+ts2(e.ts)+'</td><td>'+esc(e.acct)+'</td><td>'+esc(e.ip)+'</td><td>'+(e.ok?'OK':'Bad signature')+'</td></tr>';});\n"
+"  c.insertAdjacentHTML('beforeend',h+\"</table><div class='setnote'>Rejected since boot (format/account/nonce/rate): \"+r.d.rejected+'</div>');}).catch(function(){});}\n"
 /* SNMP 문자열(snmp.d) — data-addr 대신 data-snmp. 커뮤니티는 비밀값이라 값을 받지 않고 새로 입력할 때만 저장 */
 "function escA(s){return esc(s).replace(/'/g,'&#39;');}\n"
 "function loadSnmpStr(){return j('/api/snmp').then(function(r){var c=$('snmpCard');if(!c||!r.d||!r.d.ok)return;var dis=IS_ADMIN?'':'disabled';\n"
@@ -2067,7 +2466,7 @@ static const char INDEX_HTML[] =
 "  var h;\n"
 "  if(kind==='ct'){\n"
 "   h=\"<div class='setgrid'>\";\n"
-"   for(s=0;s<_npt;s++){sb=cfg.base+s*cfg.step;so=s*cfg.step;h+=\"<div class='setcard'><h3>CT #\"+(s+1)+'</h3>';cfg.fields.forEach(function(f){h+=\"<div class='srow'><span class='sk'>\"+esc(f.l)+\"</span><span>\"+grpCtl(f,sb+f.o,decodeF(wds,so+f.o,f.t))+'</span></div>';});h+='</div>';}\n"
+"   for(s=0;s<_npt;s++){sb=cfg.base+s*cfg.step;so=s*cfg.step;h+=\"<div class='setcard'><h3>CT #\"+(s+1)+'</h3>';cfg.fields.forEach(function(f){if(f.hid)return;h+=\"<div class='srow'><span class='sk'>\"+esc(f.l)+\"</span><span>\"+grpCtl(f,sb+f.o,decodeF(wds,so+f.o,f.t))+'</span></div>';});h+='</div>';}\n"
 "   h+='</div>';$('setBody').innerHTML=h;sn('Save & Apply.');return;}\n"
 "  h=\"<div class='settbl-wrap'><table class='settbl'><thead><tr><th>\"+cfg.ti+'</th>';cfg.fields.forEach(function(f){h+='<th>'+esc(f.l)+'</th>';});h+='</tr></thead><tbody>';\n"
 "  for(s=0;s<_npt;s++){sb=cfg.base+s*cfg.step;so=s*cfg.step;h+=\"<tr><td class='rk'>#\"+(s+1)+'</td>';cfg.fields.forEach(function(f){h+='<td>'+grpCtl(f,sb+f.o,decodeF(wds,so+f.o,f.t))+'</td>';});h+='</tr>';}\n"
@@ -2335,6 +2734,13 @@ static error_t webRequestCallback(HttpConnection *c, const char_t *uri)
 	if (!strcmp(uri, "/api/logout")) return apiLogout(c);
 	if (!strcmp(uri, "/api/me"))     return apiMe(c);
 
+	/* 원격 대시보드 서명링크(무개방 — 서명·nonce로 인증). 기본 꺼짐: comm.remoteEn(7420)=0이면
+	 * 처리하지 않고 정적파일 폴백 → 404(기능이 없는 장비와 동일하게 보임). 저장 즉시 반영 */
+	if (pdb->comm.remoteEn == 1) {		/* 저장 경로엔 정규화가 없어 1만 ON으로 본다 */
+		if (!strcmp(uri, "/auth/remoteNonce"))     return apiRemoteNonce(c);
+		if (!strncmp(uri, "/dashboard/", 11))      return apiRemoteDashboard(c, uri);
+	}
+
 	/* 쓰기(admin) */
 	if (!strcmp(uri, "/api/sv300/command")) return apiCommand(c);
 	if (!strcmp(uri, "/api/setreg"))        return apiSetReg(c);
@@ -2365,6 +2771,7 @@ static error_t webRequestCallback(HttpConnection *c, const char_t *uri)
 		if (!strcmp(uri, "/api/monthly"))      return apiMonthly(c);
 		if (!strcmp(uri, "/api/general"))      return apiGeneral(c);
 		if (!strcmp(uri, "/api/snmp"))         return apiSnmpGet(c);
+		if (!strcmp(uri, "/api/remotelog"))    return apiRemoteLog(c);
 		if (!strncmp(uri, "/api/regs", 9))     return apiRegs(c);
 		return webJsonStatus(c, 404, "{\"ok\":false,\"error\":\"notfound\"}");
 	}
@@ -2431,6 +2838,7 @@ void webServerStart(NetInterface *interface)
 
 	webRandSeed(interface);
 	webKeyLoad();
+	rnInit(interface);
 
 	httpServerGetDefaultSettings(&s);
 	s.interface      = interface;

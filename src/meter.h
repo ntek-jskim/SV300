@@ -88,6 +88,9 @@
 #define	ALARM_ST_FILE1 CONCAT3(SYS_DIR, DIRSEP, "astat.d1")
 #define	ALARM_ST_FILE2 CONCAT3(SYS_DIR, DIRSEP, "astat.d2")
 #define	ALARM_DEF_FILE CONCAT3(SYS_DIR, DIRSEP, "almdef.d")	/* 알람설정(almSet) 영속 파일(3채널) */
+#define	REMOTE_LOG_FILE CONCAT3(SYS_DIR, DIRSEP, "rlogin.d")	/* 원격 링크 로그인 성공 기록(web.c, 16B 레코드) */
+#define	REMOTE_LOG_REC	16
+#define	REMOTE_LOG_KEEP	20
 #define	PQE_DEF_FILE CONCAT3(SYS_DIR, DIRSEP, "pqedef.d")	/* PQE/Transient/Waveform/Trend 설정 영속(3채널, SETTINGS 미포함분) */
 int storePqeDef(void);
 int loadPqeDef(void);
@@ -924,8 +927,10 @@ typedef struct {
 	int16_t  timezone;					/* 7402 Timezone(분, 서울 540) */
 	char     sntpServer[COMM_STR_S];	/* 7403~7418 NTP 서버 IP 또는 도메인 */
 	uint16_t _rSntp;					/* 7419 예약 */
-	/* ── 예약 7420~7519 ── */
-	uint16_t _rsv[100];
+	/* ── 원격 접속 7420 ── */
+	uint16_t remoteEn;					/* 7420 원격 대시보드 서명링크 (0:OFF 기본, 1:ON) — 저장 즉시 반영. OFF면 /auth/remoteNonce·/dashboard/ 404 */
+	/* ── 예약 7421~7519 ── */
+	uint16_t _rsv[99];
 } COMM_CFG;
 
 /* COMM_CFG = Modbus 7110~7519(410워드) 고정 — 크기·묶음 시작이 바뀌면 뒤 레지스터·settings.dat가 밀리므로 컴파일 에러 */
@@ -934,7 +939,9 @@ typedef char comm_cfg_mb_check  [(offsetof(COMM_CFG, mbTcpEn) ==  40 * 2) ? 1 : 
 typedef char comm_cfg_mqtt_check[(offsetof(COMM_CFG, mqttEn)  ==  50 * 2) ? 1 : -1];
 typedef char comm_cfg_snmp_check[(offsetof(COMM_CFG, snmpEn)  == 180 * 2) ? 1 : -1];
 typedef char comm_cfg_sntp_check[(offsetof(COMM_CFG, useSntp) == 290 * 2) ? 1 : -1];
-typedef char comm_cfg_rsv_check [(offsetof(COMM_CFG, _rsv)    == 310 * 2) ? 1 : -1];
+typedef char comm_cfg_rmt_check [(offsetof(COMM_CFG, remoteEn) == 310 * 2) ? 1 : -1];	/* 7420 */
+/* remoteEn은 기존 예약(0) 자리라 SETTINGS_LAYOUT_VER을 올리지 않는다 — 올리면 업그레이드 시 설정 전체 초기화.
+ * 옛 settings.dat의 0 = OFF(기본값)로 그대로 해석된다. */
 
 /* COMM_CFG/SETTINGS 필드 배치가 바뀔 때마다 값을 올린다(연/월). 크기가 같아도 재초기화 유도 */
 #define SETTINGS_LAYOUT_VER		0x2610u

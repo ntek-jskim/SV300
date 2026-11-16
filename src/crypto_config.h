@@ -62,8 +62,8 @@
 #define SHA256_SUPPORT DISABLED
 //SHA-384 hash support
 #define SHA384_SUPPORT DISABLED
-//SHA-512 hash support
-#define SHA512_SUPPORT DISABLED
+//SHA-512 hash support (Ed25519 서명링크 검증용)
+#define SHA512_SUPPORT ENABLED
 //SHA-512/224 hash support
 #define SHA512_224_SUPPORT DISABLED
 //SHA-512/256 hash support
@@ -255,8 +255,8 @@
 #define X25519_SUPPORT ENABLED
 //Curve448 elliptic curve support
 #define X448_SUPPORT DISABLED
-//Ed25519 elliptic curve support
-#define ED25519_SUPPORT DISABLED
+//Ed25519 elliptic curve support (원격 대시보드 서명링크 검증용)
+#define ED25519_SUPPORT ENABLED
 //Ed448 elliptic curve support
 #define ED448_SUPPORT DISABLED
 
