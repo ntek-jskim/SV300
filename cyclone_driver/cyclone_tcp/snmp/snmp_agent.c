@@ -2057,6 +2057,12 @@ void snmpAgentTask(SnmpAgentContext *context)
 
                      //Send SNMP response message
                      socketSendMsg(context->socket, &msg, 0);
+
+                     /* [SV300 26/11/17] COMM LED 반전(app_main.c) — 응답 송신 훅이 없어 여기서 호출 */
+                     {
+                        extern void commLedPulse(void);
+                        commLedPulse();
+                     }
                   }
                }
 

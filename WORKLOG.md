@@ -9,6 +9,28 @@
 
 ---
 
+# 2026-11-17
+버전: **V00.05**(변경 없음)
+
+## 1. ★첫 접속 — DHCP 실패 시 AutoIP + Current IP
+- 납품 기본 DHCP 라 PC 1:1·데이지체인에서는 장비 IP 가 없어 라벨 주소(`sv300-<SN>.local`)로 접속 불가였음
+- DHCP 응답이 15초 없으면 **169.254.x.x 자동 IP**(장비마다 다른 주소), DHCP 는 계속 재시도·받으면 자동 IP 해제
+- **PC 1:1(PC 자동 IP)로 `.local` 접속 실기 확인**. 체인·공유기 나중 연결 시험은 [TODO.md](TODO.md) 3.15
+- 내장웹 Communication 카드에 **Current IP**(실제 사용 주소) 표시
+
+## 2. COMM LED·PQ Report 설정·진단 정리
+- COMM LED: Modbus TCP·SNMP(응답·Trap)·MQTT 송신마다 반전(종전 부팅 후 계속 켜짐) — TODO 3.16
+- PQ Report 설정: Start Day 드롭다운, CH1 카드만(EN50160 은 CH1 기준) — TODO 3.17
+- `[ETHDIAG]` 자동 출력 → 콘솔 `ETH` 조회, SPIFI 진단 출력 정리(4.1 종결)
+- 00:03 에너지 월 아카이브 정리를 루프마다 나눠 웹 무응답(약 10초) 해소 — TODO 4.2
+
+## 3. 문서
+- 사용자 매뉴얼 간결판 하나로 정리(`document/SV300_웹서버_사용자매뉴얼_v0.1.docx`, 8쪽) — 첫 접속·표시등·IP 설정·모니터링
+- `document/WEBSERVER_종합비교표.pdf`, README·TODO·snmp.md·WEBSERVER_PORTING 현행화(웹서버 제한 원칙은 재검토 후 유지)
+- `SV300_3CH_app` 0E/0W, 345,956B
+
+---
+
 # 2026-11-16
 버전: **V00.05**
 

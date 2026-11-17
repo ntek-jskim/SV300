@@ -50,6 +50,9 @@
 #include "drivers/switch/lan9303_driver.h"
 #include "rstp/rstp.h"
 #include "dhcp/dhcp_client.h"
+#include "ipv4/auto_ip.h"
+#include "ipv4/auto_ip_misc.h"
+#include "mdns/mdns_responder.h"
 #include "ipv6/slaac.h"
 #include "snmp/snmp_agent.h"
 #include "mibs/snmp_mib_module.h"
@@ -131,6 +134,11 @@ RstpBridgeContext rstpBridgeContext;
 RstpBridgePort rstpBridgePorts[RSTP_BRIDGE_NUM_PORTS];
 DhcpClientSettings dhcpClientSettings;
 DhcpClientContext dhcpClientContext;
+AutoIpSettings autoIpSettings;
+AutoIpContext autoIpContext;
+/* DHCP 응답이 이 시간 안에 없으면 AutoIP(169.254.x.x) 시작 — DHCP 는 계속 재시도 */
+#define APP_DHCP_AUTOIP_TIMEOUT 15000
+#define APP_AUTOIP_ADDR_INDEX   1	/* net_config.h IPV4_ADDR_LIST_SIZE 2 — [0]=DHCP */
 SlaacSettings slaacSettings;
 SlaacContext slaacContext;
 SnmpAgentSettings snmpAgentSettings;
@@ -404,6 +412,37 @@ void dhcpClientStateChangeCallback(DhcpClientContext *context,
 		
 		//memcpy(&dhcpIpAddr, &ipAddr, sizeof(dhcpIpAddr));
 		setMeterIpAddr(ipAddr);
+
+		/* DHCP 주소를 받았으면 AutoIP 주소는 내려놓는다(RFC 3927 §1.9). 갱신(renew) 때는 할 일 없음 */
+		if (autoIpContext.running ||
+			interface->ipv4Context.addrList[APP_AUTOIP_ADDR_INDEX].state != IPV4_ADDR_STATE_INVALID) {
+			autoIpStop(&autoIpContext);
+			osAcquireMutex(&netMutex);
+			autoIpResetConfig(&autoIpContext);
+			mdnsResponderStartProbing(interface->mdnsResponderContext);	/* A 레코드에서 169.254 제거 */
+			osReleaseMutex(&netMutex);
+			printf("AutoIP stopped (DHCP bound)\n");
+		}
+	}
+}
+
+/* DHCP 시간 초과(PC 1:1·데이지체인 설치 등 DHCP 서버 없음) → AutoIP 시작.
+ * 링크가 다시 올라오면 DHCP 가 INIT 부터 다시 시작하므로 이 콜백도 다시 불린다 */
+static void dhcpClientTimeoutCallback(DhcpClientContext *context, NetInterface *interface)
+{
+	if (!autoIpContext.running) {
+		printf("DHCP timeout -> AutoIP start\n");
+		autoIpStart(&autoIpContext);
+	}
+}
+
+static void autoIpStateChangeCallback(AutoIpContext *context, NetInterface *interface, AutoIpState state)
+{
+	if (state == AUTO_IP_STATE_CONFIGURED && dhcpClientContext.state != DHCP_STATE_BOUND) {
+		char ipStr[16];
+		ipv4AddrToString(context->linkLocalAddr, ipStr);
+		printf("AutoIP Assigned: %s\n", ipStr);
+		setMeterIpAddr(context->linkLocalAddr);	/* IpScan 응답 주소 */
 	}
 }
 
@@ -561,7 +600,18 @@ void init(void)
 
 		// 2025-3-24, dhcpStateChange CallBack
 		dhcpClientSettings.stateChangeEvent = dhcpClientStateChangeCallback;
-		
+		// 2026-11-17, DHCP 응답 없으면 AutoIP — 납품 기본 DHCP 상태로 PC 1:1·데이지체인 첫 접속
+		dhcpClientSettings.timeout = APP_DHCP_AUTOIP_TIMEOUT;
+		dhcpClientSettings.timeoutEvent = dhcpClientTimeoutCallback;
+
+		autoIpGetDefaultSettings(&autoIpSettings);
+		autoIpSettings.interface = interface;
+		autoIpSettings.ipAddrIndex = APP_AUTOIP_ADDR_INDEX;
+		autoIpSettings.stateChangeEvent = autoIpStateChangeCallback;
+		error = autoIpInit(&autoIpContext, &autoIpSettings);
+		if (error)
+			TRACE_ERROR("Failed to initialize Auto-IP!\r\n");
+
       //DHCP client initialization
       error = dhcpClientInit(&dhcpClientContext, &dhcpClientSettings);
       //Failed to initialize DHCP client?
@@ -1137,6 +1187,9 @@ void modbusServerLockCallback(void)
 
 void modbusServerUnlockCallback(void)
 {
+   /* 요청 1건 처리 끝(응답 송신 직전)마다 1회 호출 — COMM LED 반전 */
+   extern void commLedPulse(void);
+   commLedPulse();
 }
 
 

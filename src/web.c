@@ -1587,7 +1587,7 @@ static int qparam(const char *qs, const char *key)
 static uint16_t rdReg(uint16_t a) { uint16_t v = 0; readMemCb(a, &v); return v; }
 
 /* 설정 필드 테이블(General 탭) — 주소는 펌웨어 ground truth(CH1 base) */
-enum { WT_U16, WT_U32, WT_I16, WT_BOOL, WT_IP, WT_STR, WT_SERIAL, WT_MAC, WT_FWDATE, WT_FWVER };
+enum { WT_U16, WT_U32, WT_I16, WT_BOOL, WT_IP, WT_STR, WT_SERIAL, WT_MAC, WT_FWDATE, WT_FWVER, WT_CURIP };
 static const char *wtName(uint8_t t)
 {
 	switch (t) {
@@ -1596,7 +1596,7 @@ static const char *wtName(uint8_t t)
 	case WT_BOOL: return "bool";
 	case WT_IP:   return "ip";
 	case WT_STR:  case WT_SERIAL: case WT_MAC: case WT_FWDATE:
-	case WT_FWVER: return "str";  /* 읽기전용 표시 */
+	case WT_FWVER: case WT_CURIP: return "str";  /* 읽기전용 표시 */
 	default:      return "u16";
 	}
 }
@@ -1629,7 +1629,9 @@ static const GField GEN[] = {
 	{ "net_sts",         "NET STS",              7100, WT_U16,  3, 1, 0 },
 	{ "tot_sts",         "TOT STS",              7101, WT_U16,  3, 1, 0 },
 	/* card 1 = Communication — Ethernet → Modbus → SNTP */
-	{ "dhcp",            "DHCP",                 SF(comm.dhcpEn),       WT_BOOL, 1, 0, 0 },
+	/* 실제 사용 중인 IPv4 주소(DHCP 할당·AutoIP·고정) — 레지스터 아님(addr 0), 아래 IP Address 는 고정 IP 설정값 */
+	{ "cur_ip",          "Current IP",           0,                     WT_CURIP, 1, 1, 0 },
+	{ "dhcp",           "DHCP",                 SF(comm.dhcpEn),       WT_BOOL, 1, 0, 0 },
 	{ "ip",              "IP Address",           SF(comm.ip0),          WT_IP,   1, 0, 0 },
 	{ "subnet",          "Subnet Mask",          SF(comm.sm0),          WT_IP,   1, 0, 0 },
 	{ "gateway",         "Gateway",              SF(comm.gw0),          WT_IP,   1, 0, 0 },
@@ -1701,6 +1703,19 @@ static error_t apiGeneral(HttpConnection *c)
 			/* 시리얼 콘솔 배너와 동일 표기 — meter.c: "V%02X.%02X" (FW_VER 상·하위 바이트) */
 			uint16_t v = rdReg(f->addr);
 			snprintf(val, sizeof(val), "\"V%02X.%02X\"", (v >> 8) & 0xff, v & 0xff);
+		} else if (f->type == WT_CURIP) {
+			/* 인터페이스의 유효 주소 전부 — 169.254.x.x 는 AutoIP 표시 */
+			NetInterface *it = netGetDefaultInterface();
+			int o = 0;
+			o += snprintf(val + o, sizeof(val) - o, "\"");
+			for (k = 0; k < IPV4_ADDR_LIST_SIZE; k++) {
+				Ipv4AddrEntry *e = &it->ipv4Context.addrList[k];
+				const uint8_t *p = (const uint8_t *)&e->addr;
+				if (e->state != IPV4_ADDR_STATE_VALID) continue;
+				o += snprintf(val + o, sizeof(val) - o, "%s%u.%u.%u.%u%s", o > 1 ? ", " : "",
+					p[0], p[1], p[2], p[3], (p[0] == 169 && p[1] == 254) ? " (Auto IP)" : "");
+			}
+			snprintf(val + o, sizeof(val) - o, "%s\"", o > 1 ? "" : "none");
 		} else if (f->type == WT_IP) {
 			snprintf(val, sizeof(val), "\"%u.%u.%u.%u\"",
 				rdReg(f->addr), rdReg(f->addr + 1), rdReg(f->addr + 2), rdReg(f->addr + 3));
@@ -2361,7 +2376,7 @@ static const char INDEX_HTML[] =
 "function setTab(t){setCur=t;var L=(setMode==='chan')?CHAN_TABS:MAIN_TABS,h='';L.forEach(function(p){h+=\"<a class='gp-tab\"+(p[0]===t?' on':'')+\"' data-t='\"+p[0]+\"'>\"+esc(p[1])+'</a>';});var st=$('setTabs');st.innerHTML=h;st.onclick=function(e){var a=e.target.closest('a[data-t]');if(a)setTab(a.getAttribute('data-t'));};\n"
 " $('setSave').style.display=IS_ADMIN?'':'none';$('setRes').textContent='';$('setBody').innerHTML=\"<p class='stub'>loading...</p>\";reloadSet();}\n"
 "function reloadSet(){var t=setCur;if(t==='general')loadGeneral();else if(t==='pt')loadGroup('pt');else if(t==='ct')loadGroup('ct');else if(t==='alarm')loadAlarm();else loadCSect(t);}\n"
-"var CSECT={pqevent:[[6700,'Level','Over Current'],[6701,'Cycle','Over Current'],[6702,'Trigger Action','Over Current'],[6703,'holdOff Cycle','Over Current'],[6706,'Level(%)','Sag',1],[6707,'Cycle','Sag',1],[6708,'Trigger Action','Sag',1],[6709,'holdOff Cycle','Sag',1],[6712,'Level(%)','Swell',1],[6713,'Cycle','Swell',1],[6714,'Trigger Action','Swell',1],[6715,'holdOff Cycle','Swell',1],[6718,'Level(%)','Interruption',1],[6719,'Time(s)','Interruption',1],[6720,'Trigger Action','Interruption',1],[6721,'holdOff Cycle','Interruption',1]],transient:[[6724,'HoldOff(ms)','Voltage',1],[6725,'Abs Peak(%)','Voltage',1],[6726,'Fast Change','Voltage',1],[6727,'Trigger Action','Voltage',1],[6728,'HoldOff','Current'],[6729,'Abs Peak','Current'],[6730,'Fast Change','Current'],[6731,'Trigger Action','Current']],waveform:[[6746,'Pre trigger (cycle)'],[6747,'Post trigger (cycle)']],pqreport:[[6844,'Active'],[6845,'Start Day']],almdef:[[6854,'compare Time Delay(s)']]};\n"
+"var CSECT={pqevent:[[6700,'Level','Over Current'],[6701,'Cycle','Over Current'],[6702,'Trigger Action','Over Current'],[6703,'holdOff Cycle','Over Current'],[6706,'Level(%)','Sag',1],[6707,'Cycle','Sag',1],[6708,'Trigger Action','Sag',1],[6709,'holdOff Cycle','Sag',1],[6712,'Level(%)','Swell',1],[6713,'Cycle','Swell',1],[6714,'Trigger Action','Swell',1],[6715,'holdOff Cycle','Swell',1],[6718,'Level(%)','Interruption',1],[6719,'Time(s)','Interruption',1],[6720,'Trigger Action','Interruption',1],[6721,'holdOff Cycle','Interruption',1]],transient:[[6724,'HoldOff(ms)','Voltage',1],[6725,'Abs Peak(%)','Voltage',1],[6726,'Fast Change','Voltage',1],[6727,'Trigger Action','Voltage',1],[6728,'HoldOff','Current'],[6729,'Abs Peak','Current'],[6730,'Fast Change','Current'],[6731,'Trigger Action','Current']],waveform:[[6746,'Pre trigger (cycle)'],[6747,'Post trigger (cycle)']],pqreport:[[6844,'Active','',1],[6845,'Start Day','',1]],almdef:[[6854,'compare Time Delay(s)']]};\n"
 /* Trend: Version 행(g[2])은 내부값이라 화면에서 감춤 — 다시 노출하려면 주석 처리된 push를 되살린다 */
 "(function(){var t=[];[[1,6764,6766,6767],[2,6783,6785,6786],[3,6802,0,6805],[4,6821,0,6824]].forEach(function(g){var gn='Group '+g[0];t.push([g[1],'Active',gn]);t.push([g[1]+1,'Interval',gn]);/*if(g[2])t.push([g[2],'Version',gn]);*/for(var k=0;k<16;k++)t.push([g[3]+k,'Ch'+(k+1),gn]);});CSECT.trend=t;})();\n"
 /* CSECT 탭 중 Active 행을 토글 버튼으로 낼 것들. hide=1 이면 OFF 시 같은 그룹의 나머지 행을 숨긴다. */
@@ -2371,21 +2386,25 @@ static const char INDEX_HTML[] =
 "function wfPre(el){if(el.value===''){setMark(el);return;}var v=Math.round(+el.value);if(isNaN(v)||v<0)v=0;if(v>WF_MAX)v=WF_MAX;if(+el.value!==v)el.value=v;\n"
 " var po=el.closest('.setcard').querySelector(\"[data-wf='post']\");if(po){po.value=WF_MAX-v;setMark(po);}setMark(el);}\n"
 "function loadCSect(key){var f=CSECT[key];if(!f){$('setBody').innerHTML=\"<p class='stub'>-</p>\";return;}var lo=f[0][0],hi=f[0][0];f.forEach(function(p){if(p[0]<lo)lo=p[0];if(p[0]>hi)hi=p[0];});var nn=hi-lo+1;\n"
-" var _chs=[];for(var _k=1;_k<=NCH;_k++)_chs.push(_k);\n"
+/* 모든 항목이 CH1 전용(p[3])인 탭(PQ Report — EN50160은 M0만 산출)은 CH1 카드만 */
+" var nc=f.every(function(p){return p[3];})?1:NCH,_chs=[];for(var _k=1;_k<=nc;_k++)_chs.push(_k);\n"
 " Promise.all(_chs.map(function(ch){return j('/api/regs?addr='+(lo+(ch-1)*10000)+'&n='+nn).then(function(r){return (r.d&&r.d.ok)?r.d.words:null;}).catch(function(){return null;});})).then(function(bl){if(setCur!==key)return;\n"
-"  var h=\"<div class='setgrid'>\";for(var ch=1;ch<=NCH;ch++){var wds=bl[ch-1];h+=\"<div class='setcard'><h3>CH\"+ch+'</h3>';\n"
+"  var h=\"<div class='setgrid'>\";for(var ch=1;ch<=nc;ch++){var wds=bl[ch-1];h+=\"<div class='setcard'><h3>CH\"+ch+'</h3>';\n"
 "   if(!wds){h+=\"<p class='stub'>no data</p>\";}else{var pg=null,gi=0,tg=CSTOG[key],dis=IS_ADMIN?'':'disabled';\n"
 "    f.forEach(function(p){if(ch>1&&p[3])return;var g=p[2]||'';if(g&&g!==pg){gi++;h+=\"<div class='sgrp'>\"+esc(g)+\"</div>\";}pg=g;\n"
 "     var addr=p[0]+(ch-1)*10000,v=wds[p[0]-lo]||0,gk=(tg&&tg.hide)?('g'+ch+'_'+gi):'',d=\"data-addr='\"+addr+\"' data-type='u16' data-orig='\"+v+\"'\",ctl;\n"
 "     if(tg&&p[1]===tg.k){ctl=togBtn(d,v==1,dis,gk,0,tg.hide);}\n"
 /* Trend Ch1~16 = 기록 항목 번호(almTbl 인덱스, Alarm Settings Channel과 같은 AC 목록) → 드롭다운 */
 "     else if(key==='trend'&&/^Ch\\d+$/.test(p[1])){ctl=\"<select \"+d+(gk?(\" data-k='\"+gk+\"'\"):'')+' '+dis+\" onchange='setMark(this)'>\";for(var ai=0;ai<AC.length;ai++)ctl+=\"<option value='\"+ai+\"'\"+(ai==v?' selected':'')+'>'+esc(AC[ai])+'</option>';if(v>=AC.length)ctl+=\"<option value='\"+v+\"' selected>#\"+v+'</option>';ctl+='</select>';}\n"
+/* PQ Report Start Day: 0=Sun ~ 6=Sat */
+"     else if(p[1]==='Start Day'){ctl=\"<select \"+d+' '+dis+\" onchange='setMark(this)'>\";['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].forEach(function(dn,di){ctl+=\"<option value='\"+di+\"'\"+(di==v?' selected':'')+'>'+dn+'</option>';});if(v>6)ctl+=\"<option value='\"+v+\"' selected>#\"+v+'</option>';ctl+='</select>';}\n"
 "     else if(p[1]==='Trigger Action'){ctl=\"<select \"+d+' '+dis+\" onchange='setMark(this)'><option value='0'\"+(v==0?' selected':'')+\">NONE</option><option value='1'\"+(v==1?' selected':'')+\">EVENT</option><option value='2'\"+(v==2?' selected':'')+\">WAVE CAPTURE</option></select>\";}\n"
 /* Waveform: Pre만 입력, Post = WF_MAX - Pre 자동(읽기전용) */
 "     else if(key==='waveform'){var wpre=(p[0]===6746);ctl=\"<input type='number' min='0' max='\"+WF_MAX+\"' \"+d+\" data-wf='\"+(wpre?'pre':'post')+\"' value='\"+v+\"' \"+(wpre?(dis+\" oninput='wfPre(this)'\"):\"readonly tabindex='-1'\")+'>';}\n"
 "     else{ctl=\"<input type='number' \"+d+(gk?(\" data-k='\"+gk+\"'\"):'')+\" value='\"+v+\"' \"+dis+\" oninput='setMark(this)'>\";}\n"
 "     h+=\"<div class='srow'><span class='sk'>\"+esc(p[1])+\"</span>\"+ctl+\"</div>\";});\n"
-"    if(key==='waveform')h+=\"<div class='setnote'>Max \"+WF_MAX+\" cycles (Pre + Post). Post is set automatically.</div>\";}\n"
+"    if(key==='waveform')h+=\"<div class='setnote'>Max \"+WF_MAX+\" cycles (Pre + Post). Post is set automatically.</div>\";\n"
+"    if(key==='pqreport')h+=\"<div class='setnote'>EN50160 report is calculated on CH1 and applies to all channels.</div>\";}\n"
 "   h+='</div>';}h+='</div>';$('setBody').innerHTML=h;togDeps($('setBody'));sn('Save & Apply.');});}\n"
 "function fmtV(f){return (f.type==='bool')?(f.val?'On':'Off'):esc(f.val)}\n"
 /* 0/1 항목은 체크박스 대신 토글 버튼(gems3500_keil5 참조). 값은 value 속성에 실리므로

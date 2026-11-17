@@ -827,6 +827,12 @@ void cmd_spicrc(char *par) {
 	spiCrcReport(1);
 }
 
+/* [26/11/17] 이더넷 수신 누락 프레임 조회(meter.c ethDiagSample 누적) */
+extern void ethDiagReport(void);
+void cmd_eth(char *par) {
+	ethDiagReport();
+}
+
 void cmd_saveenergy(char *par) {
 	//ENERGY_NVRAM *pEgyNvr = &egyNvr;
 
@@ -1124,6 +1130,7 @@ static const SCMD cmd[] = {
 	"SAVECAL", cmd_savecal,
 	"SAVEENG", cmd_saveenergy,
 	"SPICRC", cmd_spicrc,
+	"ETH", cmd_eth,
 	"CLROS", cmd_clrdcos,
 	"DCOS",  cmd_dcos,
 	"TIME", cmd_datetime,

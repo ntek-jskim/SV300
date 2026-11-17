@@ -20,6 +20,8 @@
 #include "snmp_trap.h"
 #include "snmp_cfg.h"
 
+extern void commLedPulse(void);		/* app_main.c — COMM LED 반전 */
+
 /* 자사 Enterprise OID 1.3.6.1.4.1.67140 — IANA PEN 67140(NTEKSYSTEM Co., Ltd., 2026-10 발급).
  * 67140 = 4·128² + 12·128 + 68 → BER base-128 {0x84, 0x8C, 0x44} */
 #define SV_PEN_OID			0x84, 0x8C, 0x44
@@ -208,6 +210,8 @@ static void trapSend(const TRAP_EVT *e)
 
 	if (err)
 		printf("[SNMP] trap(%d) M%d send failed (%d)\n", e->code, e->meter, (int)err);
+	else
+		commLedPulse();		/* COMM LED 반전 */
 }
 
 static void snmpTrapTask(void *param)

@@ -3,8 +3,8 @@
 LPC4330(Cortex-M4) + ADE9000 ×3(M0~M2) 기반 3채널(9피더) 전력품질 계측기.
 CycloneTCP(웹·Modbus TCP·FTP·mDNS·SNMP·MQTT) + RTX, 내장웹(web.c) + 외부 설정툴 confWebApp.
 
-> **이 문서는 web 브랜치 기준**(메모리맵 `_261028`: 통신 설정 7110~7519, 명령 7788~). main 브랜치 주소는 FREQ 이후가 350 작다(명령 7438~).
-> 2026-10-16~19 교정 수정(§5.5·§5.6 — `uGainSel`·1P2W 전력·`setGainW` VA·PGA 2x)은 **main 의 `stash@{0}` 에만 있고 web 에는 아직 없다.**
+> **main 브랜치 기준**(26/11/10 web 통합, 메모리맵 `_261116`: 통신 설정 7110~7519, 명령 7788~). 2026-11-17 갱신.
+> 2026-10-16~19 교정 수정(§5.5·§5.6) 중 `uGainSel`·1P2W 전력량은 `91ed84c`(11/06)로 반영, `setGainW` V·I/VA 방식도 반영(11/06). **CT_100mA PGA 2x 는 채택하지 않음**(현재 1x).
 
 ---
 
@@ -25,8 +25,10 @@ CycloneTCP(웹·Modbus TCP·FTP·mDNS·SNMP·MQTT) + RTX, 내장웹(web.c) + 외
 | [document/SV300_쓰레드구조_분석.md](document/SV300_쓰레드구조_분석.md) | RTOS 태스크 구조·우선순위 |
 | [document/ADE9000_멀티쓰레딩_구조.md](document/ADE9000_멀티쓰레딩_구조.md) · [ADE9000_단일스레드_전환설계.md](document/ADE9000_단일스레드_전환설계.md) · [ADE9000_리팩토링_작업로그.md](document/ADE9000_리팩토링_작업로그.md) | ADE9000 버스/스레드 설계 |
 | `memorymap/` | Modbus 메모리맵 엑셀 — **파일명 날짜가 최신인 것이 기준** (코드 주석의 옛 파일명은 무시) |
-| [snmp.md](snmp.md) | **SNMP 프로토콜 개발자료** — 설계·MIB·PEN·시험방법(TC-01~12)·TODO §8 (SNMP 펌웨어 코드는 web 브랜치, main 미병합) |
+| [snmp.md](snmp.md) | **SNMP 프로토콜 개발자료** — 설계·MIB·PEN·시험방법(TC-01~12)·TODO §8 |
 | [mqtt_app.c](src/mqtt_app.c) | MQTT 퍼블리셔 — GEMS35x JSON 배열 페이로드(공통 + `fN_*` 피더), 설정은 §7 |
+| [document/SV300_웹서버_사용자매뉴얼_v0.1.docx](document/) | 납품용 사용자 매뉴얼(간결판) — 첫 접속(자동 IP)·표시등·IP 설정·모니터링 |
+| [document/WEBSERVER_종합비교표.pdf](document/) | 내장웹 ↔ confWebApp 지원 현황 표(WEBSERVER_PORTING.md 종합 비교표 출력본) |
 
 ---
 
@@ -81,11 +83,13 @@ CycloneTCP(웹·Modbus TCP·FTP·mDNS·SNMP·MQTT) + RTX, 내장웹(web.c) + 외
 ### 4.1 공장초기화 기본값
 | 항목 | 값 |
 |---|---|
-| IP / Subnet / Gateway | 192.168.9.**124** (`DTEST` 빌드는 125) / 255.255.0.0 / 192.168.1.1 |
+| DHCP | **ON**(7110=1). DHCP 응답이 15초 안에 없으면 **AutoIP 169.254.x.x** 로 동작(DHCP 는 계속 재시도, 받으면 AutoIP 해제) — PC 1:1·데이지체인 첫 접속용(11/17) |
+| 고정 IP / Subnet / Gateway (DHCP OFF 시) | 192.168.9.**124** (`DTEST` 빌드는 125) / 255.255.0.0 / 192.168.1.1 |
 | DNS | 168.126.63.1 |
 | Modbus TCP | ON(7150) / 502 |
-| MQTT · SNMP | OFF |
-| 호스트명(mDNS) | `sv300-<SN>.local` (SN 9자리, 예 `sv300-250102003`) — sysName·DHCP·LLMNR 동일 |
+| MQTT · SNMP · Remote Link(7420) | OFF |
+| 호스트명(mDNS) | `sv300-<SN>.local` (SN 9자리, 예 `sv300-250102003`) — sysName·DHCP·LLMNR 동일. 제품 라벨 접속 주소 |
+| 현재 IP 확인 | 내장웹 Setup > General > Communication **Current IP**(실제 사용 주소, AutoIP 는 "(Auto IP)") — 아래 IP Address 칸은 고정 IP 설정값 |
 
 ### 4.2 계정
 | 대상 | 계정 | 권한 |
@@ -95,6 +99,7 @@ CycloneTCP(웹·Modbus TCP·FTP·mDNS·SNMP·MQTT) + RTX, 내장웹(web.c) + 외
 | FTP | `ftpuser` / `7300` | 파일 R/W |
 
 > 웹 세션은 서명 쿠키라 장비를 재부팅해도 재로그인이 필요 없다.
+> 원격 대시보드 **서명링크**(Ed25519 + 장비 nonce, `/auth/remoteNonce`·`/dashboard/`)는 7420=1 일 때만 동작(기본 OFF). 계정 ntek/sv300 동일 권한, 접속 기록은 General 'Remote Link' 카드
 
 ### 4.3 설정 저장 규칙
 - 웹/Modbus 로 설정을 쓰면 RAM 에만 반영된다 → **Save Settings(holding 7799 = 0x1234)** 로 flash 영속화
@@ -162,14 +167,15 @@ Channel 1~3 = 미터칩 M0~M2, 각 채널 3상 = Feeder 1~3 / 4~6 / 7~9. 채널 
   - RCJB-903S 는 **−60°** 로 입력. 소스 표기는 장비마다 다르므로 아래 위상 확인으로 판단한다
   - 소스는 교정 내내 이 상태로 둔다 (전압·전류 교정은 위상과 무관)
 - 소스 주파수 = 장비 FREQ 설정(7520), CT 설정(CT1·CT2 종류)이 실제와 같을 것
-- 2026-10-19 펌웨어(main `stash@{0}`)부터 CT_100mA 전류 PGA 가 2x 로 바뀌었다 — PGA 가 다른 펌웨어로 교정한 장비는 **전류·위상·전력을 다시 교정**한다(전압은 그대로). **현재 web 빌드는 1x**
+- CT_100mA 전류 PGA 는 **1x**(10/19 검토한 2x 안은 채택하지 않음)
 
 ### 5.4 절차
 > ★ 장비의 CAL MODE·기준값은 RAM 이라 **재부팅하면 지워진다**. confWebApp 은 기준값을 **브라우저에 저장**해 두고
 > Cali/Init/ALL CLEAR 를 누를 때마다 **기준값 + CAL MODE ON 을 자동으로 다시 보낸다** — 재부팅 후 WRITE 를 따로 누를 필요 없다.
 > (WRITE 는 기준값 확인용. 다른 PC·브라우저에서는 기준값을 다시 입력)
 >
-> ★ **Init → 2~3초 대기 → Cali 는 1회만.** 보정값은 '기존 보정 0' 전제로 절대값을 계산한다. Init 직후 바로 누르면 옛 보정이 섞인 측정값으로 계산되고, Cali 를 두 번 누르면 잔여오차(≈0)로 덮어써 원래대로 돌아간다. (전압·전류·위상 공통, 개선 예정 → TODO. Power 는 누적 방식이라 예외)
+> ★ **전압·전류·위상·In 보정은 기존 값에 누적**(26/11/10, `gainCompose`·위상 각도 합산)되므로 Cali 를 다시 눌러도 원래대로 돌아가지 않는다. 단 **Power 는 덮어쓰기** — 교정된 상태에서 Cali 를 또 누르면 잔여오차(≈0)로 덮어써 원래대로 돌아가므로 **1회만** 누른다.
+> ★ Init·Cali 직후에는 측정값이 새 보정으로 갱신될 때까지 **2초 이상 기다린 뒤** 다음 교정. 위상 교정은 진상·CT 역결선이면 그 상을 `REJECT`(TODO 3.7)
 
 **공통 시작**
 1. Calibration 화면 Feeder Range **1~9**, Reference 에 튜닝 전압·전류, Phase **60** 입력
@@ -194,8 +200,8 @@ Channel 1~3 = 미터칩 M0~M2, 각 채널 3상 = Feeder 1~3 / 4~6 / 7~9. 채널 
    - 위상이 이미 맞으면(atan(VAR/W) ≈ 60.0°) 눌러도 변화가 거의 없다 — 정상
 3. Power **Init** → 2~3초 대기 → **Cali** → **SAVE**
    - 기준 = 피상전력: (V-ref × I-ref) / VA 로 전력 게인을 맞춘다. VA 는 위상과 무관하므로 **60° 상태 그대로** 누른다
-   - ※ 이 방식(§5.6)은 main `stash@{0}` 펌웨어. **현재 web 빌드의 `setGainW` 는 옛 방식(V·I/W, PF=1 전용)**이라 60° 에서 누르면 안 된다
-   - 기존 게인에 누적되므로 Cali 를 다시 눌러도 원래대로 돌아가지 않는다(누를 때마다 2~3초 간격)
+   - 현재 펌웨어 `setGainW` = V·I / √(P²+Q²)(11/06) — 위상과 무관하므로 60° 그대로 교정한다
+   - **덮어쓰기** 방식이라 Cali 는 1회만(두 번 누르면 원래대로 돌아감)
    - 기준 대비 20% 넘게 차이 나는 상은 건너뛴다
 4. 검증: **W 가 V·I·cos60° 의 Error(%) 이내**(노란 칸 없음), VA ≈ V·I, VAR ≈ V·I·sin60°
    - 2026-10-19 실기: Power Cali 후 0.5% 이내 확인
@@ -217,16 +223,16 @@ Channel 1~3 = 미터칩 M0~M2, 각 채널 3상 = Feeder 1~3 / 4~6 / 7~9. 채널 
 - 단계마다 **SAVE** 가 필수 — SAVE 없이 재부팅하면 그 단계 결과가 사라진다
 - 전류(`igain[채널][슬롯]`)·위상(`phcal[채널][슬롯]`)은 결선과 무관하게 슬롯별 저장. 위상은 에너지를 0 으로 지우기 **전** 값(`cntl.wh/varh`)으로 계산하므로 1P2W 의 L2·L3 슬롯도 정상
 
-**적용(읽기) — 2026-10-16 수정 (실기 검증 대기, main `stash@{0}` 에만 있음 — web 미적용)**
+**적용(읽기) — 2026-10-16 수정 (`91ed84c` 로 main 반영, 실기 검증 TODO 3.1·3.2)**
 1. **슬롯별 입력상으로 전압 보정값 선택**: `uGainSel()` 이 `buildFeederMap` 으로 슬롯을 쓰는 피더를 찾아 그 피더의 입력상(Z)·PT2 칸을 고른다. `writeGainU`·`setGainU`·`clrGainU`·`setGainUpp`·`clrGainUpp`·파형 스케일이 같은 칸을 쓴다 → 피더별 L1/L2/L3 혼합 단상 결선에서도 튜닝한 칸이 적용된다 (종전: `db.pt[채널 번호]` 하나로 골라 채널 2·3 은 피더 2·3 결선을 봤다)
 2. **1P2W 2·3번 슬롯 전력·전력량 복구**: 1P2W 를 '미터 1개 = 피더 1개'로 보던 옛 코드의 `i != 0` 지움을 삭제([ade9000.c](src/ade9000.c) 전력, [meter.c](src/meter.c) energy_scan) → 피더 2·3·5·6·8·9 의 W·VAR·VA·전력량·수요 표시
    - ※ 이 수정 이전 펌웨어로 운용한 1P2W 피더 2·3·5·6·8·9 의 누적 전력량은 0 이었다
 
-### 5.6 검토: Power 교정이 필요한 이유 (2026-10-19, 수정은 main `stash@{0}` 에만 있음 — web 미적용)
+### 5.6 검토: Power 교정이 필요한 이유 (2026-10-19 검토 — `setGainW` VA 방식은 11/06 반영, 누적은 미채택·PGA 2x 미채택)
 - 위상 교정 후에도 W·VAR·VA 가 모두 약 **−2.3%** 였다. 실제 위상각 atan(VAR/W) 은 60.0±0.06° 로 정상 → 위상이 아니라 **전력 크기** 문제
 - 전력 레지스터는 PWR_TIME+1 = 8000 샘플 누적을 8192 로 나눈 값으로 보이며(8000/8192 = 0.977), 이를 보정하는 `*8192/8000` 이 `scalePowerAcc`·`scaleEnergy` 에서 주석 처리돼 있다(GEMS7100 도 동일). 이 차이를 **Power Cali(APGAIN)** 가 흡수한다 — 전력량도 함께 맞는다
-- `setGainW` 를 V·I/W(PF=1 전용) → **V·I/VA(위상 무관) + 누적**으로 변경해 60° 상태에서 바로 교정한다
-- CT_100mA 전류 PGA 1x → **2x**(GEMS7100 과 같은 부담저항) — 소전류 SNR·위상 표시 흔들림 개선. 표시 스케일은 상수 `I_FULL_100mA` 를 절반으로 해 그대로 유지
+- `setGainW` 를 V·I/W(PF=1 전용) → **V·I/VA(위상 무관)** 로 변경해 60° 상태에서 바로 교정한다(11/06 반영, 덮어쓰기 유지)
+- (미채택) CT_100mA 전류 PGA 1x → 2x 안 — 현재 1x 유지
 
 ---
 
@@ -254,8 +260,9 @@ Channel 1~3 = 미터칩 M0~M2, 각 채널 3상 = Feeder 1~3 / 4~6 / 7~9. 채널 
 | 7160~7289 | MQTT | 사용 7160(재부팅 후), 포트 7161, 주기 7162(10~300초), QoS 7163, retain 7164, keepalive 7165, 브로커 7168(32워드, IP/도메인), ClientID 7200(빈 값 = `sv300-<SN>`), user 7216, pass 7232, topic 7248(빈 값 = `sv300/<SN>/data`) |
 | 7290~7399 | SNMP | 사용 7290, 버전 7291, Trap 7292, Trap IP 7293, 문자열 7300~7395 — 상세 [snmp.md](snmp.md) |
 | 7400~7419 | SNTP | 사용 7400, 주기 7401(분), Timezone 7402(분, 서울 540), 서버 7403(16워드, IP/도메인) |
-| 7420~7519 | 예약 | 100워드 |
+| 7420 | Remote Link | 원격 대시보드 서명링크 사용(0=OFF 기본, 저장 즉시 반영, 11/16) |
+| 7421~7519 | 예약 | 99워드 |
 
 - 문자열은 1워드 = 2글자, **하위 바이트가 앞 글자**, NUL 종료 (confWebApp 코덱 word_order=big·byte_order=little)
 - 비밀번호(MQTT·SNMPv3)도 Modbus 로 읽고 쓸 수 있다. MQTT TLS 미지원
-- 설정 필드 주소는 `MBAD_SET_FIELD(comm.xxx)`(offsetof) 로 계산 — 메모리맵 `memorymap/SV300 memory map_261028.xlsx`
+- 설정 필드 주소는 `MBAD_SET_FIELD(comm.xxx)`(offsetof) 로 계산 — 메모리맵 `memorymap/SV300 memory map_261116.xlsx`

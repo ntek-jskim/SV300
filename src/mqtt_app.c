@@ -18,6 +18,8 @@
 
 #define MQTT_PAYLOAD_MAX	4096		/* 공통 + 9피더 ≈ 3.6KB */
 
+extern void commLedPulse(void);		/* app_main.c — COMM LED 반전 */
+
 /* 크기가 커서 외부 SDRAM에 둔다(태스크 스택은 RTX 고정 2.5KB) */
 static MqttClientContext mqttCtx __attribute__ ((section ("EXT_RAM"), zero_init));
 static char mqttPayload[MQTT_PAYLOAD_MAX] __attribute__ ((section ("EXT_RAM"), zero_init));
@@ -158,6 +160,7 @@ static void mqttTask(void *arg)
 					printf("[MQTT] publish failed (%d, len=%d)\n", (int)err, len);
 					break;
 				}
+				commLedPulse();		/* COMM LED 반전 */
 			}
 			err = mqttClientTask(&mqttCtx, 1000);	/* Keep-alive·수신 처리(최대 1초) */
 			if (err) {

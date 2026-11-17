@@ -1,9 +1,9 @@
 # WEBSERVER(web.c 내장웹) 이식 TODO — confWebApp 대비
 
 confWebApp(외부 뷰어)에서 구현했지만 **내장웹(web.c)에는 아직 없는/다른** 기능 목록.
-추후 web.c에 옮길 때 참조. (작성 2026/08/31, web 브랜치)
+추후 web.c에 옮길 때 참조. (작성 2026/08/31 web 브랜치, 갱신 2026/11/17 main — 11/10 web 통합)
 
-범례: ✅ 이식 권장(대시보드/설정) · ⚠️ 검토(임베디드 제약) · ☑️ 이미 반영됨
+범례: ✅ 이식 권장(대시보드/설정) · ⚠️ 검토(임베디드 제약) · △ 부분 반영 · ☑️ 이미 반영됨
 
 ---
 
@@ -28,28 +28,29 @@ confWebApp(외부 뷰어)에서 구현했지만 **내장웹(web.c)에는 아직 
 6. 무거운 UI·3단계 권한은 confWebApp에
 
 > 이력: 2026/09/01 `apiEgyCsv`(FS 아카이브 CSV)를 시도했다가 원칙 #1·#2 위반으로 **철회**. WEBSERVER CSV는 demand/energy 라이브까지만 유지.
+> 2026/11/17 재검토: 원시 파일 조각 전송 + 브라우저 파싱(#1·#2 조건부 완화), Report 인쇄 화면(#3 대안)을 검토했으나 **기존 원칙 유지로 결정**. 재검토 시 주의: 파일 목록 검색(`ffind`)은 수 초~수십 초 걸리므로 금지, 읽기는 조각마다 `fsFileLock`.
 
 ---
 
-## 📊 종합 비교표 — WEBSERVER 지원 현황 (confWebApp 전체 기능 대비, 2026/09/01)
+## 📊 종합 비교표 — WEBSERVER 지원 현황 (confWebApp 전체 기능 대비, 2026/11/17 갱신)
 
 범례: **✅ 지원** · **❌ 미지원**(→confWebApp) · **△ 부분/구버전** · **☑️ 반영됨** · **— 해당없음**
 
 ### 1) 측정 / 모니터링 (RAM·레지스터 라이브 — WEBSERVER 강점)
 | 기능 | WEBSERVER | confWebApp | 비고 |
 |---|:---:|:---:|---|
-| Dashboard | ✅ | ✅ | CH1 순시 |
+| Dashboard | ✅ | ✅ | 채널 선택(CH 버튼) 순시·알람/이벤트 로그 |
 | Feeder | ✅ | ✅ | 피더별 계측 |
 | Channel · Meter / Phase / Min·Max | ✅ | ✅ | |
 | Channel · Harmonics | ✅ | ✅ | 차수 2~63 |
 | Channel · Waveform | ✅ | ✅ | V/I 파형 |
-| Channel · Report (EN50160+ITIC) | △ | ✅ | web.c EN50160표·ITIC커브 有 / 이벤트점·**PDF**·**CSV**는 confWebApp |
+| Channel · Report (EN50160+ITIC) | △ | ✅ | web.c EN50160표·ITIC커브·이벤트점 有 / **PDF**·**CSV**는 confWebApp(원칙) |
 | Channel · VQ (전압편차) | ✅ | ✅ | Flicker 미구현(양쪽) |
 | Channel · Monthly (10분평균) | ✅ | ✅ | |
 | Channel · Energy (매트릭스+편집) | ✅ | ✅ | |
 | Channel · Demand (수요 프로파일) | ✅ | ✅ | |
-| Channel · Alarm / Event | ✅ | ✅ | 상태·로그 |
-| IO 모듈 (DI/PI/Temp) | ✅ | ✅ | web.c 전용 **IO 페이지**(상단 nav 'IO') + 대시보드 IO DATA 카드: DI/PI/Temp 표시·Type/Deb/Scale 편집·Clear PI (7050~7069) |
+| Channel · Alarm / Event | ✅ | ✅ | 상태·로그 (미지원 Trans V/I 이벤트명 제외, 11/16) |
+| IO 모듈 (DI/PI/Temp) | ✅ | ✅ | web.c 전용 **IO 페이지**(상단 nav 'IO') + 대시보드 IO DATA 카드: DI/PI/Temp 표시·Type/Deb/Scale 편집·Clear PI |
 
 ### 2) PQ / Trend 파일뷰어 (FTP·FS 파일 기반) — **원칙상 WEBSERVER 미지원**
 | 기능 | WEBSERVER | confWebApp | 비고 |
@@ -72,8 +73,8 @@ confWebApp(외부 뷰어)에서 구현했지만 **내장웹(web.c)에는 아직 
 ### 4) 설정 (Settings)
 | 기능 | WEBSERVER | confWebApp | 비고 |
 |---|:---:|:---:|---|
-| Main Setting (Comm/PT/CT/ETC/Freq) | ✅ | ✅ | 레지스터 |
-| Channel Setting 편집기 | △ | ✅ | web.c 有(PQEvent/Transient/Waveform/Disturb/Trend/PQReport/AlarmDef/Alarm+PT/CT) / confWebApp은 정리됨(콤보·Active접기·Alarm병합·Transient·Disturb·Version 미사용제거·CH KF I3제한) |
+| Main Setting (Comm/PT/CT/ETC/Freq) | ✅ | ✅ | 레지스터. SNMP·MQTT·Remote Link 카드 포함. CT 교정값(Turns·Rogowski·Phase Ofs 1~3·ZCT Scale)은 양쪽 화면 숨김(11/16) |
+| Channel Setting 편집기 | ✅ | ✅ | 11/16 납품 정리 양쪽 동일: PQ Event/Waveform/Trend/PQ Report/Alarm Def/Alarm Settings — Transient 숨김(미지원)·Disturbance 삭제·Trend Version 숨김·Trend Ch 항목 드롭다운·Trend/PQ Report Active 토글·Waveform 최대 30cyc(Post 자동). 세부 UI(Alarm 병합·CH KF I3 제한)는 confWebApp만 |
 | **Calibration** | ❌ | ✅ | confWebApp SUPER 전용 |
 | **Backup / Restore** | ❌ | ✅ | 설정 CSV 백업/복원 |
 
@@ -81,6 +82,8 @@ confWebApp(외부 뷰어)에서 구현했지만 **내장웹(web.c)에는 아직 
 | 기능 | WEBSERVER | confWebApp | 비고 |
 |---|:---:|:---:|---|
 | 로그인 / 권한 | △ | ✅ | web.c **2단계**(admin ntek·viewer sv300) / confWebApp **3단계**(**SUPER**·admin·viewer) |
+| 원격 대시보드 서명링크 | ✅ | △ | web.c `/auth/remoteNonce`·`/dashboard/` Ed25519 검증(기본 OFF, SV300 7420·SV400 7432) / confWebApp은 Remote Link 설정 카드만 |
+| 첫 접속 (AutoIP·mDNS·Current IP) | ✅ | — | DHCP 실패 15초 후 169.254 자동 IP, 라벨 `sv300-<SN>.local` 접속, General>Communication **Current IP** 표시(11/17) |
 | FW Update (웹 업로드/적용) | ✅ | — | web.c 전용(장치 자체 플래시) |
 | Manual R/W (레지스터) | ✅ | ✅ | |
 | 신규 이벤트/알람 **블링킹** | ❌(불필요) | ✅ | 웹서버는 블링킹 불필요로 결정(2026/09/01)·ACK Alarm/Event 버튼 제거 |
@@ -90,7 +93,7 @@ confWebApp(외부 뷰어)에서 구현했지만 **내장웹(web.c)에는 아직 
 - **파일기반 전부**: PQ/Trend 파일뷰어·아카이브 CSV·COMTRADE (원칙: FS 대용량 파싱 금지)
 - **PDF** 서버생성 (원칙: 라이브러리·RAM)
 - **Calibration**, **Backup/Restore**, **3단계 권한(SUPER)**, 신규 **블링킹**(웹서버 불필요로 미적용, 2026/09/01)
-- **△(구버전)**: Channel Setting 편집기(정리 전), Report(ITIC 이벤트점 미표시), 로그인(2단계)
+- **△(부분)**: Report(PDF·CSV 제외 — 원칙), 로그인(2단계, SUPER 없음)
 
 ---
 
@@ -108,14 +111,16 @@ confWebApp(외부 뷰어)에서 구현했지만 **내장웹(web.c)에는 아직 
 - ACK 명령은 web.c에 이미 있음: **ACK Event=7848, ACK Alarm=7844**(svCmd). ACK 성공 후 seen 저장.
 - **주의**: Event STS(7094)·Alarm STS(7093) 레지스터는 값이 불안정(0으로 관측)이라 **쓰지 말 것** → 반드시 **로그 ts 기반 + localStorage seen** 방식 사용.
 
-## ✅ 2. PQ Report 설정 — Active/Start Day 콤보박스 + CH0(M0) 전용 표시
+## ☑️ 2. PQ Report 설정 — Active/Start Day 콤보박스 + CH0(M0) 전용 표시 — web.c 반영 완료 (2026/11/17, SV300·SV400)
+> **web.c 현황**: Active = 토글 버튼(`CSTOG.pqreport`), Start Day = Sun~Sat 드롭다운, CSECT.pqreport 항목을 CH1 전용(p[3]=1)으로 표시 → 모든 항목이 CH1 전용인 탭은 `loadCSect`가 CH1 카드만 그림. 안내문 "EN50160 report is calculated on CH1 and applies to all channels." 추가.
 **동작**: EN50160 리포트는 **M0만 산출**(M1/M2는 M0 복사). Active(0=Disable,1=Enable)·Start Day(0=Sun~6=Sat)를 드롭다운으로.
 **레지스터(CH상대, M0 기준)**: Active=**6844**, Start Day=**6845** (pqRpt 구조체).
 **confWebApp**: `channel_setting.html`(PQ Report 섹션 CH1만 렌더·all-same 숨김) + `main.py _NAME_ENUM`(Active/Start Day 라벨).
 **web.c 이식**: Channel Setting의 PQ Report 섹션(CSECT)에서 (a)Active/StartDay를 OPT 드롭다운으로, (b)CH2/CH3 카드 숨김.
 **펌웨어측 동작연결은 이미 완료**(Quality.c) — UI만 옮기면 됨.
 
-## ✅ 3. ITIC 리스트 → CBEMA 커브에 이벤트 점 표시
+## ☑️ 3. ITIC 리스트 → CBEMA 커브에 이벤트 점 표시 — web.c 반영 완료 (2026/11/17 확인)
+> **web.c 현황**: Report 탭이 `/api/en50160` 응답의 `itic2`(ITIC List)를 `drawITIC('it'+n, r.d.itic2)`로 넘겨 커브 위에 점을 그림. 종합 비교표 1) Report 행과 일치.
 **동작**: ITIC List(전압 sag/swell/intr)의 각 이벤트를 CBEMA 곡선에 `dur(ms)→로그X, level(%)→Y`로 점 찍기(타입별 색).
 **confWebApp**: `channels_grid.html` `drawITIC(cv, events)` + `loadReport`가 `/api/itic` 먼저 받아 전달.
 **web.c 이식**: web.c의 Report 탭 `drawITIC`에 events 인자 추가, ITIC 창(5780) 읽어 점 렌더.
@@ -154,4 +159,4 @@ web.c에 **VQ 채널 탭 구현됨**(`/api/vq`·`bVq`, `meter[0].vq` Uud/Uuv, �
 
 **시각 규약**: 장치는 시간을 **로컬(KST) epoch로 저장·동기**. 표시는 항상 로컬(브라우저 tz 미적용 = getUTC\*). SNTP 동기 시에만 Timezone(7402) 사용.
 
-> 주소는 메모리맵 261028(2026-10-28 통신 설정 410워드 재배치) 기준 — FREQ 이후 +350.
+> 주소는 메모리맵 261116 기준(2026-10-28 통신 설정 410워드 재배치 이후 동일, 7420 = Remote Link 추가) — FREQ 이후 +350.

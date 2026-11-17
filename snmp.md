@@ -71,6 +71,8 @@
 
 ### 2.3 자사(SV300) 현황 — 코드 확인 결과
 
+> ※ 아래 표는 **작성 당시(2026-10-08, FW V00.03 이하)** 기준이다. 현재 구현 상태는 §5.4 구현 표와 §7·§8 참고.
+
 | 항목 | 현재 상태 | 근거 |
 |---|---|---|
 | 에이전트 | **빌드에 포함, 부팅 시 자동 시작** | `src/main.c:630-672`, `SV300_app.uvproj`에 `snmp_agent*.c` 포함 |
@@ -318,7 +320,7 @@ varbind(두 Trap 공통):
 | 연결 지점 | `storeAlarmLog()` 끝(발생·복귀), 알람 리셋 처리 2곳(`meter.c`) → `snmpTrapAlarm()` / `snmpTrapAlarmReset()`는 큐(16건)에 넣기만 함 |
 | 송신 | 전용 태스크 `snmpTrap`(LOW 우선순위)가 큐를 비우며 `snmpAgentSendTrap()` 호출, UDP 162. 버전은 부팅 시 확정: SNMP Version `v3 only`면 SNMPv3(USM v3 User, authPriv/authNoPriv), 그 외 SNMPv2c(설정 커뮤니티) |
 | SNMPv3 | `SNMP_V3_SUPPORT ENABLED`. 부팅 순서 engineBoots(snmp.d, +1) → engineID(`80 01 06 44` + `03` + MAC, RFC 3411) → USM 사용자 생성(RAW 키를 engineID로 지역화). **2026-10-28부터** v3 비밀번호는 통신 설정(Modbus 7364~7395)에 저장하고 부팅 시 `snmpGenerateKey()`(SHA-1 1MB 해시)로 Ku 계산. 인증은 HMAC-SHA-1, 암호화는 AES-128만 지원(MD5·DES는 빌드에서 제외 — `SNMP_MD5_SUPPORT`/`SNMP_DES_SUPPORT DISABLED`). 난수 콜백 `netGetRandData()`(AES salt) |
-| 통신 설정 (COMM_CFG) | **2026-10-28 410워드 재배치(메모리맵 261028)** — Ethernet 7110 → Modbus 7150 → MQTT 7160 → **SNMP 7290** → SNTP 7400 → 예약 7420~7519, DAQ 삭제. SNMP: **7290 `snmpEn`**(0:OFF, 1:ON, **부팅 시 반영**), **7291 `snmpVer`**(0:v1/v2c, 1:v1/v2c/v3, 2:v3 only, 부팅 시 반영, 2 초과 시 0으로 정리), **7292 `trapEn`**(저장 즉시 반영), **7293~7296 `trap_ip`**, 7297~7299 예약, **문자열 7300~7395**(아래). 크기·묶음 시작은 컴파일 타임 검사(`comm_cfg_*_check`). `layoutVer`는 7159(내부값, Save Set 시 펌웨어 값 강제). 부팅 시 `snmpEn`/`trapEn`이 0/1이 아니면 SNMP 숫자형을 0으로 정리. 구 60워드 배치(7153·7155~7160)는 FW V00.04 web 브랜치 10/12 빌드까지 |
+| 통신 설정 (COMM_CFG) | **2026-10-28 410워드 재배치(메모리맵 261028)** — Ethernet 7110 → Modbus 7150 → MQTT 7160 → **SNMP 7290** → SNTP 7400 → 예약 7420~7519(**7420 은 11/16 Remote Link 로 사용**, 예약 7421~7519), DAQ 삭제. SNMP: **7290 `snmpEn`**(0:OFF, 1:ON, **부팅 시 반영**), **7291 `snmpVer`**(0:v1/v2c, 1:v1/v2c/v3, 2:v3 only, 부팅 시 반영, 2 초과 시 0으로 정리), **7292 `trapEn`**(저장 즉시 반영), **7293~7296 `trap_ip`**, 7297~7299 예약, **문자열 7300~7395**(아래). 크기·묶음 시작은 컴파일 타임 검사(`comm_cfg_*_check`). `layoutVer`는 7159(내부값, Save Set 시 펌웨어 값 강제). 부팅 시 `snmpEn`/`trapEn`이 0/1이 아니면 SNMP 숫자형을 0으로 정리. 구 60워드 배치(7153·7155~7160)는 FW V00.04 web 브랜치 10/12 빌드까지 |
 | SNMP 사용 여부 | OFF면 에이전트·Trap 모두 기동하지 않음(UDP 161 닫힘). 값 그대로 운영하므로 **업데이트한 기존 기기·공장초기화 기기는 0 = OFF** — SNMP를 쓰려면 웹에서 ON 후 Save Set + Reboot |
 | 문자열 설정 | **2026-10-28부터 통신 설정(Modbus)으로 이동** — 7300 커뮤니티(Trap 공용, 빈 값이면 `public`) · 7316 sysContact · 7332 sysLocation · 7348 v3 사용자 · 7364 v3 인증 비밀번호 · 7380 v3 암호화 비밀번호(각 16워드, 최대 31자, 1워드=2글자·하위 바이트 먼저). **Modbus로 읽고 쓸 수 있다**(사용자 결정). Save Set(7799)로 settings.dat에 저장, **부팅 시 적용**. `\system\snmp.d`에는 `engineBoots`만 남김(SNMP 기동마다 +1, 공장초기화 시 삭제). 구 `snmp.d`(문자열 포함, magic 'SNMP')는 더 이상 읽지 않음 → 업데이트 후 문자열 재설정 필요 |
 | 웹 화면 | Setup > General 탭 **"SNMP" 카드**: SNMP / SNMP Version / Trap / Trap Server(레지스터). SNMP가 OFF면 아래 항목 전부 잠금 + Community / sysContact / sysLocation / v3(`/api/snmp` → 통신 설정에 기록, 카드 Save가 Save Set까지 수행). 커뮤니티·v3 비밀번호는 화면에 값을 내려주지 않음(기본값·설정 여부만). 저장은 관리자만. confWebApp Main Setting은 같은 항목을 Modbus로 직접 읽고 씀 |
@@ -326,7 +328,8 @@ varbind(두 Trap 공통):
 | Trap OID | `.<PEN>.1.5.0.1` svAlarmRaised, `.0.2` svAlarmCleared, `.0.3` svAlarmReset |
 | svAlmTime | 이벤트 시각 `alog.ts`(= `sysTick1s`, 알람 로그와 같은 시각값) |
 | PEN | **67140**(IANA 발급, NTEKSYSTEM Co., Ltd.). `snmp_trap.c` `SV_PEN_OID` = BER `{0x84, 0x8C, 0x44}` 한 곳에서 정의 — Trap OID·SV300-MIB·sysObjectID(`1.3.6.1.4.1.67140.1`, `snmpTrapInit()`에서 설정)가 함께 사용 |
-| 메모리맵 | `memorymap/SV300 memory map_261028.xlsx` (통신 설정 410워드, 명령 7788~) |
+| 메모리맵 | `memorymap/SV300 memory map_261116.xlsx` (통신 설정 410워드, 명령 7788~) — 파일명 날짜가 최신인 것이 기준 |
+| COMM LED | SNMP 응답 송신 직후(`cyclone_tcp/snmp/snmp_agent.c`, `[SV300 26/11/17]` 표시 — 라이브러리 수정)·Trap 송신 성공 시 `commLedPulse()` 로 반전. Modbus TCP·MQTT 송신도 같은 LED(11/17) |
 | sysORTable | SV300-MIB가 추가 로드되어 제공 MIB 목록이 4개(SNMPv2-MIB, BRIDGE-MIB, RSTP-MIB, SV300-MIB)가 된다 → §7 TC-02 기대값은 다음 FW 버전에서 갱신 |
 
 ---
@@ -793,7 +796,7 @@ SNMP 변경 후에도 RSTP 링 이중화가 정상 동작하는지 확인한다.
 ## 8. 추후 작업 (TODO)
 
 > 운영 규칙: SNMP 관련 남은 작업을 여기서 관리한다. **완료한 항목은 이 목록에서 삭제**하고, 결과는 해당 본문 절(§4~§7)과 FWUPDATE에 남긴다.
-> 기준: 2026-10-12 (SV300 `79d0891` 이후 PEN 67140·SNMPv3 미커밋 / confWebApp `6513bab` 이후 미커밋)
+> 기준: 2026-11-17 (SV300 main `47fd006` + 11/17 미커밋 COMM LED). PEN 67140·SNMPv3·Trap 은 커밋·실기 합격 완료
 
 ### 8.1 SNMPv3 (§4.5-③) — 구현·빌드 완료(2026-10-12), 실기 TC-11·TC-12 합격(2026-11-04). FW_VER는 0004 유지(다음 작업 때 상향)
 - [ ] (선택) SHA-256 인증 — `sha256.c` 추가 + `SNMP_SHA256_SUPPORT`

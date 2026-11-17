@@ -122,6 +122,50 @@ void fsFileUnlock(void)
 	osReleaseMutex(&fsFileMutex);
 }
 
+/* [26/11/16 진단 → 11/17 콘솔 조회로 전환] 이더넷 수신 누락 프레임(DMA_MFRM_BUFOF, 읽으면 클리어).
+ *  [15:0]=수신 디스크립터 부족으로 버린 프레임, [27:17]=FIFO 넘침으로 버린 프레임.
+ *  Metering_Task 가 100ms 마다 읽어 누적만 하고(카운터 넘침 방지), 자동 출력은 없다 — 콘솔 ETH 로 조회.
+ *  사내망 브로드캐스트 폭주(11/16 실측 10~30초 간격, 100ms 당 최대 63) 같은 현장 네트워크 문제 판별용.
+ *  bursts = 누락이 있던 100ms 횟수, max = 100ms 최대 누락 */
+typedef struct {
+	uint32_t desc, fifo, bursts, max;
+} ETH_MISS;
+static ETH_MISS ethTot, ethWin, ethPrev;	/* 부팅 후 누계 / 진행 중 60초 / 직전 60초 */
+static uint32_t ethWinTs, ethLastTs;		/* 창 시작, 마지막 누락 시각(sysTick1s) */
+
+void ethDiagSample(void)
+{
+	uint32_t mf = LPC_ETHERNET->DMA_MFRM_BUFOF;
+	uint32_t nd = mf & DMA_MFRM_FMCMSK, nf = DMA_MFRM_FMA(mf);
+
+	if (nd + nf) {
+		ethTot.desc += nd;  ethWin.desc += nd;
+		ethTot.fifo += nf;  ethWin.fifo += nf;
+		ethTot.bursts++;    ethWin.bursts++;
+		if (nd + nf > ethTot.max) ethTot.max = nd + nf;
+		if (nd + nf > ethWin.max) ethWin.max = nd + nf;
+		ethLastTs = sysTick1s;
+	}
+	if ((uint32_t)(sysTick1s - ethWinTs) >= 60) {
+		ethPrev = ethWin;
+		memset(&ethWin, 0, sizeof(ethWin));
+		ethWinTs = sysTick1s;
+	}
+}
+
+/* 콘솔 ETH — 부팅 후 누계·직전 60초·마지막 누락 시각 */
+void ethDiagReport(void)
+{
+	printf("[ETH] rx missed since boot: desc=%u fifo=%u bursts=%u max=%u\n",
+	       (unsigned)ethTot.desc, (unsigned)ethTot.fifo, (unsigned)ethTot.bursts, (unsigned)ethTot.max);
+	printf("[ETH] rx missed last 60s : desc=%u fifo=%u bursts=%u max=%u\n",
+	       (unsigned)ethPrev.desc, (unsigned)ethPrev.fifo, (unsigned)ethPrev.bursts, (unsigned)ethPrev.max);
+	if (ethTot.bursts)
+		printf("[ETH] last miss %u s ago\n", (unsigned)(sysTick1s - ethLastTs));
+	else
+		printf("[ETH] no rx miss since boot\n");
+}
+
 /* ffind()가 돌려준 이름(info.name)으로 fdelete/fopen용 전체 경로를 만든다.
  *  NOR 플랫(NOSDMEM): info.name 이 이미 "pq_ql_...d"처럼 접두어 포함 전체 파일명 → 그대로 사용.
  *  FAT: info.name 은 폴더 없는 순수 파일명 → dir + DIRSEP 를 앞에 붙인다.
@@ -4375,7 +4419,11 @@ static void trimEgyArchAge(uint32_t cutoffKey) {
 	printf("trimEgyArchAge: delete %s (cutoff=%u, res=%d)\n", path, cutoffKey, res);
 }
 
-static void archiveEnergyLog15Day(int id, ENERGY_LOG15 *pDay) {
+/* trim=1: 기록 뒤 아카이브 정리(용량·보존기간)까지 수행(부팅 경로).
+ * trim=0: 기록만 — FS_task(egyIoTick)는 모든 채널 기록이 끝난 뒤 trimEgyArchDaily()로 하루 1회 정리한다.
+ *  [26/11/17] 종전엔 채널마다 정리(ffind 전체 검색 3회)를 해 00:03 에 3채널 9회 검색 → FS_task 9.8초 점유,
+ *  같은 LOW 의 웹이 응답 불가(LOWLAG 9764ms). SV400 수정과 동일. */
+static void archiveEnergyLog15Day(int id, ENERGY_LOG15 *pDay, int trim) {
 	char path[96];
 	struct tm ltm;
 	uint32_t ts;
@@ -4405,8 +4453,21 @@ static void archiveEnergyLog15Day(int id, ENERGY_LOG15 *pDay) {
 		fwrite(pDay, sizeof(ENERGY_LOG15), 1, fp);
 		fclose(fp);
 	}
-	trimEgyArchBudget();
-	trimEgyArchAge(logCutoffKeyMonths(EGY_KEEP_MONTHS));	/* 보존기간 경과 아카이브 1개 정리 */
+	if (trim) {
+		trimEgyArchBudget();
+		trimEgyArchAge(logCutoffKeyMonths(EGY_KEEP_MONTHS));	/* 보존기간 경과 아카이브 1개 정리 */
+	}
+	fsFileUnlock();
+}
+
+/* 아카이브 정리 하루 1회(egyIoTick, 모든 채널 기록이 끝난 뒤 별도 루프에서).
+ * step 0 = 용량 정리, 1 = 보존기간 정리 — ffind 전체 검색을 루프마다 하나씩 나눈다. */
+static void trimEgyArchDaily(int step) {
+	fsFileLock();
+	if (step == 0)
+		trimEgyArchBudget();
+	else
+		trimEgyArchAge(logCutoffKeyMonths(EGY_KEEP_MONTHS));
 	fsFileUnlock();
 }
 #endif	/* HWV2 */
@@ -4442,17 +4503,26 @@ static void egyIoDefer(int id, uint8_t kind)
 	__enable_irq();
 }
 
-/* FS_task 루프에서 호출 */
+/* FS_task 루프에서 호출.
+ *  [26/11/17] 월 아카이브는 호출 1회에 1채널만 기록(나머지는 다음 루프로 미룸)하고,
+ *  모든 채널이 끝나면 그다음 호출들에서 정리(trimEgyArchDaily 용량→보존기간)를 한 번씩 한다
+ *  → 루프 사이(100ms 대기)에 웹 등 LOW 태스크가 돈다. */
+#ifdef HWV2
+static uint8_t egyArchTrimPend;		/* 0=없음, 1=용량 정리 대기, 2=보존기간 정리 대기 */
+#endif
+
 static void egyIoTick(void)
 {
 	int id;
-	uint8_t m;
+	uint8_t m, carry, archDone = 0;
 
 	for (id = 0; id < METER_CH_COUNT; id++) {
 		__disable_irq();
 		m = egyIoPending[id];
-		egyIoPending[id] = 0;
+		carry = archDone ? (uint8_t)(m & EIO_E15_ARCH) : 0;	/* 이번 호출에 이미 1채널 아카이브 → 다음으로 */
+		egyIoPending[id] = carry;
 		__enable_irq();
+		m &= (uint8_t)~carry;
 		if (m == 0)
 			continue;
 		if (m & EIO_ELOG0)	storeEnergyLogFs(id, 0, elogSnap[id]);
@@ -4460,10 +4530,25 @@ static void egyIoTick(void)
 		if (m & EIO_E15_0)	writeEnergyLog15File(id, 0, &e15Snap[id][0]);
 		if (m & EIO_E15_1)	writeEnergyLog15File(id, 1, &e15Snap[id][1]);
 #ifdef HWV2
-		if (m & EIO_E15_ARCH)	archiveEnergyLog15Day(id, &e15Snap[id][1]);
+		if (m & EIO_E15_ARCH) {
+			archiveEnergyLog15Day(id, &e15Snap[id][1], 0);
+			archDone = 1;
+			egyArchTrimPend = 1;
+		}
 #endif
 		meter[0].cntl.wdtTbl[Tid_Fs].count++;
 	}
+
+#ifdef HWV2
+	if (egyArchTrimPend && !archDone) {
+		for (id = 0; id < METER_CH_COUNT; id++)
+			if (egyIoPending[id] & EIO_E15_ARCH)
+				return;		/* 아직 기록할 채널이 남음 */
+		trimEgyArchDaily(egyArchTrimPend - 1);
+		egyArchTrimPend = (egyArchTrimPend == 1) ? 2 : 0;
+		meter[0].cntl.wdtTbl[Tid_Fs].count++;
+	}
+#endif
 }
 
 int putEnergyLog(int id, int hix)
@@ -5166,7 +5251,7 @@ void Energy_Task(void *arg)
 			if (lt0.tm_mday != meter[0].cntl.tod.tm_mday || lt0.tm_mon != meter[0].cntl.tod.tm_mon) {
 				memcpy(&egy15[id].log[1], &egy15[id].log[0], sizeof(ENERGY_LOG15));
 #ifdef HWV2
-				archiveEnergyLog15Day(id, &egy15[id].log[1]);
+				archiveEnergyLog15Day(id, &egy15[id].log[1], 1);
 				storeEnergyLog15Fs(id, 1);
 #endif
 				memset(&egy15[id].log[0], 0, sizeof(ENERGY_LOG15));
@@ -5265,7 +5350,7 @@ void Metering_Task(void *arg)
 			if (lt0.tm_mday != meter[0].cntl.tod.tm_mday || lt0.tm_mon != meter[0].cntl.tod.tm_mon) {
 				memcpy(&egy15[id].log[1], &egy15[id].log[0], sizeof(ENERGY_LOG15));
 #ifdef HWV2
-				archiveEnergyLog15Day(id, &egy15[id].log[1]);
+				archiveEnergyLog15Day(id, &egy15[id].log[1], 1);
 				storeEnergyLog15Fs(id, 1);
 #endif
 				memset(&egy15[id].log[0], 0, sizeof(ENERGY_LOG15));
@@ -5423,36 +5508,7 @@ void Metering_Task(void *arg)
 			}
 		}
 
-		/* [26/11/16 진단] 이더넷 수신 누락 프레임(DMA_MFRM_BUFOF, 읽으면 클리어) — 웹 무응답 시 패킷 유실 여부 확인.
-		 *  [15:0]=수신 디스크립터 부족으로 버린 프레임, [27:17]=FIFO 넘침으로 버린 프레임.
-		 *  카운터는 넘치지 않게 100ms(이 루프)마다 읽어 누적하고, 출력은 60초에 1줄 요약 — 사내망 브로드캐스트
-		 *  폭주(11/16 실측 10~30초 간격, 100ms 당 최대 63) 때 HIGH 태스크에서 printf 가 몰리지 않게 한다.
-		 *  bursts = 누락이 있던 100ms 횟수, max = 100ms 최대 누락, last = 마지막 누락 시각 */
-		{
-			static uint32_t ethMissD, ethMissF, ethBurst, ethMax, ethRptTs;
-			static int ethLastH, ethLastM, ethLastS;
-			uint32_t mf = LPC_ETHERNET->DMA_MFRM_BUFOF;
-			uint32_t nd = mf & DMA_MFRM_FMCMSK, nf = DMA_MFRM_FMA(mf);
-
-			if (nd + nf) {
-				ethMissD += nd;
-				ethMissF += nf;
-				ethBurst++;
-				if (nd + nf > ethMax)
-					ethMax = nd + nf;
-				ethLastH = meter[0].cntl.tod.tm_hour;
-				ethLastM = meter[0].cntl.tod.tm_min;
-				ethLastS = meter[0].cntl.tod.tm_sec;
-			}
-			if ((uint32_t)(sysTick1s - ethRptTs) >= 60) {
-				if (ethBurst)
-					printf("[ETHDIAG] rx missed/60s: desc=%u fifo=%u bursts=%u max=%u last @%02d:%02d:%02d\n",
-					       (unsigned)ethMissD, (unsigned)ethMissF, (unsigned)ethBurst, (unsigned)ethMax,
-					       ethLastH, ethLastM, ethLastS);
-				ethRptTs = sysTick1s;
-				ethMissD = ethMissF = ethBurst = ethMax = 0;
-			}
-		}
+		ethDiagSample();
 		/* [26/11/16] SPI 읽기 검증 통계 10분 주기 — retry/fail 이 늘었을 때만 출력(현장 버스 품질 확인용) */
 		if ((uint32_t)(sysTick1s - spiCrcRptTs) >= 600) {
 			spiCrcRptTs = sysTick1s;

@@ -2,7 +2,7 @@
 
 > 운영 규칙: 끝낸 항목은 이 목록에서 **삭제**하고, 결과는 [WORKLOG.md](WORKLOG.md)·[FWUPDATE](FWUPDATE) 에 남긴다.
 > 출처: 2026-10-16 위상교정 조사, 08/28 차주 계획, FWUPDATE 의 "실기 검증 필요/예정/보류" 표기, [snmp.md](snmp.md) §8.
-> 기준 코드: main `b1487d1`(26/11/10 초기 납품 `e7f249a` + 교정·알람·50Hz 수정). confWebApp 할 일은 [../confWebApp/TODO.md](../confWebApp/TODO.md)
+> 기준 코드: main `47fd006`(26/11/16 마감2) + 11/17 미커밋(AutoIP·Current IP·COMM LED·PQ Report 설정 UI). confWebApp 할 일은 [../confWebApp/TODO.md](../confWebApp/TODO.md)
 >
 > 항목 형식: **상태**(지금 어디까지 됐나) · **현상**(겉으로 보이는 증상) · **문제**(원인) · **해결**(고칠 방법) · **시험 방법**(고친 뒤 확인 절차)
 >
@@ -13,9 +13,9 @@
 
 ## 1. 브랜치 정리
 
-### 1.1 옛 임시 저장(`stash@{0}`) 삭제
+### 1.1 옛 임시 저장(`stash@{1}` "main 10/16~10/28: 교정…") 삭제
 - **상태**: 필요한 부분은 11/06 커밋 `91ed84c` 에 이미 옮김(전압 보정 칸 선택 `uGainSel`, 1P2W 전력량, 웹 L2 색). 나머지(PGA 2배, 전력 보정 누적식, M0 전용 진단)는 쓰지 않기로 결정
-- **해결**: 아래 3절 "실기 검증" 1·2번이 통과하면 `git stash drop stash@{0}` 으로 삭제
+- **해결**: 아래 3절 "실기 검증" 1·2번이 통과하면 삭제. 11/11 에 `stash@{0}`(pre-merge-origin-main) 이 새로 생겨 번호가 `stash@{1}` 로 밀렸으므로 `git stash list` 로 메시지를 확인한 뒤 `git stash drop stash@{1}`
 - **시험 방법**: 3절 1·2번 결과로 판단(따로 시험 없음)
 
 ---
@@ -109,11 +109,10 @@
   5. PF 1(0°)에서 실수로 `4` → angle ≈0° 로 찍히고, 무효전력 부호에 따라 `REJECT` 또는 `skip (angle -60… out of range)`, 어느 쪽이든 보정값 변화 없음
 
 ### 3.8 내장웹 Dashboard 채널 선택·전력량 (`6ead302`, `7a65987`)
-- **상태**: 코드 반영, 내장 JS 문법(node --check)만 확인. Keil 빌드·실기 화면 미확인
+- **상태**: 코드 반영, Keil 빌드 0E/0W(이후 빌드에서 반복 확인). 실기 화면(아래 2~5) 미확인
 - **현상(수정 전)**: Dashboard 는 CH1 값만 보였고 전력량 표시가 없었음
 - **해결(반영됨)** ([web.c](src/web.c)): `/api/dashboard?ch=N`, 제목 옆 CH1~3 버튼(알람 OR 색), Power 카드 Imp./Exp. kWh/MWh/GWh 자동 단위
 - **시험 방법**
-  1. Keil 빌드 0E/0W, 플래시 여유 확인(내장 HTML 약 +1KB)
   2. CH1·CH2·CH3 버튼 → 제목 `Dashboard - CHn` 과 값이 Feeder 화면의 해당 채널과 일치, Imp. 값이 Feeder `Import` 와 일치
   3. 한 채널에만 알람 발생 → 그 버튼만 적색(최대 3초 지연), 알람 해제 → 그린
   4. 2채널 모델에서 CH3 버튼 숨김, `/api/dashboard?ch=3`·`?ch=9` → CH1 값
@@ -194,12 +193,31 @@
   3. 부팅 로그 `Energy loaded from FRAM @x (seq=n)` — 저장마다 `store Energy @0/@4096` 교대·seq 증가, 재부팅 후 값 유지
   4. `SPICRC`: 부팅 직후 fail 칩당 약 5(부팅 시 반복값을 보내지 않는 init 레지스터)·이후 증가 없음, ZX timeout 로그 증가 없음
 
+### 3.15 첫 접속 — DHCP 실패 시 AutoIP + Current IP 표시 (26/11/17, 미커밋)
+- **상태**: SV300·SV400 빌드 0E/0W. **PC 1:1(PC 자동 IP)로 `sv300-<SN>.local` 접속 확인(11/17)**. 나머지 미확인
+- **해결(반영됨)**: [net_config.h](src/net_config.h) `IPV4_ADDR_LIST_SIZE 2`·`AUTO_IP_SUPPORT`, [main.c](src/main.c) DHCP 15초 시간 초과 → AutoIP(주소 슬롯 1), DHCP 할당 시 AutoIP 해제·mDNS 재공지, [web.c](src/web.c) Communication 카드 **Current IP**
+- **시험 방법**
+  1. 장비 여러 대 데이지체인 + 체인 끝에 PC → 각 라벨 주소 접속, Current IP 가 장비마다 다름
+  2. AutoIP 상태에서 공유기 연결 → 콘솔 `AutoIP stopped (DHCP bound)`, Current IP 가 DHCP 주소 하나만
+  3. 케이블 뽑았다 꽂기·재부팅 후 다시 접속, DHCP OFF(고정 IP) 장비는 종전과 같음
+  4. IpScan(멀티캐스트 검색) 응답 IP 가 AutoIP 주소
+
+### 3.16 COMM LED — Modbus TCP·SNMP·MQTT 송신 시 토글 (26/11/17, 미커밋)
+- **상태**: SV300·SV400 빌드 0E/0W, 실기 미확인
+- **현상(수정 전)**: COMM LED 가 부팅 후 계속 켜짐(토글 코드가 옛 RL-TCPnet·W5500 경로에만 있었음)
+- **해결(반영됨)**: [app_main.c](src/app_main.c) `commLedPulse()` — Modbus TCP `modbusServerUnlockCallback`(요청당 1회), SNMP 응답(`snmp_agent.c` 송신 직후, 라이브러리 수정)·Trap 송신 성공, MQTT 발행 성공
+- **시험 방법**: Modbus 폴링 중 깜빡임 / `snmpget`·Trap 발생 시 반전 / MQTT 주기마다 반전 / 웹만 접속 시 변화 없음
+
+### 3.17 내장웹 PQ Report 설정 — Start Day 드롭다운·CH1 만 표시 (26/11/17, 미커밋)
+- **상태**: SV300·SV400 빌드 0E/0W, 내장 JS 문법 검사 통과. 브라우저 화면 미확인
+- **시험 방법**: Setup > Channel Setting > PQ Report → CH1 카드만, Start Day 가 Sun~Sat 선택, 바꿔 Save 후 레지스터 6845(CH1) 값이 0~6 으로 저장, 다른 탭(PQ Event·Trend 등)은 채널 카드 종전과 같음
+
 ---
 
 ## 4. 장시간 운전 안정성
 
 ### 4.1 플래시 쓰기 실패(`[SPIFI] program FAIL`) — 3~4시간마다
-- **상태**: 원인 = ROM 의 **거짓 실패 보고**, 우회 수정으로 피해 없음(11/13~16 71시간 14회 모두 `verified ok`). 원인 가리기용 `slow ok` 측정 추가(11/16), 측정 로그 대기 → 이후 태스크 전환 잠금 시험
+- **상태**: 원인 = ROM 의 **거짓 실패 보고**, 우회 수정으로 피해 없음(11/13~16 71시간 14회 모두 `verified ok`). **우회 처리 유지로 종결(11/17 결정)**. 실제 저장은 항상 정상(`verified ok`)이라, 다른 태스크에 영향을 주는 태스크 전환 잠금 시험은 하지 않음. `retry FAIL`(실제 쓰기 실패)이 나올 때만 다시 검토
 - **현상**: `rc=0x20003`(LPCOpen 기준 `ERR_SPIFI_TIMEOUT` 추정), 크기 4·8·16바이트. 실패 후 리셋·멈춤 없음. 11/13 까지는 모두 64KB 블록의 마지막 4KB(할당 기록)였으나 **11/13 블록 앞쪽(파일 내용)에서도 발생** → 위치 한정 아님
   - 16MB 보드 실패: 11/10~11 14시간 6회(0x5FFDC, 0x7FF54, 0x7FE94, 0x9FC84, 0xBFDAC, 0xCFFE8), 11/11~12 13시간 0회(전압 입력 없음), 11/12~13 17시간 1회(219V 입력)
   - 시각: 15분 경계 +2분(04:02·05:02·06:32·07:17 = egy15 파일 재기록 시점) 또는 매시·자정 기록 시점
@@ -225,13 +243,25 @@
     - 실제 SPIFI 클럭이 40MHz 와 다르면 ROM 에 실제 값을 넘기거나 클럭을 40MHz 로 낮춰 비교 시험 → 11/16 일치 확인
   - (측정 추가 11/16) 성공한 쓰기도 ROM 호출이 5ms 이상이면 `[SPIFI] slow ok adr=… sz=… t=…us (slow n/전체, max …us)` 출력
     - 판정: 성공인데 수~20ms 걸린 `slow ok` 가 자주 보이면 → (a) 태스크에 밀림. `slow ok` 가 거의 없고 실패만 25ms 이상이면 → (b)
-  - (다음) ROM 쓰기 호출 동안만 태스크 전환 잠금(`tsk_lock`/`tsk_unlock`, 인터럽트는 동작) 시험 → 실패가 사라지고 `t` 가 수 ms 이하면 (a) 확정·근본 해결. 계측 태스크가 최대 수 ms 늦게 깨어나는 영향은 실기 확인
+    - **11/16 18:26~11/17 08:50 결과(14시간)**: 쓰기 3,249회 중 `slow ok` 18회(5~12ms), 실패 2회(20:15 `t`=26.9ms, 20:47 `t`=29.8ms, 둘 다 4B 할당기록 0 덮기·`verified ok`·`wait_busy` 도 25~27ms 시간 초과). 성공 최대 11.9ms, **12~25ms 구간은 0회**
+    - `slow ok` 대부분은 1552B(7페이지, 칩 실제 쓰기 시간으로 설명 가능). 단 **8B 8.6ms·400B 10.7ms**(20:15~20:17, 실패 직후)는 칩 시간으로 설명 안 됨 → 수 ms 밀림은 실제로 있음
+    - 판정: 성공 ≤12ms / 실패 ≥25ms 로 갈려 (b) 쪽이 약간 우세하나, 밀림이 "짧은 끼어듦 또는 30ms 가량 긴 작업" 두 종류라면 (a) 로도 설명돼 확정 못 함. 칩이 쉬는데 `wait_busy` 까지 연달아 25ms 걸리는 것은 (b) 에 더 맞음
+  - (취소 11/17) `tsk_lock` 시험은 하지 않기로 함 — 거짓 실패라 피해가 없는데, 잠금은 다른 태스크(계측·웹)를 최대 ~30ms 막음
+  - (유지) `program FAIL` 한 줄 + `verified ok`/`retry ok`/`retry FAIL` 우회 처리만 남김. 감시 대상은 `retry FAIL` 뿐
+  - (정리 11/17) 진단 출력 제거: `slow ok`·실패 시 old/new/now·`rom:`·`wait_busy:` 상세, 부팅 `clk=`/`core=` 클럭 줄, `ERASE_REQD`(쓰기 전 기존 내용 전체 읽기도 함께 제거)
 - **위치**: [FS_SPIFI_FlashPrg.c ProgramPage](src/FS_SPIFI_FlashPrg.c)
 - **시험 방법**
   1. 16MB 플래시 보드에 16MB 빌드(`SV300_3CH_app_16M`) 다운로드, 부팅 로그부터 받아 빌드 날짜 확인
   2. 3채널 정상 입력, 콘솔 로그를 켠 상태로 **24시간 이상** 운전
   3. 판정: `program FAIL` 이 나도 모두 바로 뒤에 `verified ok` 또는 `retry ok` 면 합격. `retry FAIL` 이 나오면 주소·시각·old/new/now 기록
   4. 실패가 난 시각의 15분 에너지(egy15) 슬롯 값이 웹·Modbus 에서 정상인지 확인
+
+### 4.2 00:03 에너지 월 아카이브 — 웹 무응답 약 10초 (26/11/17 수정, SV400 동일)
+- **상태**: 3CH 빌드 0E/0W, 실기 미확인
+- **현상(수정 전)**: 자정+3분 `[FSLAG] energy`·`[LOWLAG]` 약 9.8초 — 그동안 웹(같은 LOW) 무응답
+- **문제(수정 전)**: `archiveEnergyLog15Day` 가 채널마다 append 후 ffind 전체 검색 3회(용량 2·보존기간 1) → 3채널 9회를 FS_task 한 번에 실행
+- **해결(반영됨)**: [meter.c egyIoTick](src/meter.c) FS 루프 1회에 1채널만 아카이브, 모든 채널 기록 뒤 다음 루프들에서 `trimEgyArchDaily`(용량 → 보존기간) 하나씩. 부팅 경로는 즉시 정리
+- **시험 방법**: 자정을 넘긴 로그에서 00:03 `FSLAG energy` 가 없거나 수 초 이하, `egy*` 월 파일에 채널별 하루치 정상 추가, 용량·보존기간 정리 동작
 
 ---
 

@@ -884,6 +884,13 @@ void Shell_Task(void *arg)
 	}
 }
  
+/* COMM LED — 상위 시스템으로 데이터를 보낼 때마다 반전(Modbus TCP 응답·SNMP 응답/트랩·MQTT 발행).
+ * GPIO NOT 레지스터 1회 쓰기라 여러 태스크에서 불러도 안전 */
+void commLedPulse(void)
+{
+	Board_LED_Toggle(LED_COMM);
+}
+
 OsTaskId getW5500TaskId() {
 	return tid_w5500;
 }

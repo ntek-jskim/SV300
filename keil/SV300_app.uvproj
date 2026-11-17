@@ -909,6 +909,16 @@
               <FilePath>..\cyclone_driver\cyclone_tcp\dhcp\dhcp_client_misc.c</FilePath>
             </File>
             <File>
+              <FileName>auto_ip.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_tcp\ipv4\auto_ip.c</FilePath>
+            </File>
+            <File>
+              <FileName>auto_ip_misc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_tcp\ipv4\auto_ip_misc.c</FilePath>
+            </File>
+            <File>
               <FileName>dhcp_common.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\cyclone_driver\cyclone_tcp\dhcp\dhcp_common.c</FilePath>
@@ -3021,6 +3031,16 @@
               <FilePath>..\cyclone_driver\cyclone_tcp\dhcp\dhcp_client_misc.c</FilePath>
             </File>
             <File>
+              <FileName>auto_ip.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_tcp\ipv4\auto_ip.c</FilePath>
+            </File>
+            <File>
+              <FileName>auto_ip_misc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_tcp\ipv4\auto_ip_misc.c</FilePath>
+            </File>
+            <File>
               <FileName>dhcp_common.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\cyclone_driver\cyclone_tcp\dhcp\dhcp_common.c</FilePath>
@@ -5131,6 +5151,16 @@
               <FileName>dhcp_client_misc.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\cyclone_driver\cyclone_tcp\dhcp\dhcp_client_misc.c</FilePath>
+            </File>
+            <File>
+              <FileName>auto_ip.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_tcp\ipv4\auto_ip.c</FilePath>
+            </File>
+            <File>
+              <FileName>auto_ip_misc.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_tcp\ipv4\auto_ip_misc.c</FilePath>
             </File>
             <File>
               <FileName>dhcp_common.c</FileName>

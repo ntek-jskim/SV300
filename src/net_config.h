@@ -88,6 +88,10 @@
 #define IPV4_SUPPORT ENABLED
 //Size of the IPv4 multicast filter
 #define IPV4_MULTICAST_FILTER_SIZE 4
+//IPv4 주소 2개: [0]=DHCP/고정 IP, [1]=AutoIP(169.254.x.x) — DHCP 응답 없을 때(PC 1:1·데이지체인 설치) 사용
+#define IPV4_ADDR_LIST_SIZE 2
+//Auto-IP(RFC 3927) — DHCP 시간 초과 시 main.c 에서 시작, DHCP 할당되면 중지
+#define AUTO_IP_SUPPORT ENABLED
 
 //IPv4 fragmentation support
 #define IPV4_FRAG_SUPPORT ENABLED
