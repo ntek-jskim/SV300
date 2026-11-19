@@ -219,6 +219,8 @@ static void smpFill3ph(SMP_CHANNEL *d, SMP_HARMONICS *h, int m)
 	d->kWh_imp_lastM = EGY_TOTAL(e[EGY_PERIOD_LAST_MONTH], EGY_MODE_KWH,   EGY_SIGN_IMPORT);
 	d->kVARh_imp     = EGY_TOTAL(e[EGY_PERIOD_TOTAL],      EGY_MODE_KVARH, EGY_SIGN_IMPORT);
 	d->kVAh          = EGY_TOTAL(e[EGY_PERIOD_TOTAL],      EGY_MODE_KVAH,  EGY_SIGN_IMPORT);
+	d->kWh_exp       = EGY_TOTAL(e[EGY_PERIOD_TOTAL],      EGY_MODE_KWH,   EGY_SIGN_EXPORT);	/* 맵 261119 (+60/+68) */
+	d->kVARh_exp     = EGY_TOTAL(e[EGY_PERIOD_TOTAL],      EGY_MODE_KVARH, EGY_SIGN_EXPORT);
 
 	for (j = 0; j < 3; j++)
 		for (o = 0; o < SMP_HARM_ORDER; o++) {
@@ -258,6 +260,8 @@ static void smpFill1ph(SMP_CHANNEL *d, SMP_HARMONICS *h, int m, int slot, int vp
 	d->kWh_imp_lastM = EGY_PHASE(e[EGY_PERIOD_LAST_MONTH], EGY_MODE_KWH,   EGY_SIGN_IMPORT, slot);
 	d->kVARh_imp     = EGY_PHASE(e[EGY_PERIOD_TOTAL],      EGY_MODE_KVARH, EGY_SIGN_IMPORT, slot);
 	d->kVAh          = EGY_PHASE(e[EGY_PERIOD_TOTAL],      EGY_MODE_KVAH,  EGY_SIGN_IMPORT, slot);
+	d->kWh_exp       = EGY_PHASE(e[EGY_PERIOD_TOTAL],      EGY_MODE_KWH,   EGY_SIGN_EXPORT, slot);	/* 맵 261119 (+60/+68) */
+	d->kVARh_exp     = EGY_PHASE(e[EGY_PERIOD_TOTAL],      EGY_MODE_KVARH, EGY_SIGN_EXPORT, slot);
 
 	for (o = 0; o < SMP_HARM_ORDER; o++) {
 		h->U[p][o] = (int16_t)meter[m].hd.U[slot][o];

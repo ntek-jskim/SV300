@@ -9,6 +9,36 @@
 
 ---
 
+# 2026-11-19
+버전: **V00.05**(변경 없음, 빌드일 26/11/19) — 11/18 미커밋 작업(SNMPv3 SHA-256) 포함
+
+## 1. 내장웹을 SV900 템플릿으로 (제품 간 화면 통일 1단계)
+- 색·카드·레이아웃을 SV900(Tailwind) 값으로: 사이드바가 왼쪽 전체 높이 + 맨 위 로고, 설정 카드 라벨 위·입력 아래
+- 메뉴를 SV900 구성으로: Dashboard · Feeder · Meter · Power Quality · Alarm/Event · Report · IO · **Configuration**(General/Meter/Feeder) · **Administration**(System·System Status·Firmware·Logo)
+- **Feeder 페이지**: 피더 상태 칸(On/Off/미등록) + 선택 피더의 계측·에너지(Import/Export/Total/Net)·벡터도, 한 화면에
+- 벡터도(Feeder·Meter Phase) SV900 색·표기, Reboot·Factory Reset 버튼 SV900 형식
+- **사이드바 로고 업로드**(PNG/JPG/GIF/WEBP ≤64KB, 없으면 글자 'SV300')
+
+## 2. 알람·이벤트 이력 스크롤 조회
+- Top/Up/Down/Bottom 대신 저장된 이력(채널당 1024건)을 스크롤로 이어 보기, Viewer 도 전체 열람
+- 웹이 Modbus 이력 창을 움직이지 않아 SCADA 폴링과 충돌 없음
+
+## 3. 정리·중복 제거
+- VQ·Monthly 탭, Save Set(Save & Apply 와 중복), Alarm Def 탭(Alarm Settings 로 합침) 삭제, Status 카드는 Administration 으로
+
+## 4. ★보안: 장비 파일 무인증 노출 차단
+- 웹이 처리하지 않는 주소가 NOR 파일(세션 키·설정·펌웨어)을 로그인 없이 내려주던 경로를 404 로 막음 — SV400 은 아직 같은 문제
+
+## 5. 메모리맵 _261119 · SNMPv3 (11/18)
+- Simple 피더 블록에 kWh/kvarh **Export** 추가(50080·50088, 이후 주소 이동 → 상위 시스템 갱신 필요), 10분 평균 전력 이름을 실제 단위(W)로 정정
+- SNMPv3 인증 SHA-256 선택(7297, 기본 SHA-1) — 실기 확인 남음
+- `SV300_3CH_app_16M` 0E/0W, 353,048B(남음 39.2KB)
+
+## 다음(11/20)
+- 설정 화면 마무리 후, 11/19 작업을 **SV400·confWebApp 에 동일 적용**
+
+---
+
 # 2026-11-17
 버전: **V00.05**(변경 없음)
 

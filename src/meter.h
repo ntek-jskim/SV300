@@ -89,6 +89,8 @@
 #define	ALARM_ST_FILE2 CONCAT3(SYS_DIR, DIRSEP, "astat.d2")
 #define	ALARM_DEF_FILE CONCAT3(SYS_DIR, DIRSEP, "almdef.d")	/* 알람설정(almSet) 영속 파일(3채널) */
 #define	REMOTE_LOG_FILE CONCAT3(SYS_DIR, DIRSEP, "rlogin.d")	/* 원격 링크 로그인 성공 기록(web.c, 16B 레코드) */
+#define	LOGO_FILE CONCAT3(SYS_DIR, DIRSEP, "logo.d")		/* [26/11/19] 웹 사이드바 로고: 8B 헤더('LOGO',ver) + PNG/JPG/GIF/WEBP ≤64KB */
+#define	LOGO_MAX	(64u * 1024u)
 #define	REMOTE_LOG_REC	16
 #define	REMOTE_LOG_KEEP	20
 #define	PQE_DEF_FILE CONCAT3(SYS_DIR, DIRSEP, "pqedef.d")	/* PQE/Transient/Waveform/Trend 설정 영속(3채널, SETTINGS 미포함분) */
@@ -913,12 +915,13 @@ typedef struct {
 	uint16_t snmpVer;					/* 7291 허용 버전 (0:v1/v2c, 1:v1/v2c/v3, 2:v3 only) — 부팅 시 반영 */
 	uint16_t trapEn;					/* 7292 Trap (0:OFF, 1:ON) — 저장 즉시 반영 */
 	uint16_t trap_ip[4];				/* 7293~7296 Trap 수신지(NMS) IP */
-	uint16_t _rSnmp0[3];				/* 7297~7299 예약 */
+	uint16_t snmpV3AuthProto;			/* 7297 v3 인증 (0:SHA-1 기본, 1:SHA-256) — 부팅 시 반영. 옛 예약(0)=SHA-1 */
+	uint16_t _rSnmp0[2];				/* 7298~7299 예약 */
 	char     snmpCommunity[COMM_STR_S];	/* 7300~7315 읽기 커뮤니티(Trap 공용), 빈 값이면 public */
 	char     snmpContact[COMM_STR_S];	/* 7316~7331 sysContact */
 	char     snmpLocation[COMM_STR_S];	/* 7332~7347 sysLocation */
 	char     snmpV3User[COMM_STR_S];	/* 7348~7363 v3 USM 사용자 */
-	char     snmpV3AuthPass[COMM_STR_S];/* 7364~7379 v3 인증 비밀번호(SHA-1, 8자 이상) */
+	char     snmpV3AuthPass[COMM_STR_S];/* 7364~7379 v3 인증 비밀번호(SHA-1/SHA-256, 8자 이상) */
 	char     snmpV3PrivPass[COMM_STR_S];/* 7380~7395 v3 암호화 비밀번호(AES-128, 선택) */
 	uint16_t _rSnmp1[4];				/* 7396~7399 예약 */
 	/* ── SNTP 7400~7419 ── */
@@ -2021,17 +2024,20 @@ typedef struct {
 	float		Qtot;			// +52 Q total			<- meter.Q[3]
 	float		Stot;			// +54 S total			<- meter.S[3]
 	float		PFtot;			// +56 PF total			<- meter.PF[3]
+	/* 맵 261119: kWh_exp·kVARh_exp 를 각 import 뒤에 신설 → 이후 필드 +2/+4 이동, reserved 10w→6w (블록 100w 불변) */
 	uint32_t	kWh_imp;		// +58					<- egy.Ereg32[EGY_PERIOD_TOTAL]      kWh/import
-	uint32_t	kWh_imp_thisM;	// +60					<- egy.Ereg32[EGY_PERIOD_THIS_MONTH] kWh/import
-	uint32_t	kWh_imp_lastM;	// +62					<- egy.Ereg32[EGY_PERIOD_LAST_MONTH] kWh/import
-	uint32_t	kVARh_imp;		// +64					<- egy.Ereg32[EGY_PERIOD_TOTAL]      kvarh/import
-	uint32_t	kVAh;			// +66					<- egy.Ereg32[EGY_PERIOD_TOTAL]      kVAh
-	float		Uunb;			// +68 Volt. Unbalance	<- meter.Ubal[0]
-	float		Iunb;			// +70 Current Unbalance<- meter.Ibal[0]
-	float		THD_U[3];		// +72 THD V1,V2,V3		<- meter.THD_U[0..2]
-	float		THD_I[3];		// +78 THD I1,I2,I3		<- meter.THD_I[0..2]
-	float		TDD_I[3];		// +84 TDD I1,I2,I3		<- meter.TDD_I[0..2]
-	float		_r1[5];			// +90 ~ +99
+	uint32_t	kWh_exp;		// +60					<- egy.Ereg32[EGY_PERIOD_TOTAL]      kWh/export
+	uint32_t	kWh_imp_thisM;	// +62					<- egy.Ereg32[EGY_PERIOD_THIS_MONTH] kWh/import
+	uint32_t	kWh_imp_lastM;	// +64					<- egy.Ereg32[EGY_PERIOD_LAST_MONTH] kWh/import
+	uint32_t	kVARh_imp;		// +66					<- egy.Ereg32[EGY_PERIOD_TOTAL]      kvarh/import
+	uint32_t	kVARh_exp;		// +68					<- egy.Ereg32[EGY_PERIOD_TOTAL]      kvarh/export
+	uint32_t	kVAh;			// +70					<- egy.Ereg32[EGY_PERIOD_TOTAL]      kVAh
+	float		Uunb;			// +72 Volt. Unbalance	<- meter.Ubal[0]
+	float		Iunb;			// +74 Current Unbalance<- meter.Ibal[0]
+	float		THD_U[3];		// +76 THD V1,V2,V3		<- meter.THD_U[0..2]
+	float		THD_I[3];		// +82 THD I1,I2,I3		<- meter.THD_I[0..2]
+	float		TDD_I[3];		// +88 TDD I1,I2,I3		<- meter.TDD_I[0..2]
+	float		_r1[3];			// +94 ~ +99
 } SMP_CHANNEL;					// 100w (260812: Angle U/I 추가로 90→100)
 
 /* Harmonics by order — 시트 TYPE S16, 원본 hd.U/hd.I 는 [3][64] 중 1~41차만 복사 */
@@ -2368,6 +2374,14 @@ extern int fwCheckUsrApp(uint32_t *psize);	/* [FW UPDATE] 업로드 usrApp.bin �
 extern void *fwBeginWrite(void);			/* [FW UPDATE] usrApp.bin 쓰기 시작(FILE* 반환, void*) */
 extern int fwWrite(void *fh, const void *buf, int len);	/* 청크 쓰기(반환=쓴 바이트) */
 extern void fwEndWrite(void *fh, int ok);	/* 종료(ok=0이면 부분파일 삭제) */
+/* [26/11/19] 웹 로고 파일(LOGO_FILE) — FS.c. 각 호출이 fsFileLock 을 짧게 잡고 놓는다(HTTP 수신·송신 중에는 잠금 없음) */
+extern void *logoOpenRead(uint32_t *pver);	/* 헤더 확인 후 이미지 시작 위치의 핸들, 없거나 불량이면 NULL */
+extern int  logoRead(void *fh, void *buf, int len);
+extern void logoClose(void *fh);
+extern void *logoBeginWrite(uint32_t ver);	/* 헤더 기록 후 핸들 */
+extern int  logoWrite(void *fh, const void *buf, int len);
+extern void logoEndWrite(void *fh, int ok);	/* ok=0이면 파일 삭제(기본 글자 로고로) */
+extern void logoDelete(void);
 extern void reqReboot(int cmd);				/* smb_rtu.c: rebootFlag 세팅(지연 리부팅) */
 extern uint32_t sysTick32, sysTick1s, sysTick10s, sysTick10m, sysTick15m, sysTickDemand, WM_tick32;
 extern volatile uint64_t sysTick64;	/* ISR(tickHandler) 갱신 — volatile 필수, app_main.c 주석 참조 */

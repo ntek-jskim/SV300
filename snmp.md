@@ -799,7 +799,8 @@ SNMP 변경 후에도 RSTP 링 이중화가 정상 동작하는지 확인한다.
 > 기준: 2026-11-17 (SV300 main `47fd006` + 11/17 미커밋 COMM LED). PEN 67140·SNMPv3·Trap 은 커밋·실기 합격 완료
 
 ### 8.1 SNMPv3 (§4.5-③) — 구현·빌드 완료(2026-10-12), 실기 TC-11·TC-12 합격(2026-11-04). FW_VER는 0004 유지(다음 작업 때 상향)
-- [ ] (선택) SHA-256 인증 — `sha256.c` 추가 + `SNMP_SHA256_SUPPORT`
+- [ ] SHA-256 인증 실기 확인 — 26/11/18 구현·빌드(미커밋): 7297 `v3 Auth Protocol`(0:SHA-1 기본, 1:SHA-256, 부팅 시 반영), 장비 웹·confWebApp 선택 추가. 시험: 7297=1 저장·재부팅 → 콘솔 `[SNMP] v3 user '..' ok (SHA-256, ...)` → `snmpget -v3 -l authPriv -a SHA-256 -x AES ...` 응답, `-a SHA`로는 거부 확인. Paessler SNMP Tester는 23.3.87 이상(SHA-2 지원)이면 대체 가능(SNMP v3·SHA-256·AES, 같은 User/비밀번호). 26/11/18 부팅 로그 `v3 user 'SV300USER' ok (SHA-256, authPriv)` 확인, 조회 시험 남음. 메모리맵 엑셀에 7297 행 추가 필요
+  - 근거(타사): 계측기(Socomec DIRIS D-50·APC 구형 NMC·Vertiv RPC2)는 MD5/SHA-1, UPS 카드(Eaton Network-M2 1.7.x~)는 SHA-256~512 지원·SHA-1 비권장 → 기본 SHA-1 유지 + SHA-256 선택
 
 ### 8.3 자사 MIB — 계측값 (§4.5-④, §5)
 - [ ] CycloneTCP MIB 모듈 확장(현재 `snmp_trap.c`의 SV300-MIB는 Trap 알림 객체만): `svCommon`, `svFeederTable`(미사용 피더 행 숨김), `svHarmTable`(1차 포함), `svAlarmTable`(Trap 유실 시 폴링 복구용)

@@ -136,7 +136,7 @@ web.c는 **실시간 대시보드**라 FTP 파일뷰어가 없음. 아래는 임
 - **Trend 파일 뷰어**(FTP \log_trend 72B 레코드).
 
 ## ☑️ 5. VQ(전압품질) 페이지 — web.c 반영 완료
-web.c에 **VQ 채널 탭 구현됨**(`/api/vq`·`bVq`, `meter[0].vq` Uud/Uuv, 커밋 93a72d9). Flicker(Pi/Pst/Plt)는 양쪽 미구현. (종합 비교표 1)의 ✅와 일치.
+web.c에 **VQ 채널 탭 구현됨**(`/api/vq`·`bVq`, `meter[0].vq` Uud/Uuv, 커밋 93a72d9). → **26/11/19 VQ·Monthly 탭 삭제**(1초 순간값·리포트용 원본이라 화면 가치 낮음, Modbus 블록은 유지). Flicker(Pi/Pst/Plt)는 양쪽 미구현. (종합 비교표 1)의 ✅와 일치.
 
 ---
 

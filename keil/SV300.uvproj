@@ -1894,6 +1894,11 @@
               <FilePath>..\cyclone_driver\cyclone_crypto\hash\sha1.c</FilePath>
             </File>
             <File>
+              <FileName>sha256.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_crypto\hash\sha256.c</FilePath>
+            </File>
+            <File>
               <FileName>hmac.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\cyclone_driver\cyclone_crypto\mac\hmac.c</FilePath>
@@ -3990,6 +3995,11 @@
               <FilePath>..\cyclone_driver\cyclone_crypto\hash\sha1.c</FilePath>
             </File>
             <File>
+              <FileName>sha256.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_crypto\hash\sha256.c</FilePath>
+            </File>
+            <File>
               <FileName>hmac.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\cyclone_driver\cyclone_crypto\mac\hmac.c</FilePath>
@@ -6084,6 +6094,11 @@
               <FileName>sha1.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\cyclone_driver\cyclone_crypto\hash\sha1.c</FilePath>
+            </File>
+            <File>
+              <FileName>sha256.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\cyclone_driver\cyclone_crypto\hash\sha256.c</FilePath>
             </File>
             <File>
               <FileName>hmac.c</FileName>

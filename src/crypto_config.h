@@ -58,8 +58,8 @@
 #define SHA1_SUPPORT ENABLED
 //SHA-224 hash support
 #define SHA224_SUPPORT DISABLED
-//SHA-256 hash support
-#define SHA256_SUPPORT DISABLED
+//SHA-256 hash support (SNMPv3 HMAC-SHA-256-192 인증)
+#define SHA256_SUPPORT ENABLED
 //SHA-384 hash support
 #define SHA384_SUPPORT DISABLED
 //SHA-512 hash support (Ed25519 서명링크 검증용)

@@ -2,7 +2,7 @@
  * SV300 SNMP 실행 설정
  *  - 커뮤니티·sysContact/Location·v3 사용자/비밀번호는 통신 설정(COMM_CFG, Modbus 7300~7395)에
  *    있다(2026-10-28, 구 snmp.d에서 이동). 웹·Modbus로 쓰고 Save Settings로 settings.dat에 저장.
- *  - 적용은 부팅 시(snmpCfgLoad → snmpCfgActive). v3 키(Ku)는 이때 비밀번호로 계산(SHA-1 1MB 해시).
+ *  - 적용은 부팅 시(snmpCfgLoad → snmpCfgActive). v3 키(Ku)는 이때 비밀번호로 계산(SHA-1/SHA-256 1MB 해시).
  *  - \system\snmp.d 에는 engineBoots만 저장(부팅마다 +1, RFC 3414). 공장초기화(INITDB) 시 삭제.
  *----------------------------------------------------------------------------*/
 #include <stdio.h>
@@ -29,14 +29,17 @@ static void setField(char *dst, const char *src)
 	dst[SNMP_CFG_STR_LEN] = '\0';
 }
 
-/* 비밀번호 → RFC 3414 키(Ku). 8자 미만이면 실패(USM 규칙) */
-static int genKey(const char *pass, uint8_t *key)
+/* SNMP_CFG 키 버퍼 = SnmpKey 크기(에이전트가 sizeof(SnmpKey)만큼 복사) */
+typedef char snmp_cfg_key_check[(sizeof(SnmpKey) == SNMP_CFG_KEY_LEN) ? 1 : -1];
+
+/* 비밀번호 → RFC 3414/7860 키(Ku). 8자 미만이면 실패(USM 규칙). 암호화 키도 인증 해시로 만든다 */
+static int genKey(SnmpAuthProtocol proto, const char *pass, uint8_t *key)
 {
 	SnmpKey k;
 
-	if (strlen(pass) < 8 || snmpGenerateKey(SNMP_AUTH_PROTOCOL_SHA1, pass, &k) != NO_ERROR)
+	if (strlen(pass) < 8 || snmpGenerateKey(proto, pass, &k) != NO_ERROR)
 		return -1;
-	memcpy(key, k.b, 20);
+	memcpy(key, k.b, SNMP_CFG_KEY_LEN);
 	return 0;
 }
 
@@ -55,10 +58,13 @@ void snmpCfgLoad(void)
 	if (snmpCfgRun.community[0] == '\0')
 		strcpy(snmpCfgRun.community, "public");
 
-	/* v3: 사용자와 인증 비밀번호가 있어야 사용. 암호화 단독은 USM상 불가 */
-	if (snmpCfgRun.v3User[0] != '\0' && genKey(c->snmpV3AuthPass, snmpCfgRun.v3AuthKey) == 0) {
+	/* v3: 사용자와 인증 비밀번호가 있어야 사용. 암호화 단독은 USM상 불가.
+	 * 인증 방식 = comm.snmpV3AuthProto(7297) 0:SHA-1, 1:SHA-256 */
+	snmpCfgRun.v3AuthProto = (c->snmpV3AuthProto == 1) ? SNMP_AUTH_PROTOCOL_SHA256 : SNMP_AUTH_PROTOCOL_SHA1;
+	if (snmpCfgRun.v3User[0] != '\0' &&
+		genKey((SnmpAuthProtocol)snmpCfgRun.v3AuthProto, c->snmpV3AuthPass, snmpCfgRun.v3AuthKey) == 0) {
 		snmpCfgRun.v3Flags = SNMP_V3F_AUTH;
-		if (genKey(c->snmpV3PrivPass, snmpCfgRun.v3PrivKey) == 0)
+		if (genKey((SnmpAuthProtocol)snmpCfgRun.v3AuthProto, c->snmpV3PrivPass, snmpCfgRun.v3PrivKey) == 0)
 			snmpCfgRun.v3Flags |= SNMP_V3F_PRIV;
 	}
 

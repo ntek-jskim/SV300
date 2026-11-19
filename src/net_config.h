@@ -188,9 +188,11 @@
 #define SNMP_AGENT_SUPPORT ENABLED
 //SNMP MIB module support
 #define SNMP_MIB_SUPPORT ENABLED
-//SNMPv3 (USM: HMAC-SHA-1 인증 + AES-128 암호화) — 허용 여부는 comm.snmpVer(7291)
+//SNMPv3 (USM: HMAC-SHA-1 또는 HMAC-SHA-256 인증 + AES-128 암호화) — 허용 여부는 comm.snmpVer(7291),
+//인증 방식은 comm.snmpV3AuthProto(7297, 0:SHA-1 기본, 1:SHA-256)
 #define SNMP_V3_SUPPORT ENABLED
-//v3는 HMAC-SHA-1 + AES-128만 사용 — 미사용 MD5 인증·DES 암호화 제외(코드 약 7KB, 필드 타깃 플래시 확보)
+#define SNMP_SHA256_SUPPORT ENABLED
+//v3는 HMAC-SHA-1/SHA-256 + AES-128만 사용 — 미사용 MD5 인증·DES 암호화 제외(코드 약 7KB, 필드 타깃 플래시 확보)
 #define SNMP_MD5_SUPPORT DISABLED
 #define SNMP_DES_SUPPORT DISABLED
 //system 그룹 버퍼 — 기본 16은 sysDescr("SV300 FW Vxx.xx (YY/MM/DD)")에 부족

@@ -21,6 +21,7 @@ extern void selectMeter(int id);
 extern void deSelectMeter(int id);
 extern uint32_t RTC_GetTimeUTC(void);
 #include "ade9000.h"	/* ADE_STATUS, getAdeStatus() */
+#include "snmp_cfg.h"	/* SNMPCFG */
 
 /* Local variables */
 static char in_line[160];
@@ -558,6 +559,28 @@ static void cmd_indiag(char *par) {
 	}
 }
 
+/* [26/11/18] SNMP 설정 확인: 동작값(부팅 시 적용) + 저장값(pdb, 비밀번호 포함) + 저장 대기값(웹·Modbus로 바꿨지만 미저장/재부팅 전) */
+static void snmpcfgPrint(const char *tag, const COMM_CFG *c) {
+	printf("[SNMPCFG %s] en=%d ver=%d(0:v1/v2c 1:v1/v2c/v3 2:v3only) authProto=%d(0:SHA-1 1:SHA-256) trap=%d trapIp=%d.%d.%d.%d\n",
+		tag, c->snmpEn, c->snmpVer, c->snmpV3AuthProto, c->trapEn,
+		c->trap_ip[0], c->trap_ip[1], c->trap_ip[2], c->trap_ip[3]);
+	printf("[SNMPCFG %s] community='%s' contact='%s' location='%s'\n", tag,
+		c->snmpCommunity, c->snmpContact, c->snmpLocation);
+	printf("[SNMPCFG %s] v3user='%s' authPass='%s'(%d) privPass='%s'(%d)\n", tag, c->snmpV3User,
+		c->snmpV3AuthPass, (int)strlen(c->snmpV3AuthPass), c->snmpV3PrivPass, (int)strlen(c->snmpV3PrivPass));
+}
+
+static void cmd_snmpcfg(char *par) {
+	const SNMP_CFG *a = snmpCfgActive();
+	printf("[SNMPCFG run ] v3user='%s' %s %s engineBoots=%u community='%s'\n", a->v3User,
+		(a->v3Flags & SNMP_V3F_AUTH) ? ((a->v3AuthProto == 4) ? "SHA-256" : "SHA-1") : "no-v3-user",
+		(a->v3Flags & SNMP_V3F_PRIV) ? "authPriv(AES-128)" : ((a->v3Flags & SNMP_V3F_AUTH) ? "authNoPriv" : ""),
+		(unsigned)a->engineBoots, a->community);
+	snmpcfgPrint("saved", &pdb->comm);
+	if (memcmp(&meter[0].setting.comm, &pdb->comm, sizeof(COMM_CFG)) != 0)
+		snmpcfgPrint("edit ", &meter[0].setting.comm);	/* 통신 설정 중 무언가 저장 대기 — SNMP 외 항목일 수도 있음 */
+}
+
 static void cmd_clrvgain(char *par) {
 	clrGainU(0);
 }
@@ -882,6 +905,71 @@ void fwEndWrite(void *fh, int ok) {
 	if (!ok) fdelete("\\usrApp.bin");	/* 실패/미완 업로드 → 부분파일 삭제(부트로더 오굽기 방지) */
 }
 
+/* [26/11/19] 웹 사이드바 로고(LOGO_FILE) — 8바이트 헤더(magic 'LOGO', ver) + 이미지.
+   web.c 가 HTTP 청크 단위로 호출하며, 각 호출이 fsFileLock 을 짧게만 잡는다(네트워크 대기 중 잠금 없음). */
+#define LOGO_MAGIC	0x4F474F4CUL	/* "LOGO" (LE) */
+void *logoOpenRead(uint32_t *pver) {
+	FILE *fp;
+	uint32_t hdr[2] = {0, 0};
+	fsFileLock();
+	fp = fopen(LOGO_FILE, "rb");
+	if (fp != NULL && (fread(hdr, 1, sizeof(hdr), fp) != sizeof(hdr) || hdr[0] != LOGO_MAGIC)) {
+		fclose(fp);
+		fp = NULL;
+	}
+	fsFileUnlock();
+	if (fp != NULL && pver) *pver = hdr[1];
+	return (void *)fp;
+}
+int logoRead(void *fh, void *buf, int len) {
+	int n;
+	if (fh == NULL) return -1;
+	fsFileLock();
+	n = (int)fread(buf, 1, (unsigned)len, (FILE *)fh);
+	fsFileUnlock();
+	return n;
+}
+void logoClose(void *fh) {
+	if (fh == NULL) return;
+	fsFileLock();
+	fclose((FILE *)fh);
+	fsFileUnlock();
+}
+void *logoBeginWrite(uint32_t ver) {
+	FILE *fp;
+	uint32_t hdr[2];
+	hdr[0] = LOGO_MAGIC;
+	hdr[1] = ver;
+	fsFileLock();
+	fp = fopen(LOGO_FILE, "wb");
+	if (fp != NULL && fwrite(hdr, 1, sizeof(hdr), fp) != sizeof(hdr)) {
+		fclose(fp);
+		fdelete(LOGO_FILE);
+		fp = NULL;
+	}
+	fsFileUnlock();
+	return (void *)fp;
+}
+int logoWrite(void *fh, const void *buf, int len) {
+	int n;
+	if (fh == NULL) return -1;
+	fsFileLock();
+	n = (int)fwrite(buf, 1, (unsigned)len, (FILE *)fh);
+	fsFileUnlock();
+	return n;
+}
+void logoEndWrite(void *fh, int ok) {
+	fsFileLock();
+	if (fh) fclose((FILE *)fh);
+	if (!ok) fdelete(LOGO_FILE);
+	fsFileUnlock();
+}
+void logoDelete(void) {
+	fsFileLock();
+	fdelete(LOGO_FILE);
+	fsFileUnlock();
+}
+
 static void cmd_reboot(char *par) {
 	reqReboot(0x1234);	// smb_rtu.c에 선언
 }
@@ -1123,6 +1211,7 @@ static const SCMD cmd[] = {
 	"PH", cmd_phgain,
 	"WG", cmd_wgain,
 	"INDIAG", cmd_indiag,		/* In(ZCT) 계측 경로 진단 */
+	"SNMPCFG", cmd_snmpcfg,		/* SNMP 설정(비밀번호 포함) 확인 */
 	"CLRVG", cmd_clrvgain,
 	"CLRIG", cmd_clrigain,
 	"CLRPH", cmd_clrph,

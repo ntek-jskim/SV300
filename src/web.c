@@ -7,7 +7,8 @@
  *           쓰기(명령/설정)는 admin 권한 게이트(서버측 재확인).
  *   - Dashboard: /api/dashboard?ch=N(CHn 순시, CH1~3 선택) + /api/sv300/events(3CH 알람/이벤트).
  *   - 데이터: meter[id].meter(METERING) 및 meter[id].alarm/alist/elist 직렬화.
- *   - 정적파일은 S0:(SPI Flash) 폴백(HTTP_SERVER_FS_SUPPORT).
+ *   - 정적파일 폴백 없음(26/11/19): 미처리 경로는 404. 종전엔 S0:(SPI NOR) 루트 전체가 무인증 노출
+ *     (예: /system/websec.d 세션 서명키). 화면은 INDEX_HTML_GZ 내장, 장비 파일 전송은 FTP 전용.
  *
  *  ★ 제한 원칙 (confWebApp과 역할 분담 — 장치 실시간 계측이 최우선):
  *   1. CSV/응답은 RAM 라이브 데이터만(web.c가 이미 읽는 실시간). FS 로그파일 파싱 금지.
@@ -809,7 +810,10 @@ static int webNch(void) { int n = getHwCh(); return (n > METER_CH_COUNT) ? METER
 
 /* GET /api/feeders — 논리 피더(buildFeederMap, 최대 MAX_CH)별 계측 + 전력·에너지
  *  3상 피더: 미터 통째. 단상 피더: CT 슬롯(slot) 값을 wiring 상(vphase) 자리에 넣고 나머지 상은 0
- *  (Simple 맵 smpFill1ph 와 동일 규칙, Ig/Upp/불평형은 단상에서 0). */
+ *  (Simple 맵 smpFill1ph 와 동일 규칙, Ig/Upp/불평형은 단상에서 0).
+ *  [26/11/19] Feeder 상태 칸(SV900 Channel Status 형식)용으로 MAX_CH 개 전부 출력:
+ *   미등록(NOT_USED·칩 부족)은 {n,wiring,reg:0} 만. 등록 피더는 reg:1 + cb(=Simple 50021 cbStatus 규칙:
+ *   평균 상전류 >= 시동전류) + 배정(ch=칩 1~, ct=CT슬롯 1~, vph=단상 전압상 0~2 / 3상 -1) + 에너지. */
 static error_t apiFeeders(HttpConnection *c)
 {
 	char b[256];
@@ -821,49 +825,72 @@ static error_t apiFeeders(HttpConnection *c)
 	w(c, "{\"ok\":true,\"feeders\":[");
 	for (f = 0; f < MAX_CH; f++) {
 		METERING *m;
+		ENERGY_REG64 *e64;
 		int id = map[f].meter, s = map[f].slot, g;	/* g: 에너지 그룹(0=Total, 1+slot=상) */
 		float u[3] = {0}, upp[3] = {0}, cur[3] = {0}, thdu[3] = {0}, thdi[3] = {0}, tddi[3] = {0};
-		float ig = 0, pf, p, q, sv, uunb = 0, iunb = 0;
-		double kwh, kwhM;
+		float uang[3] = {0}, iang[3] = {0};	/* 벡터도 각도(°) — Simple 맵 Uangle/Iangle 과 동일 규칙 */
+		float ig = 0, pf, p, q, sv, uunb = 0, iunb = 0, iavg;
 
-		if (!map[f].valid || id >= webNch()) continue;	/* NOT_USED·미배정 피더 제외 */
+		if (!map[f].valid || id >= webNch()) {		/* NOT_USED·미배정 피더 → 상태 칸 Unregistered */
+			snprintf(b, sizeof(b), "%s{\"n\":%d,\"wiring\":%u,\"reg\":0}",
+				first ? "" : ",", f + 1, (unsigned)pdb->pt[f].wiring);
+			w(c, b);
+			first = 0;
+			continue;
+		}
 		m = &meter[id].meter;
 
 		if (map[f].is3ph) {
 			for (k = 0; k < 3; k++) {
 				u[k] = m->U[k]; upp[k] = m->Upp[k]; cur[k] = m->I[k];
 				thdu[k] = m->THD_U[k]; thdi[k] = m->THD_I[k]; tddi[k] = m->TDD_I[k];
+				uang[k] = m->Uangle[k]; iang[k] = m->Iangle[k];
 			}
 			ig = m->Ig;	/* 맵 261110: 피더 In→Ig */
 			pf = m->PF[3]; p = m->P[3]; q = m->Q[3]; sv = m->S[3];
 			uunb = m->Ubal[0]; iunb = m->Ibal[0];
+			iavg = m->I[3];
 			g = 0;
 		} else {
 			k = map[f].vphase;	/* redirect로 U[slot]가 해당 상 전압 */
 			u[k] = m->U[s]; cur[k] = m->I[s];
 			thdu[k] = m->THD_U[s]; thdi[k] = m->THD_I[s]; tddi[k] = m->TDD_I[s];
+			uang[k] = m->Uangle[s]; iang[k] = m->Iangle[s];	/* = modbus.c smpFill1ph */
 			pf = m->PF[s]; p = m->P[s]; q = m->Q[s]; sv = m->S[s];
+			iavg = m->I[s];
 			g = 1 + s;
 		}
-		kwh  = (double)meter[id].egy.Ereg64.cell[g][0][0] / 1000.0;   /* KWH,IMPORT (Wh→kWh) */
-		kwhM = (double)meter[id].egy.Ereg32[1].cell[g][0][0] * 0.1;   /* THIS_MONTH (0.1kWh) */
+		e64 = &meter[id].egy.Ereg64;
 
 		snprintf(b, sizeof(b),
-			"%s{\"n\":%d,\"wiring\":%u,\"freq\":%.2f,"
-			"\"u\":[%.1f,%.1f,%.1f],\"upp\":[%.1f,%.1f,%.1f],"
-			"\"i\":[%.2f,%.2f,%.2f],\"ig\":%.2f,",
-			first ? "" : ",", f + 1, (unsigned)pdb->pt[f].wiring, m->Freq,
-			u[0], u[1], u[2], upp[0], upp[1], upp[2],
-			cur[0], cur[1], cur[2], ig);
+			"%s{\"n\":%d,\"wiring\":%u,\"reg\":1,\"cb\":%u,\"ch\":%d,\"ct\":%d,\"vph\":%d,\"freq\":%.2f,"
+			"\"u\":[%.1f,%.1f,%.1f],\"upp\":[%.1f,%.1f,%.1f],",
+			first ? "" : ",", f + 1, (unsigned)pdb->pt[f].wiring,
+			(unsigned)((iavg >= meter[id].cntl.I_start) ? 1 : 0),	/* = modbus.c copySimpleMap cbStatus */
+			id + 1, map[f].is3ph ? 0 : s + 1, (int)map[f].vphase, m->Freq,
+			u[0], u[1], u[2], upp[0], upp[1], upp[2]);
+		w(c, b);
+		snprintf(b, sizeof(b), "\"i\":[%.2f,%.2f,%.2f],\"ig\":%.2f,"
+			"\"uang\":[%.1f,%.1f,%.1f],\"iang\":[%.1f,%.1f,%.1f],",
+			cur[0], cur[1], cur[2], ig,
+			uang[0], uang[1], uang[2], iang[0], iang[1], iang[2]);
+		w(c, b);
+		/* 누적 에너지(Ereg64, Wh→kWh) — 화면이 Total(I+E)·Net(I−E)를 계산 */
+		snprintf(b, sizeof(b),
+			"\"kwh\":%.2f,\"kwh_e\":%.2f,\"kvarh_i\":%.2f,\"kvarh_e\":%.2f,\"kvah\":%.2f,",
+			(double)e64->cell[g][EGY_MODE_KWH][EGY_SIGN_IMPORT] / 1000.0,
+			(double)e64->cell[g][EGY_MODE_KWH][EGY_SIGN_EXPORT] / 1000.0,
+			(double)e64->cell[g][EGY_MODE_KVARH][EGY_SIGN_IMPORT] / 1000.0,
+			(double)e64->cell[g][EGY_MODE_KVARH][EGY_SIGN_EXPORT] / 1000.0,
+			(double)e64->cell[g][EGY_MODE_KVAH][EGY_SIGN_IMPORT] / 1000.0);
 		w(c, b);
 		snprintf(b, sizeof(b),
 			"\"thdu\":[%.1f,%.1f,%.1f],\"thdi\":[%.1f,%.1f,%.1f],\"tddi\":[%.1f,%.1f,%.1f],"
-			"\"pf\":%.3f,\"p\":%.3f,\"q\":%.3f,\"s\":%.3f,\"uunb\":%.1f,\"iunb\":%.1f,"
-			"\"kwh\":%.2f,\"kwh_m\":%.2f,\"st\":%u}",
+			"\"pf\":%.3f,\"p\":%.3f,\"q\":%.3f,\"s\":%.3f,\"uunb\":%.1f,\"iunb\":%.1f,\"st\":%u}",
 			thdu[0], thdu[1], thdu[2], thdi[0], thdi[1], thdi[2],
 			tddi[0], tddi[1], tddi[2],
 			pf, p / 1000.0f, q / 1000.0f, sv / 1000.0f,
-			uunb, iunb, kwh, kwhM, (unsigned)(m->meterStatus ? 1 : 0));
+			uunb, iunb, (unsigned)(m->meterStatus ? 1 : 0));
 		w(c, b);
 		first = 0;
 	}
@@ -1165,28 +1192,6 @@ static error_t apiHarmonics(HttpConnection *c)
 	return httpCloseStream(c);
 }
 
-/* GET /api/vq — 전압품질: 전압편차(Under/Over Deviation·Value) CH1만(전압 M0~M2 공유).
- *  Flicker(Pi/Pst/Plt)는 미구현이라 미포함. meter[0].vq(=Quality.c에서 채움). */
-static error_t apiVq(HttpConnection *c)
-{
-	char b[48];
-	int ph;
-	VQDATA *vq = &meter[0].vq;
-
-	if (beginJson(c)) return ERROR_WRITE_FAILED;
-	w(c, "{\"ok\":true,\"rows\":[");
-	w(c, "{\"name\":\"U Under Deviation\",\"unit\":\"%\",\"l\":[");
-	for (ph = 0; ph < 3; ph++) { snprintf(b, sizeof(b), "%s%.3f", ph ? "," : "", vq->Uud[ph]); w(c, b); }
-	w(c, "]},{\"name\":\"U Under Value\",\"unit\":\"V\",\"l\":[");
-	for (ph = 0; ph < 3; ph++) { snprintf(b, sizeof(b), "%s%.3f", ph ? "," : "", vq->Uuv[ph]); w(c, b); }
-	w(c, "]},{\"name\":\"U Over Deviation\",\"unit\":\"%\",\"l\":[");
-	for (ph = 0; ph < 3; ph++) { snprintf(b, sizeof(b), "%s%.3f", ph ? "," : "", vq->Uod[ph]); w(c, b); }
-	w(c, "]},{\"name\":\"U Over Value\",\"unit\":\"V\",\"l\":[");
-	for (ph = 0; ph < 3; ph++) { snprintf(b, sizeof(b), "%s%.3f", ph ? "," : "", vq->Uov[ph]); w(c, b); }
-	w(c, "]}]}");
-	return httpCloseStream(c);
-}
-
 /* GET /api/waveform — 채널별 V/I 파형(상별 160샘플). wv는 read-trigger라 갱신 후 직렬화 */
 static error_t apiWaveform(HttpConnection *c)
 {
@@ -1231,18 +1236,41 @@ static void enEmit(HttpConnection *c, int first, int pass, float v0, float v1, f
 	w(c, b);
 }
 
-/* ITIC 목록(itic=전압 sag/swell/intr, itic2=과도) 현재 페이지 직렬화 */
-static void iticEmit(HttpConnection *c, ITIC_EVT_LIST *L)
+/* [26/11/19] 알람/이벤트 이력은 RAM 링버퍼(alarmFifo/eventFifo, 채널당 1024건)에서 최신순으로 직접 읽는다.
+ *  Modbus 페이지 창(alist/elist/itic·itic2, 명령 7836~7853)의 커서를 웹이 움직이지 않으므로 상위 시스템 폴링과 충돌 없음.
+ *  fr·count 는 시작 시 한 번만 읽는다 — 기록 도중이면 경계 1건이 어긋날 수 있고 다음 폴링에서 바로잡힌다. */
+#define IS_ITIC_EVT(t)	((t) >= E_SAG && (t) <= E_RVC)	/* 전압 ITIC 대상(alarm.c iticTypeMatches 와 동일) */
+
+static void fifoSnap(int fr, int cnt, int cap, int *pfr, int *pcnt)
 {
-	char b[160];
-	int k, m = 0, first = 1, ph, useMin;
-	for (k = 0; k < N_ITIC_LIST && m < N_ITIC_LIST; k++) {
-		ITIC_LOG *e = &L->elog[k];
-		float lv, mag, pct;
-		if (e->type == 0) continue;
-		lv = e->level[0];
-		if (e->level[1] > lv) lv = e->level[1];
-		if (e->level[2] > lv) lv = e->level[2];
+	if (cnt > cap) cnt = cap;
+	if (cnt < 0) cnt = 0;
+	if (fr >= cap) fr = 0;
+	*pfr = fr; *pcnt = cnt;
+}
+
+/* 최신순 k번째(0=최신) 슬롯 — fr=다음 기록 위치 */
+static int ringNewest(int fr, int k, int cap)
+{
+	int ix = fr - 1 - k;
+	while (ix < 0) ix += cap;
+	return ix;
+}
+
+/* 이벤트 1건 JSON. level=3상 최대, chn>0 이면 채널번호 포함, withPct 면 ITIC 크기% 포함 */
+static void evRowEmit(HttpConnection *c, const ITIC_LOG *e, int first, int chn, int withPct)
+{
+	char b[192];
+	int p, ph, useMin;
+	float lv = e->level[0], mag, pct;
+
+	if (e->level[1] > lv) lv = e->level[1];
+	if (e->level[2] > lv) lv = e->level[2];
+	p = snprintf(b, sizeof(b), "%s{", first ? "" : ",");
+	if (chn) p += snprintf(b + p, sizeof(b) - p, "\"chn\":%d,", chn);
+	p += snprintf(b + p, sizeof(b) - p, "\"type\":%u,\"ts\":%u,\"dur\":%u,\"mask\":%u,\"level\":%.2f",
+		(unsigned)e->type, (unsigned)e->startTs, (unsigned)e->duration, (unsigned)e->mask, lv);
+	if (withPct) {
 		/* ITIC 크기%: sag/intr=잔류(min), 그 외(swell/oc/rvc)=peak(max), mask 참여 상만.
 		 * Y축(공칭 %)에 찍기 위해 정격(norm=PT1/CT1)으로 정규화 (norm=0이면 raw) */
 		useMin = (e->type == E_SAG || e->type == E_sINTR || e->type == E_lINTR);
@@ -1255,12 +1283,10 @@ static void iticEmit(HttpConnection *c, ITIC_EVT_LIST *L)
 		}
 		if (mag < 0.0f) mag = lv;
 		pct = (e->norm > 0.0f) ? (mag / e->norm * 100.0f) : mag;
-		snprintf(b, sizeof(b),
-			"%s{\"type\":%u,\"ts\":%u,\"dur\":%u,\"mask\":%u,\"level\":%.2f,\"pct\":%.1f}",
-			first ? "" : ",", (unsigned)e->type, (unsigned)e->startTs,
-			(unsigned)e->duration, (unsigned)e->mask, lv, pct);
-		w(c, b); first = 0; m++;
+		p += snprintf(b + p, sizeof(b) - p, ",\"pct\":%.1f", pct);
 	}
+	snprintf(b + p, sizeof(b) - p, "}");
+	w(c, b);
 }
 
 static error_t apiEn50160(HttpConnection *c)
@@ -1293,58 +1319,14 @@ static error_t apiEn50160(HttpConnection *c)
 		w(c, b);
 #undef ENP
 	}
-	/* CH1 ITIC 목록 — 웹은 itic2 창 사용(외부서버는 itic 창을 Modbus로 직접 사용) */
-	w(c, "],\"itic2\":[");
-	iticEmit(c, &meter[0].itic2);
+	/* ITIC 목록은 /api/evlog?kind=2 (링버퍼 직접 조회)로 분리 */
 	w(c, "]}");
 	return httpCloseStream(c);
 }
 
-/* GET /api/monthly — 채널별 10분평균(log): 스칼라 + 고조파(9계열×24차, %=raw/100) */
-static void hmEmit(HttpConnection *c, const char *label, uint16_t *a, int first)
-{
-	char b[48];
-	int k;
-	snprintf(b, sizeof(b), "%s{\"label\":\"%s\",\"vals\":[", first ? "" : ",", label);
-	w(c, b);
-	for (k = 0; k < 24; k++) { snprintf(b, sizeof(b), "%s%.1f", k ? "," : "", a[k] / 100.0f); w(c, b); }
-	w(c, "]}");
-}
-
-static error_t apiMonthly(HttpConnection *c)
-{
-	char b[224];
-	int i;
-
-	if (beginJson(c)) return ERROR_WRITE_FAILED;
-	w(c, "{\"ok\":true,\"ch\":[");
-	for (i = 0; i < webNch(); i++) {
-		LOG_DATA *L = &meter[i].log;
-		snprintf(b, sizeof(b), "%s{\"n\":%d,\"ts\":%u,\"s\":{", i ? "," : "", i + 1, (unsigned)L->ts);
-		w(c, b);
-		snprintf(b, sizeof(b),
-			"\"U1\":%.2f,\"U2\":%.2f,\"U3\":%.2f,\"U THD1\":%.2f,\"U THD2\":%.2f,\"U THD3\":%.2f,\"U Unbal\":%.2f,",
-			L->U[0], L->U[1], L->U[2], L->Uthd[0], L->Uthd[1], L->Uthd[2], L->Ubal[0]);
-		w(c, b);
-		snprintf(b, sizeof(b),
-			"\"I1\":%.2f,\"I2\":%.2f,\"I3\":%.2f,\"In\":%.2f,\"I THD1\":%.2f,\"I THD2\":%.2f,\"I THD3\":%.2f,\"I TDD1\":%.2f,\"I TDD2\":%.2f,\"I TDD3\":%.2f,\"I Unbal\":%.2f,",
-			L->I[0], L->I[1], L->I[2], L->In, L->Ithd[0], L->Ithd[1], L->Ithd[2], L->Itdd[0], L->Itdd[1], L->Itdd[2], L->Ibal[0]);
-		w(c, b);
-		snprintf(b, sizeof(b),
-			"\"P\":%.2f,\"Q\":%.2f,\"S\":%.2f,\"PF\":%.3f,\"K-factor1\":%.2f,\"temperature\":%.1f},\"harm\":[",
-			L->kw[0], L->kvar[0], L->kVA, L->PF, L->kf[0], L->temp[0]);
-		w(c, b);
-		hmEmit(c, "V1",  L->Uhd[0],   1); hmEmit(c, "V2",  L->Uhd[1],   0); hmEmit(c, "V3",  L->Uhd[2],   0);
-		hmEmit(c, "V12", L->Upphd[0], 0); hmEmit(c, "V23", L->Upphd[1], 0); hmEmit(c, "V31", L->Upphd[2], 0);
-		hmEmit(c, "I1",  L->Ihd[0],   0); hmEmit(c, "I2",  L->Ihd[1],   0); hmEmit(c, "I3",  L->Ihd[2],   0);
-		w(c, "]}");
-	}
-	w(c, "]}");
-	return httpCloseStream(c);
-}
-
-/* GET /api/sv300/events — 3CH 알람상태/알람로그/이벤트로그/요약 */
-#define EV_CAP  32   /* 각 목록 응답 상한 = 페이지 크기(N_ALARM_LIST/N_EVENT_LIST) */
+/* GET /api/sv300/events — 3CH 알람상태/알람로그/이벤트로그/요약 (Dashboard)
+ *  로그는 링버퍼 최신 EV_CAP 건(위 fifoSnap/ringNewest) — Modbus 페이지 창 위치와 무관하게 항상 최신 */
+#define EV_CAP  32   /* 채널별 목록 응답 상한 */
 
 static error_t apiEvents(HttpConnection *c)
 {
@@ -1368,51 +1350,45 @@ static error_t apiEvents(HttpConnection *c)
 		}
 	}
 
-	/* alarm log: alist.alog[count] */
+	/* alarm log: 링버퍼 최신 EV_CAP 건 */
 	w(c, "],\"alarmlog\":[");
 	first = 1;
 	for (i = 0; i < webNch(); i++) {
-		ALARM_LIST *L = &meter[i].alist;
-		int cnt = L->count; if (cnt > N_ALARM_LIST) cnt = N_ALARM_LIST;
-		m = 0;
-		for (k = 0; k < cnt && m < EV_CAP; k++) {
-			ALARM_LOG *g = &L->alog[k];
+		ALARM_FIFO *F = &meter[i].alarmFifo;
+		int fr, cnt;
+		fifoSnap(F->fr, F->count, N_ALARM_FIFO, &fr, &cnt);
+		for (k = 0; k < cnt && k < EV_CAP; k++) {
+			ALARM_LOG *g = &F->alog[ringNewest(fr, k, N_ALARM_FIFO)];
 			snprintf(b, sizeof(b),
 				"%s{\"chn\":%d,\"chan\":%u,\"set\":%u,\"value\":%.2f,\"ts\":%u}",
 				first ? "" : ",", i + 1, (unsigned)g->chan, (unsigned)g->status,
 				g->value, (unsigned)g->ts);
-			w(c, b); first = 0; m++;
+			w(c, b); first = 0;
 		}
 	}
 
-	/* event log: elist.elog[count] */
+	/* event log: 링버퍼 최신 EV_CAP 건 */
 	w(c, "],\"eventlog\":[");
 	first = 1;
 	for (i = 0; i < webNch(); i++) {
-		EVENT_LIST *E = &meter[i].elist;
-		int cnt = E->count; if (cnt > N_EVENT_LIST) cnt = N_EVENT_LIST;
-		m = 0;
-		for (k = 0; k < cnt && m < EV_CAP; k++) {
-			EVENT_LOG *e = &E->elog[k];
-			float lv = e->level[0];
-			if (e->level[1] > lv) lv = e->level[1];
-			if (e->level[2] > lv) lv = e->level[2];
-			snprintf(b, sizeof(b),
-				"%s{\"chn\":%d,\"type\":%u,\"ts\":%u,\"dur\":%u,\"mask\":%u,\"level\":%.2f}",
-				first ? "" : ",", i + 1, (unsigned)e->type, (unsigned)e->startTs,
-				(unsigned)e->duration, (unsigned)e->mask, lv);
-			w(c, b); first = 0; m++;
+		EVENT_FIFO *F = &meter[i].eventFifo;
+		int fr, cnt;
+		fifoSnap(F->fr, F->count, N_EVENT_FIFO, &fr, &cnt);
+		for (k = 0; k < cnt && k < EV_CAP; k++) {
+			evRowEmit(c, &F->elog[ringNewest(fr, k, N_EVENT_FIFO)], first, i + 1, 0);
+			first = 0;
 		}
 	}
 
-	/* summary: 이벤트 로그를 타입별 집계(표시 로그와 일치·confWebApp 동일). pqEvtCnt는 부팅 시 리셋되어 로그와 어긋나므로 미사용 */
+	/* summary: 표시한 이벤트 로그(채널별 최신 EV_CAP 건)를 타입별 집계(confWebApp 동일). pqEvtCnt는 부팅 시 리셋되어 로그와 어긋나므로 미사용 */
 	{
 		unsigned sag = 0, sw = 0, sintr = 0, lintr = 0, oc = 0;
 		for (i = 0; i < webNch(); i++) {
-			EVENT_LIST *E = &meter[i].elist;
-			int cnt = E->count; if (cnt > N_EVENT_LIST) cnt = N_EVENT_LIST;
-			for (k = 0; k < cnt; k++) {
-				switch (E->elog[k].type) {
+			EVENT_FIFO *F = &meter[i].eventFifo;
+			int fr, cnt;
+			fifoSnap(F->fr, F->count, N_EVENT_FIFO, &fr, &cnt);
+			for (k = 0; k < cnt && k < EV_CAP; k++) {
+				switch (F->elog[ringNewest(fr, k, N_EVENT_FIFO)].type) {
 				case E_SAG:   sag++;   break;
 				case E_SWELL: sw++;    break;
 				case E_sINTR: sintr++; break;
@@ -1427,6 +1403,76 @@ static error_t apiEvents(HttpConnection *c)
 			sag, sw, sintr, lintr, oc);
 		w(c, b);
 	}
+	return httpCloseStream(c);
+}
+
+/* [26/11/19] GET /api/evlog?kind=0|1|2&ch=N&off=0&num=50 — Channel Alarm/Event/Report(ITIC) 탭 이력.
+ *  kind 0=알람(활성 status 포함), 1=이벤트, 2=ITIC(CH1 전압 sag/swell/intr/RVC). ch 생략이면 전 채널(ITIC은 CH1).
+ *  최신순 off번째부터 num건(최대 EVLOG_NUM_MAX). total=전체 건수(ITIC은 대상 타입만) — 웹은 스크롤 시 이어받는다. */
+#define EVLOG_NUM_MAX 64
+
+static error_t apiEvLog(HttpConnection *c)
+{
+	char b[128];
+	const char *q = c->request.queryString;
+	int kind = qparam(q, "kind"), ch = qparam(q, "ch"), off = qparam(q, "off"), num = qparam(q, "num");
+	int i, i0, i1, k, fr, cnt, first;
+
+	if (kind < 0 || kind > 2) kind = 1;
+	if (off < 0) off = 0;
+	if (num <= 0 || num > EVLOG_NUM_MAX) num = EVLOG_NUM_MAX;
+	if (kind == 2)                          { i0 = 0; i1 = 1; }	/* 전압 공통(M0) */
+	else if (ch >= 1 && ch <= webNch())     { i0 = ch - 1; i1 = ch; }
+	else                                    { i0 = 0; i1 = webNch(); }
+
+	if (beginJson(c)) return ERROR_WRITE_FAILED;
+	w(c, "{\"ok\":true,\"ch\":[");
+	for (i = i0; i < i1; i++) {
+		first = 1;
+		if (kind == 0) {
+			ALARM_FIFO *F = &meter[i].alarmFifo;
+			ALARM_STATUS *a = &meter[i].alarm;
+			fifoSnap(F->fr, F->count, N_ALARM_FIFO, &fr, &cnt);
+			snprintf(b, sizeof(b), "%s{\"n\":%d,\"total\":%d,\"status\":[", i > i0 ? "," : "", i + 1, cnt);
+			w(c, b);
+			for (k = 0; k < 32; k++) {
+				if (!a->st[k].status) continue;
+				snprintf(b, sizeof(b), "%s{\"chan\":%u,\"count\":%u}", first ? "" : ",",
+					(unsigned)a->st[k].chan, (unsigned)a->st[k].count);
+				w(c, b); first = 0;
+			}
+			w(c, "],\"rows\":[");
+			first = 1;
+			for (k = off; k < cnt && k < off + num; k++) {
+				ALARM_LOG *g = &F->alog[ringNewest(fr, k, N_ALARM_FIFO)];
+				snprintf(b, sizeof(b), "%s{\"chan\":%u,\"set\":%u,\"value\":%.2f,\"ts\":%u}",
+					first ? "" : ",", (unsigned)g->chan, (unsigned)g->status, g->value, (unsigned)g->ts);
+				w(c, b); first = 0;
+			}
+		}
+		else {
+			EVENT_FIFO *F = &meter[i].eventFifo;
+			int total, seen = 0, m = 0;
+			fifoSnap(F->fr, F->count, N_EVENT_FIFO, &fr, &cnt);
+			total = cnt;
+			if (kind == 2) {
+				total = 0;
+				for (k = 0; k < cnt; k++)
+					if (IS_ITIC_EVT(F->elog[ringNewest(fr, k, N_EVENT_FIFO)].type)) total++;
+			}
+			snprintf(b, sizeof(b), "%s{\"n\":%d,\"total\":%d,\"rows\":[", i > i0 ? "," : "", i + 1, total);
+			w(c, b);
+			for (k = 0; k < cnt && m < num; k++) {
+				ITIC_LOG *e = &F->elog[ringNewest(fr, k, N_EVENT_FIFO)];
+				if (kind == 2 && !IS_ITIC_EVT(e->type)) continue;
+				if (seen++ < off) continue;
+				evRowEmit(c, e, first, 0, kind == 2);
+				first = 0; m++;
+			}
+		}
+		w(c, "]}");
+	}
+	w(c, "]}");
 	return httpCloseStream(c);
 }
 
@@ -1497,6 +1543,130 @@ static error_t apiFwUpload(HttpConnection *c)
 	snprintf(buf, sizeof(buf), "{\"ok\":true,\"size\":%u,\"valid\":%s,\"err\":%d}",
 	         (unsigned)got, (rc == 0) ? "true" : "false", rc);
 	w(c, buf);
+	return httpCloseStream(c);
+}
+
+/* [26/11/19] 사이드바 로고 — LOGO_FILE(NOR, FS.c logo*). 유무·버전은 RAM 캐시라 화면 갱신마다 FS 를 조회하지 않는다.
+ *  형식은 확장자가 아니라 파일 시그니처로 판별: PNG/JPEG/GIF/WEBP 만 허용
+ *  (SVG 는 스크립트를 담을 수 있어 제외 — 주소를 직접 열면 장비 웹 권한으로 실행될 위험). 없으면 웹이 글자 'SV300' 표시 */
+static int8_t   s_logoState = -1;	/* -1: 미확인, 0: 없음, 1: 있음 */
+static uint32_t s_logoVer;
+
+static const char *logoMime(const uint8_t *b, size_t n)
+{
+	if (n >= 8 && b[0] == 0x89 && b[1] == 'P' && b[2] == 'N' && b[3] == 'G') return "image/png";
+	if (n >= 3 && b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF)          return "image/jpeg";
+	if (n >= 6 && !memcmp(b, "GIF8", 4))                                   return "image/gif";
+	if (n >= 12 && !memcmp(b, "RIFF", 4) && !memcmp(b + 8, "WEBP", 4))     return "image/webp";
+	return NULL;
+}
+
+/* GET /api/logoinfo — {"ok":true,"logo":0|1,"v":버전} (첫 호출 때만 파일 헤더 확인) */
+static error_t apiLogoInfo(HttpConnection *c)
+{
+	char b[64];
+	if (s_logoState < 0) {
+		void *fh = logoOpenRead(&s_logoVer);
+		s_logoState = fh ? 1 : 0;
+		logoClose(fh);
+	}
+	if (beginJson(c)) return ERROR_WRITE_FAILED;
+	snprintf(b, sizeof(b), "{\"ok\":true,\"logo\":%d,\"v\":%u}", s_logoState == 1 ? 1 : 0,
+		(unsigned)(s_logoState == 1 ? s_logoVer : 0));
+	w(c, b);
+	return httpCloseStream(c);
+}
+
+/* GET /api/logo — 이미지 스트림(512B 단위, 읽을 때만 FS 잠금). 웹은 ?v=버전 을 붙여 요청 → 브라우저 캐시 */
+static error_t apiLogoGet(HttpConnection *c)
+{
+	uint8_t buf[512];
+	const char *mime;
+	void *fh = logoOpenRead(NULL);
+	int n;
+	error_t e;
+
+	if (fh == NULL)
+		return webJsonStatus(c, 404, "{\"ok\":false,\"error\":\"no logo\"}");
+	n = logoRead(fh, buf, sizeof(buf));
+	mime = (n > 0) ? logoMime(buf, (size_t)n) : NULL;
+	if (mime == NULL) {
+		logoClose(fh);
+		return webJsonStatus(c, 404, "{\"ok\":false,\"error\":\"bad logo\"}");
+	}
+	httpInitResponseHeader(c);
+	c->response.contentType     = mime;
+	c->response.chunkedEncoding = TRUE;
+	c->response.noCache         = FALSE;
+	e = httpWriteHeader(c);
+	while (!e && n > 0) {
+		e = httpWriteStream(c, buf, (size_t)n);
+		if (!e) n = logoRead(fh, buf, sizeof(buf));
+	}
+	logoClose(fh);
+	if (e) return e;
+	return httpCloseStream(c);
+}
+
+/* POST /api/logo — admin, 원시바디(이미지). 크기·시그니처를 먼저 확인하고(불량이면 기존 로고 유지) LOGO_FILE 에 기록.
+ *  기록 중 실패하면 파일을 지워 기본 글자 로고로 돌아간다. */
+static error_t apiLogoUpload(HttpConnection *c)
+{
+	uint8_t buf[512];
+	size_t total, got = 0, r, want;
+	void *fh;
+	int ok;
+	uint32_t ver;
+	char b[64];
+
+	if (webRole(c) != ROLE_ADMIN)
+		return webJsonStatus(c, 403, "{\"ok\":false,\"error\":\"admin only\"}");
+	total = c->request.contentLength;
+	if (total < 16 || total > LOGO_MAX)
+		return webJsonStatus(c, 400, "{\"ok\":false,\"error\":\"size (max 64 KB)\"}");
+	want = (total < sizeof(buf)) ? total : sizeof(buf);
+	while (got < want) {		/* 시그니처 판별용 첫 청크 */
+		if (httpReadStream(c, buf + got, want - got, &r, 0) || r == 0) break;
+		got += r;
+	}
+	if (got < 12 || logoMime(buf, got) == NULL)
+		return webJsonStatus(c, 400, "{\"ok\":false,\"error\":\"PNG, JPG, GIF, WEBP only\"}");
+
+	ver = sysTick1s ? sysTick1s : 1u;
+	if (ver == s_logoVer) ver++;		/* 같은 초 재업로드도 브라우저 캐시가 바뀌게 */
+	fh = logoBeginWrite(ver);
+	if (fh == NULL)
+		return webJsonStatus(c, 500, "{\"ok\":false,\"error\":\"fs open failed\"}");
+	ok = (logoWrite(fh, buf, (int)got) == (int)got);
+	while (ok && got < total) {
+		want = total - got;
+		if (want > sizeof(buf)) want = sizeof(buf);
+		if (httpReadStream(c, buf, want, &r, 0) || r == 0) { ok = 0; break; }
+		if (logoWrite(fh, buf, (int)r) != (int)r)           { ok = 0; break; }
+		got += r;
+	}
+	ok = ok && (got == total);
+	logoEndWrite(fh, ok);
+	s_logoState = ok ? 1 : 0;
+	s_logoVer   = ok ? ver : 0;
+	if (!ok)
+		return webJsonStatus(c, 400, "{\"ok\":false,\"error\":\"upload failed\"}");
+	if (beginJson(c)) return ERROR_WRITE_FAILED;
+	snprintf(b, sizeof(b), "{\"ok\":true,\"v\":%u}", (unsigned)ver);
+	w(c, b);
+	return httpCloseStream(c);
+}
+
+/* POST /api/logoreset — admin, 업로드 로고 삭제 → 기본 글자 로고 */
+static error_t apiLogoReset(HttpConnection *c)
+{
+	if (webRole(c) != ROLE_ADMIN)
+		return webJsonStatus(c, 403, "{\"ok\":false,\"error\":\"admin only\"}");
+	logoDelete();
+	s_logoState = 0;
+	s_logoVer   = 0;
+	if (beginJson(c)) return ERROR_WRITE_FAILED;
+	w(c, "{\"ok\":true}");
 	return httpCloseStream(c);
 }
 
@@ -1607,7 +1777,7 @@ typedef struct {
 	uint8_t     type, card, ro, nw;
 } GField;
 
-/* card: 0=Device Information, 1=Communication, 2=ETC, 3=Status, 4=SNMP, 5=MQTT, 6=Remote Link
+/* card: 0=Device Information, 1=Communication, 2=ETC, 3=(비움, 종전 Status), 4=SNMP, 5=MQTT, 6=Remote Link
  * 설정 영역 주소는 MBAD_SET_FIELD()로 구조체에서 계산(2026-10-28 통신 설정 410워드 재배치). nw=문자열 워드 수 */
 #define SF(f)	MBAD_SET_FIELD(f)
 static const GField GEN[] = {
@@ -1618,16 +1788,8 @@ static const GField GEN[] = {
 	{ "hw_version",      "HW Version",           7087, WT_U16,    0, 1, 0 },
 	{ "fw_version",      "FW Version",           7088, WT_FWVER,  0, 1, 0 },
 	{ "fw_build",        "FW Build Date",        7089, WT_FWDATE, 0, 1, 0 },
-	{ "heartbit",        "Heart Bit",            7092, WT_U16,  3, 1, 0 },
-	{ "mbus_rx",         "Modbus RX",            7093, WT_U16,  3, 1, 0 },
-	{ "alarm_sts",       "Alarm STS",            7094, WT_U16,  3, 1, 0 },
-	{ "event_sts",       "Event STS",            7095, WT_U16,  3, 1, 0 },
-	{ "rstp_sts0",       "RSTP STS #0",          7096, WT_U16,  3, 1, 0 },
-	{ "rstp_sts1",       "RSTP STS #1",          7097, WT_U16,  3, 1, 0 },
-	{ "sntp_sts",        "SNTP STS",             7098, WT_U16,  3, 1, 0 },
-	{ "dev_sts",         "DEV STS",              7099, WT_U16,  3, 1, 0 },
-	{ "net_sts",         "NET STS",              7100, WT_U16,  3, 1, 0 },
-	{ "tot_sts",         "TOT STS",              7101, WT_U16,  3, 1, 0 },
+	/* [26/11/19] card 3(Status: Heart Bit~TOT STS, 7092~7101)은 설정이 아니라 실시간 상태라 General 에서 빼고
+	 * Administration 'System Status' 카드(웹 SYSST, /api/regs 7092 n=10)로 옮김 */
 	/* card 1 = Communication — Ethernet → Modbus → SNTP */
 	/* 실제 사용 중인 IPv4 주소(DHCP 할당·AutoIP·고정) — 레지스터 아님(addr 0), 아래 IP Address 는 고정 IP 설정값 */
 	{ "cur_ip",          "Current IP",           0,                     WT_CURIP, 1, 1, 0 },
@@ -1646,6 +1808,7 @@ static const GField GEN[] = {
 	/* card 4 = SNMP — 숫자형. 문자열(커뮤니티·Contact/Location·v3)은 /api/snmp로 카드에 덧붙임 */
 	{ "snmp",            "SNMP",                 SF(comm.snmpEn),       WT_BOOL, 4, 0, 0 },
 	{ "snmp_ver",        "SNMP Version",         SF(comm.snmpVer),      WT_U16,  4, 0, 0 },
+	{ "snmp_v3proto",    "v3 Auth Protocol",     SF(comm.snmpV3AuthProto), WT_U16, 4, 0, 0 },
 	{ "snmp_trap",       "Trap",                 SF(comm.trapEn),       WT_BOOL, 4, 0, 0 },
 	{ "trap_ip",         "Trap Server",          SF(comm.trap_ip),      WT_IP,   4, 0, 0 },
 	/* card 5 = MQTT — 부팅 시 반영 */
@@ -1893,8 +2056,10 @@ static const char INDEX_HTML[] =
 "<title>SV300 · Web</title>\n"
 "<script>(function(){try{document.documentElement.setAttribute('data-theme',localStorage.getItem('theme')||'dark');}catch(e){}})();</script>\n"
 "<style>\n"
-":root{--bg:#0f1419;--panel:#1a212b;--panel2:#222c38;--line:#2c3a4a;--fg:#e6edf3;--muted:#8b9bb0;--accent:#3b82f6;--ok:#22c55e;--warn:#f59e0b;--bad:#ef4444;--purple:#8b5cf6;--cyan:#22d3ee}\n"
-"html[data-theme=light]{--bg:#eef2f6;--panel:#fff;--panel2:#eef2f7;--line:#e2e8f0;--fg:#0f172a;--muted:#64748b}\n"
+/* [26/11/19] 색 — SV900 CSS(Tailwind gray) 값: 다크 본문 gray-900 #111827, 카드 gray-800 #1f2937, 선 gray-700/60,
+   입력칸 gray-900/30 / 라이트 본문 gray-100, 카드 흰색, 선 gray-200 */
+":root{--bg:#111827;--panel:#1f2937;--panel2:#2b3544;--line:rgba(55,65,81,.6);--inp:rgba(17,24,39,.3);--fg:#f3f4f6;--muted:#9ca3af;--accent:#3b82f6;--ok:#22c55e;--warn:#f59e0b;--bad:#ef4444;--purple:#8b5cf6;--cyan:#22d3ee}\n"
+"html[data-theme=light]{--bg:#f3f4f6;--panel:#fff;--panel2:#f3f4f6;--line:#e5e7eb;--inp:#fff;--fg:#1f2937;--muted:#6b7280}\n"
 "html[data-theme=light] .topbar nav a.on,html[data-theme=light] .sitem.active{color:#0f172a}\n"
 "html[data-theme=light] .role.admin{background:#fef3c7;color:#b45309}html[data-theme=light] .role.viewer{background:#e0f2fe;color:#0369a1}\n"
 "html[data-theme=light] .ptab .ph{background:#dbe4ee;color:#1e293b}html[data-theme=light] .gauge .gtrack{stroke:#e2e8f0}\n"
@@ -1902,21 +2067,38 @@ static const char INDEX_HTML[] =
 "a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}\n"
 ".mono{font-family:'Consolas',monospace}\n"
 /* topbar */
-".topbar{display:flex;align-items:center;gap:20px;padding:10px 18px;background:var(--panel);border-bottom:1px solid var(--line)}\n"
+/* 상단바 — SV900 기준: 본문과 같은 배경, 왼쪽 위치 아이콘+페이지 이름, 오른쪽 시각·계정·아이콘 버튼 */
+".topbar{display:flex;align-items:center;gap:20px;height:56px;padding:0 22px;background:var(--bg);border-bottom:1px solid var(--line)}\n"
+".crumb{display:flex;align-items:center;gap:8px;font-family:Inter,Pretendard,'Segoe UI',-apple-system,Roboto,'Malgun Gothic',sans-serif;font-size:15px;font-weight:600;color:var(--muted)}\n"
+".crumb svg{width:18px;height:18px;fill:#3b82f6;stroke:none}.crumb b{color:var(--fg);font-weight:600}\n"
+".tbtn{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border:0;border-radius:8px;background:transparent;color:var(--muted);cursor:pointer;font-size:15px}\n"
+".tbtn:hover{background:var(--panel2);color:var(--fg)}\n"
+".avatar{display:inline-flex;align-items:center;gap:8px;color:var(--fg);font-weight:600;font-size:13.5px}\n"
+".avatar svg{width:28px;height:28px;border-radius:50%;background:#3b82f6;fill:#fff;stroke:none}\n"
 ".topbar nav{display:flex;gap:14px}.topbar nav a{color:var(--fg);padding:4px 8px;border-radius:6px;cursor:pointer}\n"
 ".topbar nav a:hover{background:var(--panel2);text-decoration:none}\n"
 ".topbar nav a.on{background:var(--panel2);color:#fff;box-shadow:inset 0 -2px 0 var(--accent)}\n"
 ".topbar .status{margin-left:auto;display:flex;align-items:center;gap:12px;color:var(--muted)}\n"
-".status .clock{font-family:'Consolas',monospace;font-size:13px;color:var(--fg);background:var(--panel2);padding:4px 10px;border-radius:6px}\n"
+".status .clock{font-family:'Consolas',monospace;font-size:12.5px;color:var(--muted)}\n"
 ".role{padding:2px 8px;border-radius:10px;font-size:12px}.role.admin{background:#3b2a12;color:var(--warn)}.role.viewer{background:#12263b;color:#7dd3fc}\n"
 ".btn-sm{font-size:12px;padding:3px 8px;border:1px solid var(--line);border-radius:6px;color:var(--fg);background:var(--panel2);cursor:pointer}\n"
 /* layout/sidebar */
-".layout{display:flex;align-items:flex-start;min-height:calc(100vh - 53px)}\n"
-".sidebar{width:216px;flex-shrink:0;background:var(--panel);border-right:1px solid var(--line);padding:8px 10px 24px;position:sticky;top:0;align-self:stretch}\n"
-".sgroup{font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;padding:16px 10px 6px}\n"
-".sitem{display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:8px;color:var(--fg);font-size:13.5px;margin:1px 0;border-left:3px solid transparent;cursor:pointer}\n"
-".sitem:hover{background:var(--panel2);text-decoration:none}.sitem.active{background:var(--panel2);color:#fff;border-left-color:var(--accent);font-weight:600}\n"
-".sitem .ico{font-size:15px;width:18px;text-align:center}\n"
+/* [26/11/19] SV900 레이아웃: [사이드바(화면 높이 전체, 고정)] [상단바 56px + 본문] */
+".layout{display:flex;align-items:flex-start;min-height:100vh}.mainc{flex:1;min-width:0;display:flex;flex-direction:column}\n"
+/* 사이드바 배경·선택 표시 — SV900 기준: 남색 계열 배경, 선택 항목은 둥근 밝은 박스(왼쪽 막대 없음) + 보라 아이콘 */
+/* [26/11/19] SV900: 사이드바 = 카드색, 선택 항목 = 보라(violet-500 #8470ff) 대각 그라데이션 */
+":root{--side:#1f2937;--sideAct:linear-gradient(135deg,rgba(132,112,255,.24),rgba(132,112,255,.04))}html[data-theme=light]{--side:#fff;--sideAct:linear-gradient(135deg,rgba(132,112,255,.12),rgba(132,112,255,.04))}\n"
+".sidebar{width:216px;flex-shrink:0;background:var(--side);border-right:1px solid var(--line);padding:0 12px 24px;position:sticky;top:0;height:100vh;overflow-y:auto}\n"
+/* [26/11/19] 사이드바 로고: 이미지는 높이 40px 안에 비율 유지, 기본은 굵은 기울임 글자 */
+".sbrand{display:flex;align-items:center;height:56px;padding:0 24px;margin:0 -12px 10px;border-bottom:1px solid var(--line)}.sbrand img{max-height:40px;max-width:100%;object-fit:contain;display:block}\n"
+".sbtxt{font-family:Inter,Pretendard,'Segoe UI',sans-serif;font-size:24px;font-weight:800;font-style:italic;letter-spacing:.5px;color:var(--accent)}.lgpv img{max-height:32px;max-width:170px;display:block}.lgpv .sbtxt{font-size:18px}\n"
+/* 메뉴 글꼴·아이콘 — SV900 기준: 굵은 산세리프 14.5px, 회색 선형 아이콘(활성 시 보라). 웹폰트 미사용(현장 오프라인·플래시) — Inter/Pretendard 가 PC에 있으면 사용 */
+".sitem{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:8px;color:var(--fg);font-family:Inter,Pretendard,'Segoe UI',-apple-system,Roboto,'Malgun Gothic',sans-serif;font-size:14px;font-weight:500;margin:3px 0;border-radius:10px;cursor:pointer}\n"
+/* [26/11/19] 글자 굵기 SV900(text-sm font-medium = 14px/500)과 동일 — 선택 메뉴도 굵기는 그대로, 배경·색으로만 구분 */
+".sitem:hover{background:rgba(255,255,255,.04);text-decoration:none}.sitem.active{background:var(--sideAct);color:#fff}\n"
+"html[data-theme=light] .sitem:hover{background:rgba(15,23,42,.04)}html[data-theme=light] .sitem.active .ico{stroke:#8470ff}\n"
+".sitem .ico{width:18px;height:18px;flex-shrink:0;fill:none;stroke:var(--muted);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}\n"
+".sitem:hover .ico{stroke:var(--fg)}.sitem.active .ico{stroke:#8470ff}\n"
 ".poll-toggle{margin-top:18px;padding:12px 11px 0;border-top:1px solid var(--line)}\n"
 ".poll-toggle label{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12.5px;cursor:pointer}\n"
 ".poll-state{margin-left:auto;background:var(--ok);color:#06281a;font-weight:700;font-size:10px;padding:2px 8px;border-radius:10px}.poll-state.off{background:var(--muted);color:#10202e}\n"
@@ -1925,7 +2107,7 @@ static const char INDEX_HTML[] =
 ".card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:22px;margin-bottom:18px}\n"
 ".login{max-width:360px;margin:8vh auto}.card h1{margin:0 0 4px;font-size:20px}.sub{color:var(--muted);margin:0 0 16px}\n"
 "label{display:block;margin:10px 0;color:var(--muted);font-size:13px}\n"
-"input,select{width:100%;margin-top:5px;padding:9px 10px;background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;font-size:14px}\n"
+"input,select{width:100%;margin-top:5px;padding:9px 10px;background:var(--inp);color:var(--fg);border:1px solid var(--line);border-radius:8px;font-size:14px}\n"
 "input:focus,select:focus{outline:none;border-color:var(--accent)}\n"
 ".btn{padding:9px 16px;border:1px solid var(--line);background:var(--panel2);color:var(--fg);border-radius:8px;cursor:pointer;font-size:14px}\n"
 ".btn:hover{border-color:var(--accent)}.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}.btn:disabled{opacity:.4;cursor:not-allowed}\n"
@@ -1933,7 +2115,7 @@ static const char INDEX_HTML[] =
 ".alert.err{background:#3a1620;color:#fca5a5;border:1px solid #5b2230;padding:10px 12px;border-radius:8px;margin:10px 0}\n"
 ".hint{color:var(--muted);font-size:12px;margin-top:14px}\n"
 /* dashboard */
-".dash{display:flex;flex-direction:column;height:calc(100vh - 53px - 28px);min-height:560px}\n"
+".dash{display:flex;flex-direction:column;height:calc(100vh - 56px - 28px);min-height:560px}\n"
 ".dash h1{font-size:19px;font-weight:800;margin:0}\n"
 ".dhead{display:flex;align-items:center;gap:14px;margin:0 0 6px}.dchs{display:flex;gap:6px}\n"
 ".dchb{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:4px 12px;font-weight:800;font-size:12.5px;cursor:pointer;color:var(--muted)}\n"
@@ -2002,21 +2184,36 @@ static const char INDEX_HTML[] =
 ".ph2{color:var(--muted);font-size:13px}\n"
 ".pgh{font-size:24px;font-weight:800;margin:4px 0 10px}\n"
 /* Feeder: SV300 3채널 → 3열. 글자·색은 Channel 카드(.chcard/.ctbl)와 맞춤 (SV400 과 동일 스타일) */
-".fgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}@media(max-width:1100px){.fgrid{grid-template-columns:1fr}}#p-feeder .pgh{font-size:22px;margin:4px 0 10px}\n"
-".fcard{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;min-width:0}\n"
-".fcard.off{opacity:.5}\n"
-".fch{display:flex;align-items:center;gap:8px;margin-bottom:10px}\n"
-".fch .ft{font-size:14px;font-weight:700;color:var(--accent)}.fch .ff{margin-left:auto;font-family:'Consolas',monospace;color:var(--muted);font-size:12.5px}\n"
+/* [26/11/19] Feeder = SV900 Module/Feeder 형식: 위 Feeder Status 칸(1~MAX_CH) + 아래 선택 피더 Measurement·Energy.
+   상태: On(초록)=평균전류>=시동전류(Simple 50021 cbStatus), Off(회색)=무부하/개방 — 경보 아님, Unregistered=미사용·미배정 */
+/* [26/11/19] 한 화면(스크롤 없이) 배치: 여백·상태 칸 높이 축소, 아래는 [Measurement | Energy+Phase] */
+"#p-feeder .pgh{font-size:20px;margin:2px 12px 8px 0;display:inline-block;vertical-align:middle}#p-feeder .dstatus{display:inline-flex;vertical-align:middle;margin:0 0 6px}\n"
+".fcard{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px;display:flex;flex-direction:column;min-width:0}\n"
+".fct{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:700;margin-bottom:8px}.fct::before{content:'';width:4px;height:16px;border-radius:9999px;background:#3b82f6}\n"
+".fleg{margin-left:auto;display:flex;gap:12px;font-size:12px;font-weight:500;color:var(--muted)}.fleg i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px}\n"
+".fleg i.on{background:var(--ok)}.fleg i.off{background:#9ca3af}.fleg i.un{background:var(--line)}\n"
+".fsg{display:grid;grid-template-columns:repeat(9,minmax(0,1fr));gap:8px}@media(max-width:900px){.fsg{grid-template-columns:repeat(3,minmax(0,1fr))}}\n"
+".fsb{border:1.5px solid var(--line);border-radius:8px;padding:4px 4px;text-align:center;cursor:pointer;color:var(--muted);line-height:1.25}.fsb b{display:block;font-size:14px}.fsb span{font-size:10px;font-weight:600}\n"
+".fsb.on{border-color:var(--ok);color:var(--ok)}.fsb.off{border-color:#9ca3af;color:#9ca3af}.fsb.un{opacity:.45;cursor:default}.fsb.sel{box-shadow:0 0 0 2px var(--accent)}\n"
+".fsel{display:flex;align-items:center;gap:8px;margin-top:8px;padding-top:7px;border-top:1px solid var(--line);font-size:11px;font-weight:700;letter-spacing:.05em;color:var(--muted);min-height:22px}\n"
+/* Measurement 카드는 오른쪽 열(Energy+Phase) 높이에 맞춰 늘고, 표 행이 그 높이를 고르게 나눠 쓴다 */
+".fdet{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:12px;margin-top:12px;align-items:stretch}@media(max-width:1100px){.fdet{grid-template-columns:1fr}}\n"
+".fcol{display:flex;flex-direction:column;gap:12px;min-width:0}.fmc #fmeas{flex:1}.fmc .ftbl{height:100%;margin:0}\n"
+".egyg{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}@media(max-width:700px){.egyg{grid-template-columns:1fr}}\n"
+".egyb{background:var(--panel2);border-radius:8px;padding:10px 12px}.egyb h4{margin:0 0 8px;padding-bottom:6px;border-bottom:1px solid var(--line);font-size:11.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}\n"
+".egyb .r{display:flex;justify-content:space-between;gap:8px;padding:4px 0;font-size:12.5px;color:var(--muted)}.egyb .r b{font-family:'Consolas',monospace;color:var(--fg)}\n"
+/* Phase 카드: SV900 형식 벡터도만(가운데 정렬) */
+".ph9w{display:flex;justify-content:center}.ph9{width:100%;max-width:260px;height:auto;display:block}\n"
+/* 낮은 화면(노트북 1366x768 등): 표 행·카드 여백·벡터도를 더 줄여 스크롤 없이 한 화면 */
+"@media(max-height:800px){#p-feeder .fcard{padding:8px 12px}#p-feeder .fct{margin-bottom:5px}#p-feeder .fsb{padding:2px 4px}#p-feeder .fsel{margin-top:6px;padding-top:5px}\n"
+" #p-feeder .fdet,#p-feeder .fcol{gap:8px}#p-feeder .fdet{margin-top:8px}#p-feeder .ftbl{font-size:12px}#p-feeder .ftbl th,#p-feeder .ftbl td{padding:3px 6px}\n"
+" .egyb{padding:6px 10px}.egyb h4{margin-bottom:4px;padding-bottom:4px}.egyb .r{padding:2px 0}.ph9{max-width:200px}}\n"
 ".wb{font-size:11px;font-weight:700;color:var(--accent);background:var(--panel2);border-radius:6px;padding:2px 8px}\n"
 ".ftbl{width:100%;border-collapse:collapse;font-size:12.5px;margin-bottom:10px;table-layout:fixed}\n"
 ".ftbl th,.ftbl td{padding:5px 6px;text-align:right;border-bottom:1px solid var(--line)}\n"
 ".ftbl th{color:var(--muted);font-weight:600;font-size:11px}\n"
 ".ftbl td{font-family:'Consolas',monospace}\n"
-".ftbl td.pk,.ftbl th:first-child{text-align:left;color:var(--muted);font-family:inherit;width:34px}\n"
-".fkv{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}\n"
-".kvi{background:var(--panel2);border-radius:7px;padding:5px 10px;display:flex;flex-direction:column;gap:2px}\n"
-".kvi .kk{font-size:11px;color:var(--muted)}.kvi .kvv{font-family:'Consolas',monospace;font-size:13px;text-align:right;white-space:nowrap}\n"
-".kvi .kvv small{color:var(--muted);font-size:11px}\n"
+".ftbl td.pk,.ftbl th:first-child{text-align:left;color:var(--muted);font-family:inherit;width:30%}.ftbl td.pk small{font-size:10.5px}\n"
 /* IO 페이지: 글자·두께는 Channel 표(.ctbl)와 맞춤 (SV400 과 동일) */
 "#p-io .pgh{font-size:22px;margin:4px 0 10px}#d-iom .hsub{margin:6px 0 4px}\n"
 "#d-iom .ctbl.hsm th{font-size:11px;padding:5px 6px}\n"
@@ -2042,45 +2239,55 @@ static const char INDEX_HTML[] =
 ".ctbl.hsm td,.ctbl.hsm th{padding:3px 5px;font-size:11px}\n"
 ".hcv{width:100%;height:180px;display:block}\n"
 ".pgctl{display:flex;gap:6px;flex-wrap:wrap;margin:2px 0 10px}.pgctl .btn{padding:3px 9px;font-size:12px}\n"
+/* [26/11/19] 이력 표: 카드 안 스크롤(끝까지 내리면 다음 50건), 머리행 고정 */
+".evmeta{display:flex;align-items:center;gap:8px;margin:2px 0 8px;min-height:24px}.evbtn{margin-left:auto;display:flex;gap:6px}.evbtn .btn{padding:3px 9px;font-size:12px}\n"
+".evbox{max-height:calc(100vh - 300px);min-height:160px;overflow:auto}.evbox th{position:sticky;top:0;background:var(--panel)}\n"
 ".dmcv{width:100%;height:200px;display:block}\n"
 ".wcv{width:100%;height:160px;display:block;margin-bottom:6px}\n"
 ".itcv{width:100%;height:240px;display:block}\n"
 ".enb{font-size:10px;font-weight:700;padding:1px 6px;border-radius:5px}\n"
 ".enb.pass{color:#06281a;background:var(--ok)}.enb.fail{color:#fff;background:var(--bad)}.enb.info{color:var(--muted);background:var(--panel2)}\n"
-".mcols{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:8px}\n"
-".mcol .srow{padding:5px 0}.mcol .hsub{margin-top:2px}\n"
-".phbox{display:flex;justify-content:center;margin-bottom:10px;position:relative}\n"
-".phsvg{width:100%;max-width:240px;height:auto}\n"
-".phleg{position:absolute;left:4px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:7px;font-size:11px;color:#c9d3de;pointer-events:none}\n"
-".phleg span{display:flex;align-items:center;gap:5px;white-space:nowrap}\n"
-".phleg i{width:14px;height:3px;border-radius:2px;display:inline-block}\n"
-".ph-bg{fill:none;stroke:var(--line);stroke-width:1}\n"
-".ph-grid{fill:none;stroke:var(--line);stroke-width:.5;opacity:.6}\n"
-".ph-mk{fill:var(--muted)}\n"
 ".mmtbl td.mk{color:var(--muted);font-size:10px;text-align:left}\n"
 ".mmtbl td.rk{border-right:1px solid var(--line)}\n"
 ".stub{color:var(--muted);padding:30px 4px}\n"
 ".gp-head{display:flex;align-items:center;gap:12px;margin:4px 0 10px}\n"
 ".gp-head h1{font-size:22px;font-weight:800;margin:0}\n"
-".gp-badge{background:var(--panel2);color:var(--muted);font-size:12px;font-weight:600;padding:4px 12px;border-radius:8px}\n"
 ".gp-actions{margin-left:auto;display:flex;gap:10px;align-items:center}\n"
 ".gp-tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:16px;flex-wrap:wrap}\n"
 ".gp-tab{padding:10px 14px;color:var(--muted);border-bottom:2px solid transparent;cursor:pointer;font-size:14px}\n"
 ".gp-tab:hover{color:var(--fg)}.gp-tab.on{color:var(--accent);border-bottom-color:var(--accent);font-weight:700}\n"
-".setgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}\n"
+/* [26/11/19] Configuration 세부 탭(2단): 밑줄 대신 작은 알약 형태 */
+".gp-sub{border-bottom:none;gap:6px;margin:-6px 0 14px}.gp-sub .gp-tab{padding:5px 12px;font-size:13px;border:1px solid var(--line);border-radius:8px}.gp-sub .gp-tab.on{background:var(--panel2);border-color:var(--accent);font-weight:600}\n"
+/* [26/11/19] Administration System 버튼 — SV900: 높이 44px·아이콘 20px+글자. 다크=밝은 바탕(violet/pink-100), 라이트=진한 바탕(-900) */
+".sysbtns{display:flex;gap:10px;flex-wrap:wrap;margin:2px 0 12px}\n"
+".sysb{display:inline-flex;align-items:center;gap:8px;height:44px;padding:0 20px;border:0;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer}.sysb svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round}.sysb:disabled{opacity:.45;cursor:not-allowed}\n"
+".sysb.fr{background:#E6E1FF;color:#4634B1}.sysb.rb{background:#FCE7F3;color:#9D174D}.sysb.fr:hover:not(:disabled),.sysb.rb:hover:not(:disabled){background:#fff}\n"
+"html[data-theme=light] .sysb.fr{background:#2F227C;color:#fff}html[data-theme=light] .sysb.fr:hover:not(:disabled){background:#4634B1}html[data-theme=light] .sysb.rb{background:#831843;color:#fff}html[data-theme=light] .sysb.rb:hover:not(:disabled){background:#9D174D}\n"
+/* [26/11/19] SV900 General 설정: 1열(<768) / 2열(768~1279) / 4열(>=1280) */
+".setgrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:20px;align-items:start}\n"
+"@media(max-width:1279px){.setgrid{grid-template-columns:repeat(2,minmax(0,1fr))}}\n"
 /* Maintenance 는 카드가 2장이라 3열에 두면 Set Time 행(입력 230px+버튼2)이 트랙을
    밀어 System 만 넓어진다(446 vs 331). 2열로 두면 양쪽이 같은 폭이다. */
 ".setgrid.two{grid-template-columns:repeat(2,1fr)}\n"
-"@media(max-width:1000px){.setgrid,.setgrid.two{grid-template-columns:1fr}}\n"
-".setcard{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:0 18px 14px}\n"
-".setcard h3{font-size:15px;font-weight:700;padding:14px 0 10px;margin:0 0 6px;border-bottom:1px solid var(--line)}\n"
+"@media(max-width:767px){.setgrid,.setgrid.two{grid-template-columns:1fr}}\n"
+/* [26/11/19] 카드·소제목 — SV900: 둥근 8px 카드, 제목 = 파란 세로막대(4x16) + 대문자 작은 글씨, 그룹 = 하늘색 막대 */
+".setcard{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px;box-shadow:0 1px 2px rgba(0,0,0,.05)}\n"
+".setcard h3{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--fg);padding:0;margin:0 0 12px}\n"
+".setcard h3::before,.sgrp::before{content:'';width:4px;height:16px;border-radius:9999px;background:#3b82f6;flex-shrink:0}\n"
 ".srow{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;font-size:13px;border-bottom:1px solid var(--line)}\n"
 ".srow:last-child{border-bottom:none}.srow .sk{color:var(--muted)}\n"
-".sgrp{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.6px;color:var(--accent);padding:14px 0 6px;margin-top:6px;border-top:1px solid var(--line)}\n"
-".setcard h3+.sgrp{margin-top:0;border-top:none;padding-top:6px}\n"
+".sgrp{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--fg);padding:0;margin:16px 0 8px}\n"
+".sgrp::before{background:#67bfff}\n"
+".setcard h3+.sgrp{margin-top:0}\n"
 ".srow .sv{font-family:'Consolas',monospace}\n"
 ".srow input,.srow select{width:160px;margin:0;padding:6px 8px;font-size:13px}\n"
 ".srow input[type=checkbox]{width:auto}\n"
+/* [26/11/19] Settings(#setBody) 입력·선택 행 — SV900: 라벨 위, 입력 아래(칸 전체), 행 구분선 없음.
+   토글·읽기전용 값 행은 한 줄 유지. :has 미지원 브라우저는 종전 한 줄 배치로 보임 */
+"#setBody .srow{border-bottom:none;padding:6px 0}\n"
+"#setBody .srow:has(>input:not([type=checkbox])),#setBody .srow:has(>select),#setBody .srow:has(>span>input:not([type=checkbox])),#setBody .srow:has(>span>select){flex-direction:column;align-items:stretch;gap:6px}\n"
+"#setBody .srow:has(>input:not([type=checkbox])) .sk,#setBody .srow:has(>select) .sk,#setBody .srow:has(>span>input:not([type=checkbox])) .sk,#setBody .srow:has(>span>select) .sk{font-weight:500}\n"
+"#setBody .srow>input:not([type=checkbox]),#setBody .srow>select,#setBody .srow>span>input:not([type=checkbox]),#setBody .srow>span>select{width:100%}\n"
 "/* 0/1 항목 토글 버튼(gems3500_keil5 web/app.js fieldTog 참조) */\n"
 ".srow button.tog{display:flex;align-items:center;gap:9px;width:160px;padding:5px 9px;margin:0;box-sizing:border-box;border:1px solid var(--line);border-radius:5px;background:var(--panel2);color:var(--muted);font-family:'Consolas',monospace;font-size:11.5px;font-weight:700;letter-spacing:.5px;cursor:pointer;text-align:left}\n"
 ".srow button.tog .knob{width:28px;height:15px;border-radius:8px;flex:0 0 auto;background:#4b5a6b;position:relative;transition:background .15s}\n"
@@ -2124,35 +2331,47 @@ static const char INDEX_HTML[] =
 "</div>\n"
 /* ---------- app view ---------- */
 "<div id='v-app' style='display:none'>\n"
-" <header class='topbar'>\n"
-"  <nav>\n"
-"   <a id='nav-dash' class='on' onclick=\"go('dash')\">Dashboard</a>\n"
-"   <a id='nav-feeder' onclick=\"go('feeder')\">Feeder</a>\n"
-"   <a id='nav-channel' onclick=\"go('channel')\">Channel</a>\n"
-"   <a id='nav-io' onclick=\"go('io')\">IO</a>\n"
-"   <a id='nav-setup' onclick=\"go('setup')\">Setup</a>\n"
-"   <a id='nav-maint' onclick=\"go('maint')\">Maintenance</a>\n"
-"  </nav>\n"
-"  <div class='status'>\n"
-"   <span class='clock' id='clock'>-</span>\n"
-"   <span class='role' id='role'>-</span>\n"
-"   <button class='btn-sm' id='themeBtn' onclick='toggleTheme()' title='Light / Dark'>&#127769;</button>\n"
-"   <a class='btn-sm' onclick='logout()'>Logout</a>\n"
-"  </div>\n"
-" </header>\n"
 " <div class='layout'>\n"
 "  <aside class='sidebar'>\n"
-"   <div class='sgroup'>Measure</div>\n"
-"   <a class='sitem active' id='si-dash' onclick=\"go('dash')\"><span class='ico'>&#128202;</span>Dashboard</a>\n"
-"   <a class='sitem' id='si-feeder' onclick=\"go('feeder')\"><span class='ico'>&#128268;</span>Feeder</a>\n"
-"   <a class='sitem' id='si-channel' onclick=\"go('channel')\"><span class='ico'>&#128225;</span>Channel</a>\n"
-"   <a class='sitem' id='si-io' onclick=\"go('io')\"><span class='ico'>&#128268;</span>IO (DI/TEMP)</a>\n"
-"   <div class='sgroup'>Setup</div>\n"
-"   <a class='sitem' id='si-setup' onclick=\"go('setup')\"><span class='ico'>&#128421;</span>Main Setting</a>\n"
-"   <a class='sitem' id='si-chset' onclick=\"go('setup','chan')\"><span class='ico'>&#9881;</span>Channel Setting</a>\n"
-"   <a class='sitem' id='si-maint' onclick=\"go('maint')\"><span class='ico'>&#128736;</span>Maintenance</a>\n"
+/* [26/11/18] 메뉴 아이콘: 이모지 → 선형 SVG(SV900 화면 기준, Lucide 계열 24×24 stroke). 한 번 정의(symbol) 후 <use>로 재사용 */
+"   <svg width='0' height='0' style='position:absolute'>\n"
+"    <symbol id='i-dash' viewBox='0 0 24 24'><path d='m12 14 4-4'/><path d='M3.34 19a10 10 0 1 1 17.32 0'/></symbol>\n"
+"    <symbol id='i-feeder' viewBox='0 0 24 24'><path d='M18 20V10M12 20V4M6 20v-6'/></symbol>\n"
+"    <symbol id='i-meter' viewBox='0 0 24 24'><path d='M3 3v16a2 2 0 0 0 2 2h16'/><path d='m19 9-5 5-4-4-3 3'/></symbol>\n"
+"    <symbol id='i-pq' viewBox='0 0 24 24'><path d='M22 12h-4l-3 9L9 3l-3 9H2'/></symbol>\n"
+"    <symbol id='i-evt' viewBox='0 0 24 24'><path d='M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9'/><path d='M10.3 21a1.94 1.94 0 0 0 3.4 0'/></symbol>\n"
+"    <symbol id='i-rpt' viewBox='0 0 24 24'><path d='M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z'/><path d='M14 2v4a2 2 0 0 0 2 2h4'/><path d='M16 13H8M16 17H8M10 9H8'/></symbol>\n"
+"    <symbol id='i-io' viewBox='0 0 24 24'><rect x='3' y='3' width='7' height='7' rx='1'/><rect x='14' y='3' width='7' height='7' rx='1'/><rect x='14' y='14' width='7' height='7' rx='1'/><rect x='3' y='14' width='7' height='7' rx='1'/></symbol>\n"
+"    <symbol id='i-setup' viewBox='0 0 24 24'><path d='M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z'/><circle cx='12' cy='12' r='3'/></symbol>\n"
+"    <symbol id='i-admin' viewBox='0 0 24 24'><path d='M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4'/></symbol>\n"
+"   </svg>\n"
+/* [26/11/19] 사이드바 맨 위 로고(SV900 형식) — 업로드 로고가 없으면 글자 'SV300'. logoSet()이 채운다 */
+"   <div class='sbrand' id='sbrand'><span class='sbtxt'>SV300</span></div>\n"
+"   <a class='sitem active' id='si-dash' onclick=\"go('dash')\"><svg class='ico'><use href='#i-dash'/></svg>Dashboard</a>\n"
+/* [26/11/19] 종전 'Channel' 한 메뉴(탭 10개) → SV900 메뉴 구성으로 분리. 화면은 같은 p-channel 을 쓰고 메뉴별 탭 묶음만 다르게 보인다(CHG) */
+"   <a class='sitem' id='si-feeder' onclick=\"go('feeder')\"><svg class='ico'><use href='#i-meter'/></svg>Feeder</a>\n"
+"   <a class='sitem' id='si-meter' onclick=\"go('channel','meter')\"><svg class='ico'><use href='#i-feeder'/></svg>Meter</a>\n"
+"   <a class='sitem' id='si-pq' onclick=\"go('channel','pq')\"><svg class='ico'><use href='#i-pq'/></svg>Power Quality</a>\n"
+"   <a class='sitem' id='si-evt' onclick=\"go('channel','evt')\"><svg class='ico'><use href='#i-evt'/></svg>Alarm/Event</a>\n"
+"   <a class='sitem' id='si-rpt' onclick=\"go('channel','rpt')\"><svg class='ico'><use href='#i-rpt'/></svg>Report</a>\n"
+"   <a class='sitem' id='si-io' onclick=\"go('io')\"><svg class='ico'><use href='#i-io'/></svg>IO</a>\n"
+/* [26/11/19] SV900 구성: Main Setting·Channel Setting → Configuration(General/Meter/Feeder), Maintenance → Administration */
+"   <a class='sitem' id='si-setup' onclick=\"go('setup','general')\"><svg class='ico'><use href='#i-setup'/></svg>Configuration</a>\n"
+"   <a class='sitem' id='si-maint' onclick=\"go('maint')\"><svg class='ico'><use href='#i-admin'/></svg>Administration</a>\n"
 "   <div class='poll-toggle'><label><input type='checkbox' id='pollToggle' checked style='width:auto;margin:0'> Live polling <span class='poll-state' id='pollState'>ON</span></label></div>\n"
 "  </aside>\n"
+/* [26/11/19] SV900 레이아웃: 사이드바가 왼쪽 전체 높이, 상단바는 사이드바 오른쪽 열(.mainc) 위에만 */
+"  <div class='mainc'>\n"
+"   <header class='topbar'>\n"
+/* [26/11/18] 상단 탭 메뉴 제거(사이드바와 중복) → SV900처럼 현재 페이지 이름 표시. go()가 갱신 */
+"  <div class='crumb'><svg viewBox='0 0 24 24'><path d='M12 2a7 7 0 0 0-7 7c0 5.25 7 13 7 13s7-7.75 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z'/></svg>SV300 <span>/</span> <b id='crumb'>Dashboard</b></div>\n"
+"  <div class='status'>\n"
+"   <span class='clock' id='clock'>-</span>\n"
+"   <button class='tbtn' id='themeBtn' onclick='toggleTheme()' title='Light / Dark'>&#127769;</button>\n"
+"   <span class='avatar'><svg viewBox='0 0 24 24'><circle cx='12' cy='9' r='4'/><path d='M4 21a8 8 0 0 1 16 0z'/></svg><span class='role' id='role'>-</span></span>\n"
+"   <button class='tbtn' onclick='logout()' title='Logout'><svg viewBox='0 0 24 24' width='17' height='17' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9'/></svg></button>\n"
+"  </div>\n"
+"   </header>\n"
 "  <main class='container'>\n"
 /* dashboard page */
 "   <div id='p-dash' class='dash'>\n"
@@ -2208,23 +2427,24 @@ static const char INDEX_HTML[] =
 "   <div id='p-feeder' style='display:none'>\n"
 "    <h1 class='pgh'>Feeder</h1>\n"
 "    <div class='dstatus'><span id='fstat' class='on'>&#9679; live &#8635; 1s</span></div>\n"
-"    <div id='fgrid' class='fgrid'></div>\n"
+"    <div class='fcard'><div class='fct'>Feeder Status<span class='fleg'><span><i class='on'></i>On</span><span><i class='off'></i>Off</span><span><i class='un'></i>Unregistered</span></span></div>\n"
+"     <div class='fsg' id='fsg'></div><div class='fsel' id='fsel'></div></div>\n"
+"    <div class='fdet'><div class='fcard fmc'><div class='fct'>Measurement</div><div id='fmeas'></div></div>\n"
+"     <div class='fcol'><div class='fcard'><div class='fct'>Energy</div><div id='fegy'></div></div><div class='fcard'><div class='fct'>Phase</div><div id='fph'></div></div></div></div>\n"
 "   </div>\n"
 "   <div id='p-channel' style='display:none'>\n"
-"    <div class='gp-head'><h1>Channel</h1><span class='gp-actions'><span id='chstat' class='ph2 on'>&#9679; live &#8635; 1s</span></span></div>\n"
-"    <div class='gp-tabs'>\n"
+"    <div class='gp-head'><h1 id='chTitle'>Meter</h1><span class='gp-actions'><span id='chstat' class='ph2 on'>&#9679; live &#8635; 1s</span></span></div>\n"
+"    <div class='gp-tabs' id='chTabs'>\n"
 "     <a class='gp-tab on' id='ct-meter' onclick=\"chSetTab('meter')\">Meter</a>\n"
 "     <a class='gp-tab' id='ct-phase' onclick=\"chSetTab('phase')\">Phase</a>\n"
+"     <a class='gp-tab' id='ct-energy' onclick=\"chSetTab('energy')\">Energy</a>\n"
 "     <a class='gp-tab' id='ct-minmax' onclick=\"chSetTab('minmax')\">Min/Max</a>\n"
+"     <a class='gp-tab' id='ct-demand' onclick=\"chSetTab('demand')\">Demand</a>\n"
 "     <a class='gp-tab' id='ct-harmonics' onclick=\"chSetTab('harmonics')\">Harmonics</a>\n"
 "     <a class='gp-tab' id='ct-waveform' onclick=\"chSetTab('waveform')\">Waveform</a>\n"
-"     <a class='gp-tab' id='ct-report' onclick=\"chSetTab('report')\">Report</a>\n"
-"     <a class='gp-tab' id='ct-vq' onclick=\"chSetTab('vq')\">VQ</a>\n"
-"     <a class='gp-tab' id='ct-monthly' onclick=\"chSetTab('monthly')\">Monthly</a>\n"
-"     <a class='gp-tab' id='ct-energy' onclick=\"chSetTab('energy')\">Energy</a>\n"
-"     <a class='gp-tab' id='ct-demand' onclick=\"chSetTab('demand')\">Demand</a>\n"
 "     <a class='gp-tab' id='ct-alarm' onclick=\"chSetTab('alarm')\">Alarm</a>\n"
 "     <a class='gp-tab' id='ct-event' onclick=\"chSetTab('event')\">Event</a>\n"
+"     <a class='gp-tab' id='ct-report' onclick=\"chSetTab('report')\">Report</a>\n"
 "    </div>\n"
 "    <div id='chctl' style='display:none;margin:0 0 10px;align-items:center;gap:8px'>\n"
 "     <span class='ph2'>Option</span>\n"
@@ -2237,20 +2457,22 @@ static const char INDEX_HTML[] =
 "    <div class='dcard'><div class='dct'>IO DATA</div><div id='d-iom'></div></div>\n"
 "   </div>\n"
 "   <div id='p-setup' style='display:none'>\n"
-"    <div class='gp-head'><h1>Settings</h1><span class='gp-badge' id='setBadge'>Main Setting</span>\n"
+"    <div class='gp-head'><h1>Configuration</h1>\n"
 "     <span class='gp-actions'><button class='btn primary' id='setSave' onclick='saveSet()'>Save &amp; Apply</button><span class='ph2' id='setRes'></span></span></div>\n"
 "    <div class='gp-tabs' id='setTabs'></div>\n"
+"    <div class='gp-tabs gp-sub' id='setSub' style='display:none'></div>\n"
 "    <div id='setBody'></div>\n"
 "    <div class='setnote' id='setNote'></div>\n"
 "   </div>\n"
 /* Maintenance — 종전 Main Setting 의 'Command' 탭을 사이드바 독립 페이지로 뺐다.
    (GEMS3500 / confWebApp 과 같은 이름·같은 자리. 내용은 그대로 loadCommand() 가 그린다) */
 "   <div id='p-maint' style='display:none'>\n"
-"    <div class='gp-head'><h1>Maintenance</h1><span class='ph2' id='mRes'></span></div>\n"
+"    <div class='gp-head'><h1>Administration</h1><span class='ph2' id='mRes'></span></div>\n"
 "    <div id='mBody'></div>\n"
 "    <div class='setnote' id='mNote'></div>\n"
 "   </div>\n"
 "  </main>\n"
+"  </div>\n"
 " </div>\n"
 "</div>\n"
 /* ---------- script ---------- */
@@ -2286,7 +2508,7 @@ static const char INDEX_HTML[] =
 " if(r.d.auth){AUTHGEN++;IS_ADMIN=(r.d.role==='admin');if(r.d.nch)NCH=r.d.nch;\n"
 "  $('role').textContent=r.d.user+' ('+(IS_ADMIN?'Admin':'Viewer')+')';$('role').className='role '+(IS_ADMIN?'admin':'viewer');\n"
 "  ['b-clral','b-clrev'].forEach(function(id){$(id).disabled=!IS_ADMIN});\n"
-"  showApp();go('dash');pollLoop();return true;}\n"
+"  showApp();logoLoad();go('dash');pollLoop();return true;}\n"
 " showLogin();return false;});}\n"
 "function logout(){j('/api/logout').then(function(){IS_ADMIN=false;showLogin()})}\n"
 "$('loginForm').addEventListener('submit',function(e){e.preventDefault();\n"
@@ -2298,8 +2520,10 @@ static const char INDEX_HTML[] =
 /* nav */
 "function go(pg,tab){cur=pg;ioEd=0;\n"
 " ['dash','feeder','channel','io','setup','maint'].forEach(function(p){var pe=$('p-'+p);if(pe)pe.style.display=(p===pg)?'':'none';var ne=$('nav-'+p);if(ne)ne.className=(p===pg)?'on':'';var se=$('si-'+p);if(se)se.className='sitem'+(p===pg?' active':'');});\n"
-" if(pg!=='setup')$('si-chset').className='sitem';\n"
-" if(pg==='setup')setEnter(tab);else if(pg==='channel')chEnter();else if(pg==='maint')loadCommand();else pollLoop();}\n"
+/* p-channel 을 쓰는 메뉴 4개(Meter/Power Quality/Alarm·Event/Report) 활성 표시 — tab=CHG 키 */
+" if(pg==='channel'&&!CHG[tab])tab=chGrp;Object.keys(CHG).forEach(function(g){var se=$('si-'+g);if(se)se.className='sitem'+(pg==='channel'&&g===tab?' active':'');});\n"
+" $('crumb').textContent=(pg==='channel')?CHG[tab].t:{dash:'Dashboard',feeder:'Feeder',io:'IO',setup:'Configuration',maint:'Administration'}[pg];\n"
+" if(pg==='setup')setEnter(tab);else if(pg==='channel')chEnter(tab);else if(pg==='maint')loadCommand();else pollLoop();}\n"
 "(function(){var t=$('pollToggle');window.__pollOn=true;t.addEventListener('change',function(){window.__pollOn=t.checked;$('pollState').textContent=t.checked?'ON':'OFF';$('pollState').className='poll-state'+(t.checked?'':' off');});})();\n"
 /* dashboard */
 "function dstat(ok){var e=$('dstat');if(ok){e.className='on';e.innerHTML='&#9679; live &#8635; 1s'}else{e.className='bad';e.innerHTML='&#9679; read error'}}\n"
@@ -2359,24 +2583,37 @@ static const char INDEX_HTML[] =
 "  if(r.s===403){alert('Admin only');return}if(!r.d.ok){alert('Command failed');return}loadEvents();});}\n"
 /* setup */
 "var OPTDIS={};\n"
-"var OPT={snmp_ver:{0:'v1/v2c',1:'v1/v2c/v3',2:'v3 only'},freq:{0:'60 Hz',1:'50 Hz'},va_type:{0:'RMS (S=VA)',1:'Vector'},pf_sign:{0:'IEC',1:'IEEE'},demand_interval:{0:'1 min',1:'5 min',2:'15 min',3:'30 min',4:'60 min'},minmax_reset:{0:'Daily',1:'Weekly',2:'Monthly'},timezone:{'-720':'UTC-12:00','-600':'Hawaii -10:00','-540':'Alaska -09:00','-480':'Pacific -08:00','-420':'Mountain -07:00','-360':'Central -06:00','-300':'Eastern -05:00','-180':'-03:00','0':'UTC +00:00','60':'Berlin +01:00','120':'Athens +02:00','180':'Moscow +03:00','210':'Tehran +03:30','240':'Dubai +04:00','300':'Karachi +05:00','330':'India +05:30','345':'Nepal +05:45','360':'Dhaka +06:00','420':'Bangkok +07:00','480':'Shanghai +08:00','540':'Seoul +09:00','570':'Adelaide +09:30','600':'Sydney +10:00','720':'Auckland +12:00'}};\n"
+"var OPT={snmp_ver:{0:'v1/v2c',1:'v1/v2c/v3',2:'v3 only'},snmp_v3proto:{0:'SHA-1',1:'SHA-256'},freq:{0:'60 Hz',1:'50 Hz'},va_type:{0:'RMS (S=VA)',1:'Vector'},pf_sign:{0:'IEC',1:'IEEE'},demand_interval:{0:'1 min',1:'5 min',2:'15 min',3:'30 min',4:'60 min'},minmax_reset:{0:'Daily',1:'Weekly',2:'Monthly'},timezone:{'-720':'UTC-12:00','-600':'Hawaii -10:00','-540':'Alaska -09:00','-480':'Pacific -08:00','-420':'Mountain -07:00','-360':'Central -06:00','-300':'Eastern -05:00','-180':'-03:00','0':'UTC +00:00','60':'Berlin +01:00','120':'Athens +02:00','180':'Moscow +03:00','210':'Tehran +03:30','240':'Dubai +04:00','300':'Karachi +05:00','330':'India +05:30','345':'Nepal +05:45','360':'Dhaka +06:00','420':'Bangkok +07:00','480':'Shanghai +08:00','540':'Seoul +09:00','570':'Adelaide +09:30','600':'Sydney +10:00','720':'Auckland +12:00'}};\n"
 "var CARDN=['Device Information','Communication','ETC','Status','SNMP','MQTT','Remote Link'],setCur='general';\n"
 "var WM={0:'not used',1:'3P4W',2:'3P3W(2CT)',3:'3P3W(3CT)',4:'1P2W(L1)',5:'1P2W(L2)',6:'1P2W(L3)',7:'1P3W',8:'SIM'};\n"
 "var CT2M={0:'5A',1:'100mA/333mV',2:'Rogowski'},ZCTM={1:'200mV:100mV',2:'200mV:1.5mA',3:'200mV:0.1mA'},DIM={0:'DI',1:'PI'},DIRM={0:'+',1:'-'};\n"
 "var PT_F=[{o:0,l:'Wiring Mode',t:'u16',opt:WM},{o:2,l:'V Nominal',t:'u32'},{o:4,l:'PT1',t:'u32'},{o:6,l:'PT2',t:'u16'}];\n"
 /* hid:1 = 교정/제조사 값이라 화면에서 감춤(값은 그대로 유지·저장 안 건드림). 다시 노출하려면 hid:1만 지우면 된다 */
 "var CT_F=[{o:0,l:'I Nominal (%)',t:'u16'},{o:1,l:'CT1',t:'u16'},{o:2,l:'CT2',t:'u16',opt:CT2M},{o:3,l:'Turns',t:'u16',hid:1},{o:4,l:'Start I',t:'u16',sc:1000},{o:5,l:'CT1 Dir',t:'u16',opt:DIRM},{o:6,l:'CT2 Dir',t:'u16',opt:DIRM},{o:7,l:'CT3 Dir',t:'u16',opt:DIRM},{o:8,l:'Rogowski',t:'u16',hid:1},{o:9,l:'Phase Ofs 1',t:'i16',hid:1},{o:10,l:'Phase Ofs 2',t:'i16',hid:1},{o:11,l:'Phase Ofs 3',t:'i16',hid:1},{o:12,l:'ZCT Type',t:'u16',opt:ZCTM},{o:13,l:'ZCT Scale',t:'u16',hid:1}];\n"
-"var CMDS=[{g:'System',l:'Reboot',addr:7798,danger:1,note:'reboot'},{g:'System',l:'Save Set',addr:7799},{g:'System',l:'Init Settings',addr:7814,danger:2},{g:'System',l:'Set Time',addr:7788,utc:1}];\n"
+/* [26/11/19] btn: 행(Run) 대신 System 카드 위 SV900 형식 버튼(fr=Factory Reset 보라·집+톱니, rb=Reboot 분홍·전원). 순서도 SV900(초기화 → 재부팅) */
+/* Save Set(7799)은 뺐다 — Configuration 'Save & Apply'(/api/savecfg)와 Energy 편집이 이미 7799 로 저장(중복) */
+"var CMDS=[{g:'System',l:'Factory Reset',addr:7814,danger:2,btn:'fr'},{g:'System',l:'Reboot',addr:7798,danger:1,note:'reboot',btn:'rb'},{g:'System',l:'Set Time',addr:7788,utc:1}];\n"
+/* [26/11/19] System Status — 종전 General 'Status' 카드(METER_INFO 7092~7101). Administration 에서 1초마다 갱신 */
+"var SYSST=['Heart Bit','Modbus RX','Alarm STS','Event STS','RSTP STS #0','RSTP STS #1','SNTP STS','DEV STS','NET STS','TOT STS'];\n"
+"function sysStat(){if(!$('ss0'))return Promise.resolve();return j('/api/regs?addr=7092&n=10').then(function(r){if(!r.d||!r.d.ok)return;SYSST.forEach(function(l,k){var e=$('ss'+k);if(e)e.textContent=r.d.words[k];});});}\n"
+"var SYSICO={fr:\"<svg viewBox='0 0 24 24' stroke-width='1.25'><path d='M19 14v-2h2l-9 -9l-9 9h2v7a2 2 0 0 0 2 2h2.5'/><path d='M9 21v-6a2 2 0 0 1 2 -2h2a2 2 0 0 1 1.75 1.032'/><path d='M15.536 17.586a2.123 2.123 0 0 0 -2.929 0a1.951 1.951 0 0 0 0 2.828c.809 .781 2.12 .781 2.929 0c.809 -.781 -.805 .778 0 0l1.46 -1.41l1.46 -1.419'/><path d='M15.54 17.582l1.46 1.42l1.46 1.41c.809 .78 -.805 -.779 0 0s2.12 .781 2.929 0a1.951 1.951 0 0 0 0 -2.828a2.123 2.123 0 0 0 -2.929 0'/></svg>\",\n"
+" rb:\"<svg viewBox='0 0 24 24' stroke-width='2'><line x1='12' y1='6' x2='12' y2='12'/><path d='M17 7.5a6.5 6.5 0 1 1-10 0'/></svg>\"};\n"
 /* 'Command' 탭은 사이드바 Maintenance 페이지로 옮겼다 (loadCommand) */
-"var MAIN_TABS=[['general','General'],['pt','PT'],['ct','CT']];\n"
 /* Transient 탭은 기능 미지원이라 화면에서 감춤(CSECT.transient 정의는 유지) — 다시 노출하려면 ['transient','Transient']를 PQ Event 뒤에 되살린다 */
-"var CHAN_TABS=[['pqevent','PQ Event'],['waveform','Waveform'],['trend','Trend'],['pqreport','PQ Report'],['almdef','Alarm Def'],['alarm','Alarm Settings']];\n"
-"var setMode='main';\n"
-"function setEnter(arg){setMode=(arg==='chan')?'chan':'main';$('setBadge').textContent=(setMode==='chan')?'Channel Setting':'Main Setting';$('si-setup').className='sitem'+(setMode==='main'?' active':'');$('si-chset').className='sitem'+(setMode==='chan'?' active':'');setTab(((setMode==='chan')?CHAN_TABS:MAIN_TABS)[0][0]);}\n"
-"function setTab(t){setCur=t;var L=(setMode==='chan')?CHAN_TABS:MAIN_TABS,h='';L.forEach(function(p){h+=\"<a class='gp-tab\"+(p[0]===t?' on':'')+\"' data-t='\"+p[0]+\"'>\"+esc(p[1])+'</a>';});var st=$('setTabs');st.innerHTML=h;st.onclick=function(e){var a=e.target.closest('a[data-t]');if(a)setTab(a.getAttribute('data-t'));};\n"
+/* [26/11/19] Alarm Def 탭(항목 1개: compare Time Delay 6854)은 Alarm Settings 탭 맨 위 행으로 합침(loadAlarm, 종전 CSECT.almdef 삭제) */
+"var CHAN_TABS=[['pqevent','PQ Event'],['waveform','Waveform'],['trend','Trend'],['pqreport','PQ Report'],['alarm','Alarm Settings']];\n"
+/* [26/11/19] Configuration = SV900 구성. 위 탭 General | Meter | Feeder, 아래 줄(작은 탭)은 그룹의 세부 탭.
+   General = 종전 Main Setting General / Meter = 종전 Channel Setting(CHAN_TABS) / Feeder = 종전 Main Setting PT·CT.
+   setCur(세부 탭 키)·reloadSet·loadCSect 는 그대로. confLast: 그룹별 마지막 세부 탭 */
+"var CONF_TABS=[['general','General'],['meter','Meter'],['feeder','Feeder']],CONF_SUB={meter:CHAN_TABS,feeder:[['pt','PT'],['ct','CT']]},confGrp='general',confLast={};\n"
+"function setEnter(g){if(g==='chan')g='meter';if(g!=='general'&&!CONF_SUB[g])g='general';confGrp=g;var h='';\n"
+" CONF_TABS.forEach(function(p){h+=\"<a class='gp-tab\"+(p[0]===g?' on':'')+\"' data-g='\"+p[0]+\"'>\"+p[1]+'</a>';});var st=$('setTabs');st.innerHTML=h;\n"
+" st.onclick=function(e){var a=e.target.closest('a[data-g]');if(a)setEnter(a.getAttribute('data-g'));};var S=CONF_SUB[g];setTab(S?(confLast[g]||S[0][0]):'general');}\n"
+"function setTab(t){setCur=t;var S=CONF_SUB[confGrp],h='';if(S){confLast[confGrp]=t;S.forEach(function(p){h+=\"<a class='gp-tab\"+(p[0]===t?' on':'')+\"' data-t='\"+p[0]+\"'>\"+esc(p[1])+'</a>';});}\n"
+" var st=$('setSub');st.innerHTML=h;st.style.display=S?'':'none';st.onclick=function(e){var a=e.target.closest('a[data-t]');if(a)setTab(a.getAttribute('data-t'));};\n"
 " $('setSave').style.display=IS_ADMIN?'':'none';$('setRes').textContent='';$('setBody').innerHTML=\"<p class='stub'>loading...</p>\";reloadSet();}\n"
 "function reloadSet(){var t=setCur;if(t==='general')loadGeneral();else if(t==='pt')loadGroup('pt');else if(t==='ct')loadGroup('ct');else if(t==='alarm')loadAlarm();else loadCSect(t);}\n"
-"var CSECT={pqevent:[[6700,'Level','Over Current'],[6701,'Cycle','Over Current'],[6702,'Trigger Action','Over Current'],[6703,'holdOff Cycle','Over Current'],[6706,'Level(%)','Sag',1],[6707,'Cycle','Sag',1],[6708,'Trigger Action','Sag',1],[6709,'holdOff Cycle','Sag',1],[6712,'Level(%)','Swell',1],[6713,'Cycle','Swell',1],[6714,'Trigger Action','Swell',1],[6715,'holdOff Cycle','Swell',1],[6718,'Level(%)','Interruption',1],[6719,'Time(s)','Interruption',1],[6720,'Trigger Action','Interruption',1],[6721,'holdOff Cycle','Interruption',1]],transient:[[6724,'HoldOff(ms)','Voltage',1],[6725,'Abs Peak(%)','Voltage',1],[6726,'Fast Change','Voltage',1],[6727,'Trigger Action','Voltage',1],[6728,'HoldOff','Current'],[6729,'Abs Peak','Current'],[6730,'Fast Change','Current'],[6731,'Trigger Action','Current']],waveform:[[6746,'Pre trigger (cycle)'],[6747,'Post trigger (cycle)']],pqreport:[[6844,'Active','',1],[6845,'Start Day','',1]],almdef:[[6854,'compare Time Delay(s)']]};\n"
+"var CSECT={pqevent:[[6700,'Level','Over Current'],[6701,'Cycle','Over Current'],[6702,'Trigger Action','Over Current'],[6703,'holdOff Cycle','Over Current'],[6706,'Level(%)','Sag',1],[6707,'Cycle','Sag',1],[6708,'Trigger Action','Sag',1],[6709,'holdOff Cycle','Sag',1],[6712,'Level(%)','Swell',1],[6713,'Cycle','Swell',1],[6714,'Trigger Action','Swell',1],[6715,'holdOff Cycle','Swell',1],[6718,'Level(%)','Interruption',1],[6719,'Time(s)','Interruption',1],[6720,'Trigger Action','Interruption',1],[6721,'holdOff Cycle','Interruption',1]],transient:[[6724,'HoldOff(ms)','Voltage',1],[6725,'Abs Peak(%)','Voltage',1],[6726,'Fast Change','Voltage',1],[6727,'Trigger Action','Voltage',1],[6728,'HoldOff','Current'],[6729,'Abs Peak','Current'],[6730,'Fast Change','Current'],[6731,'Trigger Action','Current']],waveform:[[6746,'Pre trigger (cycle)'],[6747,'Post trigger (cycle)']],pqreport:[[6844,'Active','',1],[6845,'Start Day','',1]]};\n"
 /* Trend: Version 행(g[2])은 내부값이라 화면에서 감춤 — 다시 노출하려면 주석 처리된 push를 되살린다 */
 "(function(){var t=[];[[1,6764,6766,6767],[2,6783,6785,6786],[3,6802,0,6805],[4,6821,0,6824]].forEach(function(g){var gn='Group '+g[0];t.push([g[1],'Active',gn]);t.push([g[1]+1,'Interval',gn]);/*if(g[2])t.push([g[2],'Version',gn]);*/for(var k=0;k<16;k++)t.push([g[3]+k,'Ch'+(k+1),gn]);});CSECT.trend=t;})();\n"
 /* CSECT 탭 중 Active 행을 토글 버튼으로 낼 것들. hide=1 이면 OFF 시 같은 그룹의 나머지 행을 숨긴다. */
@@ -2419,21 +2656,18 @@ static const char INDEX_HTML[] =
 " var on=(b.value==='1'),inv=b.getAttribute('data-inv')==='1',hid=b.getAttribute('data-hide')==='1',lock=b.disabled||(inv?on:!on);\n"
 " b.getAttribute('data-dep').split(',').forEach(function(k){root.querySelectorAll(\"[data-k='\"+k.trim()+\"']\").forEach(function(el){\n"
 "  if(hid){var r=el.closest('.srow');if(r)r.style.display=lock?'none':'';}else el.disabled=lock;});});});if(window.snmpVerDeps)snmpVerDeps();}\n"
-"var GDEP={dhcp:['ip,subnet,gateway,dns',1],mb_tcp:['tcp_port,device_id',0],sntp:['sntp_server,sntp_interval',0],mqtt:['mqtt_host,mqtt_port,mqtt_interval,mqtt_qos,mqtt_retain,mqtt_keepalive,mqtt_client,mqtt_user,mqtt_pass,mqtt_topic',0],snmp:['snmp_ver,snmp_trap,trap_ip,snmp_community,snmp_contact,snmp_location',0],snmp_trap:['trap_ip',0]};\n"
+"var GDEP={dhcp:['ip,subnet,gateway,dns',1],mb_tcp:['tcp_port,device_id',0],sntp:['sntp_server,sntp_interval',0],mqtt:['mqtt_host,mqtt_port,mqtt_interval,mqtt_qos,mqtt_retain,mqtt_keepalive,mqtt_client,mqtt_user,mqtt_pass,mqtt_topic',0],snmp:['snmp_ver,snmp_v3proto,snmp_trap,trap_ip,snmp_community,snmp_contact,snmp_location',0],snmp_trap:['trap_ip',0]};\n"
 "function ctlOf(f){var d=\"data-addr='\"+f.addr+\"' data-type='\"+f.type+\"' data-orig='\"+esc(f.val)+\"' data-k='\"+f.k+\"'\",dis=IS_ADMIN?'':'disabled';\n"
 " if(f.ro)return \"<span class='sv' data-k='\"+f.k+\"'>\"+fmtV(f)+\"</span><span class='rtag'>R</span>\";\n"
 " if(OPT[f.k]){var o=OPT[f.k],s=\"<select \"+d+' '+dis+\" onchange='setMark(this)'>\";for(var k in o)s+=\"<option value='\"+k+\"'\"+((''+k)===(''+f.val)?' selected':'')+((OPTDIS[f.k]&&OPTDIS[f.k][k])?' disabled':'')+'>'+esc(o[k])+'</option>';return s+'</select>';}\n"
 " if(f.type==='bool'){var g=GDEP[f.k];return togBtn(d,!!f.val,dis,g?g[0]:'',g?g[1]:0,0);}\n"
 " var tp=(f.type==='ip'||f.type==='str')?'text':'number',ml=(f.type==='str'&&f.nw)?(\" data-nw='\"+f.nw+\"' maxlength='\"+(f.nw*2-1)+\"'\"):'';\n"
 " return \"<input type='\"+tp+\"' \"+d+ml+\" value='\"+esc(f.val)+\"' \"+dis+\" oninput='setMark(this)'>\";}\n"
-/* Status 카드(Heart Bit·Modbus RX 등)는 실시간 값 — 카드 전체를 다시 그리면 편집 중인
-   다른 카드가 날아가므로, 해당 워드블록만 1초마다 읽어 값 span 만 교체한다. */
-"var STF=[],STLO=0,STN=0;\n"
+/* [26/11/19] 종전 Status 카드(실시간 값·1초 갱신 STF/loadStatus)는 Administration 'System Status'(SYSST)로 이동.
+   항목이 없는 카드(지금은 3)는 그리지 않는다 */
 "function loadGeneral(){return j('/api/general').then(function(r){if(!r.d.ok){$('setBody').innerHTML=\"<p class='stub'>load error</p>\";return;}\n"
 " var cs=CARDN.map(function(){return [];});r.d.fields.forEach(function(f){cs[f.card].push(f)});var h=\"<div class='setgrid'>\";\n"
-" STF=cs[3];STLO=0;STN=0;STF.forEach(function(f){if(!STLO||f.addr<STLO)STLO=f.addr;});\n"
-" STF.forEach(function(f){if(f.addr-STLO+1>STN)STN=f.addr-STLO+1;});\n"
-" cs.forEach(function(fs,ci){h+=\"<div class='setcard'\"+(ci===4?\" id='snmpCard'\":ci===6?\" id='rlCard'\":'')+\"><h3>\"+CARDN[ci]+'</h3>';fs.forEach(function(f){h+=\"<div class='srow'><span class='sk'>\"+esc(f.label)+'</span>'+ctlOf(f)+'</div>';});h+='</div>';});\n"
+" cs.forEach(function(fs,ci){if(!fs.length)return;h+=\"<div class='setcard'\"+(ci===4?\" id='snmpCard'\":ci===6?\" id='rlCard'\":'')+\"><h3>\"+CARDN[ci]+'</h3>';fs.forEach(function(f){h+=\"<div class='srow'><span class='sk'>\"+esc(f.label)+'</span>'+ctlOf(f)+'</div>';});h+='</div>';});\n"
 " h+='</div>';$('setBody').innerHTML=h;togDeps($('setBody'));sn('Save & Apply.');return loadSnmpStr().then(loadRemoteLog);});}\n"
 /* Remote Link 카드 — 서명링크 설명 + 최근 원격 로그인 기록(admin만, /api/remotelog) */
 "function loadRemoteLog(){var c=$('rlCard');if(!c)return;c.insertAdjacentHTML('beforeend',\"<div class='setnote'>Allows one-time signed links from the remote dashboard server. <b>Off by default.</b> Applies on Save.</div>\");\n"
@@ -2448,17 +2682,14 @@ static const char INDEX_HTML[] =
 " c.insertAdjacentHTML('beforeend',row('Community','community','','password',r.d.commDefault?'public (default) - change!':'(unchanged)')\n"
 "  +row('sysContact','contact',r.d.contact,'text','')+row('sysLocation','location',r.d.location,'text','e.g. Bldg-B 2F MCC-3')\n"
 "  +row('v3 User','v3user',r.d.v3user,'text','')\n"
-"  +row('v3 Auth Password (SHA-1)','v3auth','','password',r.d.v3auth?'(set) - type to change':'(not set) 8~32 chars')\n"
+"  +row('v3 Auth Password','v3auth','','password',r.d.v3auth?'(set) - type to change':'(not set) 8~32 chars')\n"
 "  +row('v3 Priv Password (AES-128)','v3priv','','password',r.d.v3priv?'(set) - type to change':'(not set) optional, 8~32 chars')\n"
 "  +\"<div class='srow'><span class='sk'></span><span style='color:var(--muted);font-size:12px'>ASCII only, max 32 &middot; v3 password 8~32 &middot; all SNMP settings applied after reboot</span></div>\");\n"
 " var vs=document.querySelector(\"#setBody select[data-k='snmp_ver']\");if(vs)vs.addEventListener('change',snmpVerDeps);togDeps($('setBody'));});}\n"
 /* SNMP Version에 따른 잠금: v1/v2c → v3 칸 잠금, v3 only → Community 잠금 (SNMP OFF면 모두 잠금) */
 "function snmpVerDeps(){var t=document.querySelector(\"#setBody button.tog[data-k='snmp']\"),s=document.querySelector(\"#setBody select[data-k='snmp_ver']\");if(!t||!s)return;\n"
 " var on=IS_ADMIN&&t.value==='1',v=s.value;function lk(k,l){var e=document.querySelector(\"#setBody [data-k='\"+k+\"']\");if(e)e.disabled=l;}\n"
-" lk('snmp_community',!on||v==='2');['snmp_v3user','snmp_v3auth','snmp_v3priv'].forEach(function(k){lk(k,!on||v==='0');});}\n"
-"function loadStatus(){if(!STN||setCur!=='general')return Promise.resolve();\n"
-" return j('/api/regs?addr='+STLO+'&n='+STN).then(function(r){if(!r.d||!r.d.ok)return;\n"
-"  STF.forEach(function(f){var e=document.querySelector(\"#setBody .sv[data-k='\"+f.k+\"']\");if(e)e.textContent=r.d.words[f.addr-STLO];});});}\n"
+" lk('snmp_community',!on||v==='2');['snmp_v3proto','snmp_v3user','snmp_v3auth','snmp_v3priv'].forEach(function(k){lk(k,!on||v==='0');});}\n"
 "function setMark(el){var v=(el.type==='checkbox')?(el.checked?'1':'0'):el.value;if((''+v)!==el.getAttribute('data-orig'))el.classList.add('chg');else el.classList.remove('chg');}\n"
 "function setRes(m){$('setRes').textContent=m}\n"
 "function saveSet(){var els=document.querySelectorAll('#setBody [data-addr]'),chg=[],sc={},ns=0;\n"
@@ -2492,15 +2723,32 @@ static const char INDEX_HTML[] =
 "  h+='</tbody></table></div>';$('setBody').innerHTML=h;sn('Save & Apply.');});}\n"
 "function tgtOpts(id){var s=\"<select id='t_\"+id+\"' style='width:80px'><option value='0'>ALL</option>\";for(var t=1;t<=NCH;t++)s+=\"<option value='\"+t+\"'>#\"+t+'</option>';return s+'</select>';}\n"
 "function loadCommand(){var gr={},od=[];CMDS.forEach(function(c){if(!gr[c.g]){gr[c.g]=[];od.push(c.g);}gr[c.g].push(c);});var h='';\n"
-" od.forEach(function(g){h+=\"<div class='setcard'><h3>\"+g+'</h3>';gr[g].forEach(function(c){var gi=CMDS.indexOf(c),id='c'+gi,ctl='';\n"
+" od.forEach(function(g){h+=\"<div class='setcard'><h3>\"+g+'</h3>';var bt=gr[g].filter(function(c){return c.btn;});\n"
+"  if(bt.length)h+=\"<div class='sysbtns'>\"+bt.map(function(c){return \"<button class='sysb \"+c.btn+\"' \"+(IS_ADMIN?'':'disabled')+\" onclick='runCmd(\"+CMDS.indexOf(c)+\")'>\"+SYSICO[c.btn]+esc(c.l)+'</button>';}).join('')+'</div>';\n"
+"  gr[g].forEach(function(c){if(c.btn)return;var gi=CMDS.indexOf(c),id='c'+gi,ctl='';\n"
 "  if(c.utc)ctl=\"<input lang='en-US' type='datetime-local' step='1' id='u_\"+id+\"' style='width:230px'><button class='btn' onclick='pcNow(\"+gi+\")'>PC Time</button>\";else if(c.tgt)ctl=tgtOpts(id);\n"
 "  h+=\"<div class='srow'><span class='sk'>\"+c.l+\"</span><span style='display:flex;gap:8px;align-items:center'>\"+ctl+\"<button class='btn\"+(c.danger?' warn':'')+\"' \"+(IS_ADMIN?'':'disabled')+\" onclick='runCmd(\"+gi+\")'>Run</button></span></div>\";});\n"
 /* Set Time 이 있는 카드에만 장비 시계와 SNTP 주의를 붙인다 (GEMS35x Maintenance 와 같은 문구) */
 "  if(gr[g].some(function(c){return c.utc;}))h+=\"<div class='srow'><span class='sk'>Device</span><span class='sv' id='devNow'>-</span></div><div class='setnote'>Sets the device clock (local time). <b>If SNTP is enabled, the next sync overwrites it.</b></div>\";\n"
 "  h+='</div>';});\n"
+" h+=\"<div class='setcard'><h3>System Status</h3>\"+SYSST.map(function(l,k){return \"<div class='srow'><span class='sk'>\"+l+\"</span><span class='sv' id='ss\"+k+\"'>-</span></div>\";}).join('')+'</div>';\n"
 " if(IS_ADMIN)h+=\"<div class='setcard'><h3>Firmware Update</h3><div class='srow'><span class='sk'>File (.bin)</span><span style='display:flex;gap:8px;align-items:center'><input type='file' id='fwFile' accept='.bin' style='display:none' onchange='fwFileSel()'><button class='btn' \"+(IS_ADMIN?'':'disabled')+\" onclick='fwPick()'>Choose File</button><span id='fwFName' style='color:var(--muted)'>No file selected</span></span></div><div class='srow'><span class='sk'>Status</span><span class='sv' id='fwStat'>-</span></div><div class='srow'><span></span><span style='display:flex;gap:8px'><button class='btn' \"+(IS_ADMIN?'':'disabled')+\" onclick='fwUpload()'>Upload</button><button class='btn warn' id='fwApplyBtn' disabled onclick='fwApply()'>Apply &amp; Reboot</button><button class='btn' onclick='fwClear()'>Clear</button></span></div></div>\";\n"
-" $('mBody').innerHTML=\"<div class='setgrid two'>\"+h+'</div>';$('mNote').textContent=IS_ADMIN?'Reboot/Init.':'Viewer: no execute.';\n"
+/* [26/11/19] 사이드바 로고 변경(SV900 'Change Logo') — PNG/JPG/GIF/WEBP ≤64KB, SVG 제외. 기본=글자 'SV300' */
+" if(IS_ADMIN)h+=\"<div class='setcard'><h3>Sidebar Logo</h3><div class='srow'><span class='sk'>Current</span><span class='lgpv' id='lgPv'></span></div><div class='srow'><span class='sk'>File</span><span style='display:flex;gap:8px;align-items:center'><input type='file' id='lgFile' accept='image/png,image/jpeg,image/gif,image/webp' style='display:none' onchange='lgSel()'><button class='btn' onclick='lgPick()'>Choose File</button><span id='lgName' style='color:var(--muted)'>No file selected</span></span></div><div class='srow'><span class='sk'>Status</span><span class='sv' id='lgStat'>-</span></div><div class='srow'><span></span><span style='display:flex;gap:8px'><button class='btn primary' onclick='lgUp()'>Upload</button><button class='btn' onclick='lgReset()'>Default (Text)</button></span></div><div class='setnote'>PNG, JPG, GIF, WEBP &middot; max 64 KB &middot; shown at the top of the sidebar (height 40 px).</div></div>\";\n"
+" $('mBody').innerHTML=\"<div class='setgrid two'>\"+h+'</div>';$('mNote').textContent=IS_ADMIN?'Reboot/Init.':'Viewer: no execute.';logoSet(LOGO_V);\n"
 " $('mBody').querySelectorAll('[type=datetime-local]').forEach(function(e){e.value=fdt(new Date()).replace(' ','T');});devNow();}\n"
+/* 로고: LOGO_V=0 이면 글자, 아니면 /api/logo?v=버전(버전이 바뀔 때만 다시 받음). 이미지 실패 시 글자로 */
+"var LOGO_V=0;\n"
+"function logoSet(v){LOGO_V=v;var b=$('sbrand'),p=$('lgPv');if(b)b.innerHTML=v?`<img src='/api/logo?v=${v}' alt='logo' onerror='logoSet(0)'>`:\"<span class='sbtxt'>SV300</span>\";if(p&&b)p.innerHTML=b.innerHTML;}\n"
+"function logoLoad(){return j('/api/logoinfo').then(function(r){logoSet(r.d&&r.d.logo?r.d.v:0);}).catch(function(){});}\n"
+"function lgPick(){$('lgFile').click();}\n"
+"function lgMsg(m,bad){var e=$('lgStat');if(!e)return;e.textContent=m;e.style.color=bad===undefined?'':(bad?'var(--bad)':'var(--ok)');}\n"
+"function lgSel(){var f=$('lgFile').files[0];$('lgName').textContent=f?f.name+' ('+Math.ceil(f.size/1024)+' KB)':'No file selected';lgMsg('-');}\n"
+"function lgUp(){var f=$('lgFile').files[0];if(!f){lgMsg('Select an image file',1);return;}\n"
+" if(['image/png','image/jpeg','image/gif','image/webp'].indexOf(f.type)<0){lgMsg('PNG, JPG, GIF, WEBP only',1);return;}if(f.size>65536){lgMsg('Too large (max 64 KB)',1);return;}\n"
+" lgMsg('uploading...');fetch('/api/logo',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:f}).then(function(rs){return rs.json().catch(function(){return{};});})\n"
+"  .then(function(d){if(d&&d.ok){logoSet(d.v);lgMsg('Logo changed',0);}else{lgMsg('Failed'+(d&&d.error?': '+d.error:''),1);logoLoad();}}).catch(function(){lgMsg('Upload error',1);logoLoad();});}\n"
+"function lgReset(){if(!confirm('Restore the default text logo?'))return;jp('/api/logoreset',{}).then(function(r){if(r.d&&r.d.ok){logoSet(0);lgMsg('Default restored',0);}else lgMsg('Failed',1);});}\n"
 /* 장비 시계 — 맵 @0 의 u32(로컬 epoch). 푸터 시각은 브라우저 것이라 장비가 몇 시로 아는지는 여기서만 보인다 */
 "function devNow(){var e=$('devNow');if(!e)return;j('/api/regs?addr=0&n=2').then(function(r){if(!r.d||!r.d.ok)return;var t=r.d.words[0]+r.d.words[1]*65536;$('devNow').textContent=t?fdtU(new Date(t*1000)):'-';}).catch(function(){});}\n"
 "function pcNow(gi){var e=$('u_c'+gi);if(e)e.value=fdt(new Date()).replace(' ','T');}\n"
@@ -2514,24 +2762,59 @@ static const char INDEX_HTML[] =
 "function fwApply(){if(!IS_ADMIN){alert('Admin only');return;}if(!confirm('Apply uploaded usrApp.bin and reboot?\\nDevice will reflash firmware via bootloader.'))return;$('mNote').textContent='Validating firmware...';jp('/api/fwapply',{}).then(function(r){if(r.s===403){alert('Admin only');$('mNote').textContent='';return;}if(!r.d.ok){alert('Apply failed (err '+(r.d.err!==undefined?r.d.err:'?')+').\\nUpload a valid usrApp.bin first.');$('mNote').textContent='';return;}$('mNote').textContent='Firmware apply: rebooting & flashing...';waitReboot();});}\n"
 /* Feeder */
 "function fbadge(w){return `<span class='wb'>${WM[w]||('mode '+w)}</span>`;}\n"
-"function kv(k,v,u){return `<div class='kvi'><span class='kk'>${k}</span><span class='kvv'>${v}<small> ${u}</small></span></div>`;}\n"
-"var lastFeed=null;\n"
-"function fCards(list){var h='';list.forEach(function(f){\n"
-"  h+=`<div class='fcard${f.st?'':' off'}'><div class='fch'><span class='ft'>Feeder #${f.n}</span>${fbadge(f.wiring)}<span class='ff'>${n(f.freq,2)} Hz</span></div>`;\n"
-"  h+=`<table class='ftbl'><tr><th></th><th>Phase V</th><th>Line V</th><th>Current</th><th>THD-U</th><th>THD-I</th></tr>`;\n"
-"  ['L1','L2','L3'].forEach(function(ph,k){h+=`<tr><td class='pk'>${ph}</td><td>${n(f.u[k],1)}</td><td>${n(f.upp[k],1)}</td><td>${n(f.i[k],2)}</td><td>${n(f.thdu[k],1)}%</td><td>${n(f.thdi[k],1)}%</td></tr>`;});\n"
-"  h+=`</table><div class='fkv'>`+kv('Ig',n(f.ig,2),'A')+kv('PF',n(f.pf,3),'')+kv('P',n(f.p,2),'kW')+kv('Q',n(f.q,2),'kVar')+kv('S',n(f.s,2),'kVA')+kv('U-unb',n(f.uunb,1),'%')+kv('I-unb',n(f.iunb,1),'%')+kv('Import',n(f.kwh,2),'kWh')+kv('Month',n(f.kwh_m,2),'kWh')+`</div></div>`;\n"
-"  });return h;}\n"
-"function fErr(){$('fstat').className='bad';$('fstat').innerHTML='&#9679; read error';if(lastFeed)$('fgrid').innerHTML=fCards(chBlank(lastFeed));}\n"
+"var lastFeed=null,fSel=1;try{fSel=+localStorage.getItem('fsel')||1;}catch(e){}\n"
+"function fCls(f){return !f.reg?'un':(f.cb?'on':'off');}\n"
+"function fTiles(list){return list.map(function(f){var c=fCls(f);return `<div class='fsb ${c}${f.n===fSel?' sel':''}'${f.reg?` onclick='fPick(${f.n})'`:''}><b>${f.n}</b><span>${c==='on'?'On':c==='off'?'Off':'Unregistered'}</span></div>`;}).join('');}\n"
+"function fPick(k){fSel=k;try{localStorage.setItem('fsel',k);}catch(e){}if(lastFeed)fRender(lastFeed);}\n"
+/* 표 한 행: 단상 피더(vph>=0)는 해당 상만, 나머지 상은 '-'. tot 를 주면 합계/단일값 행 */
+"function fRow(lb,u,f,arr,d,tot){var ps=f.vph>=0?[f.vph]:[0,1,2],c=['-','-','-'],a=tot,s=0;\n"
+" if(arr){ps.forEach(function(k){c[k]=n(arr[k],d);s+=(arr[k]==null)?NaN:arr[k];});if(a===undefined)a=n(s/ps.length,d);}\n"
+" return `<tr><td class='pk'>${lb}${u?` <small>(${u})</small>`:''}</td><td>${a}</td><td>${c[0]}</td><td>${c[1]}</td><td>${c[2]}</td></tr>`;}\n"
+"function fMeas(f){var h=`<table class='ftbl'><tr><th>Item</th><th>Avg / Total</th><th>L1</th><th>L2</th><th>L3</th></tr>`;\n"
+" h+=fRow('Phase V','V',f,f.u,1)+(f.vph<0?fRow('Line V','V',f,f.upp,1):'')+fRow('Current','A',f,f.i,2)+fRow('THD-U','%',f,f.thdu,1)+fRow('THD-I','%',f,f.thdi,1)+fRow('TDD-I','%',f,f.tddi,1);\n"
+" h+=fRow('P','kW',f,null,2,n(f.p,2))+fRow('Q','kVar',f,null,2,n(f.q,2))+fRow('S','kVA',f,null,2,n(f.s,2))+fRow('PF','',f,null,3,n(f.pf,3))+fRow('Frequency','Hz',f,null,2,n(f.freq,2));\n"
+" if(f.vph<0)h+=fRow('Ig','A',f,null,2,n(f.ig,2))+fRow('U-unb','%',f,null,1,n(f.uunb,1))+fRow('I-unb','%',f,null,1,n(f.iunb,1));\n"
+" return h+'</table>';}\n"
+/* SV900 형식: Import / Export / Total(I+E) / Net(I-E, 순전력량 — SV900 'Cal Sum') */
+"function fEgy(f){function r(k,v){return `<div class='r'><span>${k}</span><b>${n(v,2)}</b></div>`;}function g(t,i,e){return `<div class='egyb'><h4>${t}</h4>${r('Import',i)}${r('Export',e)}${r('Total (I+E)',(i==null||e==null)?null:i+e)}${r('Net (I&minus;E)',(i==null||e==null)?null:i-e)}</div>`;}\n"
+" return `<div class='egyg'>${g('Active (kWh)',f.kwh,f.kwh_e)}${g('Reactive (kvarh)',f.kvarh_i,f.kvarh_e)}<div class='egyb'><h4>Apparent (kVAh)</h4>${r('Total',f.kvah)}</div></div>`;}\n"
+/* 선택 피더가 미등록이면 첫 등록 피더로. SELECTED 줄에 Feeder↔칩/CT 배정 표시 */
+"function fRender(list){var f=list.filter(function(x){return x.n===fSel&&x.reg;})[0];if(!f){f=list.filter(function(x){return x.reg;})[0];if(f)fSel=f.n;}\n"
+" $('fsg').innerHTML=fTiles(list);\n"
+" if(!f){$('fsel').innerHTML='';$('fmeas').innerHTML=\"<p class='stub'>No registered feeder</p>\";$('fegy').innerHTML='';return;}\n"
+" $('fsel').innerHTML=`SELECTED <span class='wb'>Feeder ${f.n}</span>${fbadge(f.wiring)}<span class='wb'>CH${f.ch}${f.ct?' / CT'+f.ct:''}</span>`;\n"
+" $('fmeas').innerHTML=fMeas(f);$('fegy').innerHTML=fEgy(f);$('fph').innerHTML=fPhase(f);}\n"
+/* [26/11/19] 벡터도 — SV900 CanvasAngle 형식: 밝은 원·점선 동심원(1/3·2/3)·30° 방사선, 60° 간격 보라 각도,
+   색 U1 회색·U2 주황·U3 하늘 / I1 slate·I2 빨강·I3 파랑, 실선 + 열린 화살촉 + 끝에 이름, 범례·크기표·In 벡터 없음.
+   길이: 전압 0.85R×|U|/max(U), 전류 0.5R×|I|/max(I) (끝 이름이 바깥 각도 표기와 겹치지 않게). 단상 피더는 다른 상 길이 0 → 생략 */
+"var PH9=['#6B7280','#F97316','#67BFFF','#1E293B','#FA4949','#2563EB'];\n"
+"function ph9(f){var c=140,R=108,lt=document.documentElement.getAttribute('data-theme')==='light',bg=lt?'#E5E7EB':'#F3F4F6',ln=lt?'#9CA3AF':'#E5E7EB',k,a,r,v=[];\n"
+" var s=`<svg class='ph9' viewBox='0 0 280 280'><circle cx='${c}' cy='${c}' r='${R}' fill='${bg}' stroke='${ln}' stroke-width='1.2' stroke-dasharray='5,3'/>`;\n"
+" for(k=1;k<3;k++)s+=`<circle cx='${c}' cy='${c}' r='${(R*k/3).toFixed(1)}' fill='none' stroke='${ln}' stroke-width='1.2' stroke-dasharray='5,3'/>`;\n"
+" for(a=0;a<360;a+=30){r=a*Math.PI/180;s+=`<line x1='${c}' y1='${c}' x2='${(c+R*Math.cos(r)).toFixed(1)}' y2='${(c-R*Math.sin(r)).toFixed(1)}' stroke='${ln}' stroke-width='1.2' stroke-dasharray='5,3'/>`;\n"
+"  if(a%60===0)s+=`<text x='${(c+(R+18)*Math.cos(r)).toFixed(1)}' y='${(c-(R+18)*Math.sin(r)+3).toFixed(1)}' text-anchor='middle' font-size='10' fill='#8470FF'>${a}&deg;</text>`;}\n"
+" var um=Math.max.apply(null,f.u.map(function(x){return Math.abs(x)||0;}))||1,im=Math.max.apply(null,f.i.map(function(x){return Math.abs(x)||0;}))||1;\n"
+" for(k=0;k<3;k++)v.push([f.uang[k],R*0.85*Math.abs(f.u[k])/um,'U'+(k+1),PH9[k]]);for(k=0;k<3;k++)v.push([f.iang[k],R*0.5*Math.abs(f.i[k])/im,'I'+(k+1),PH9[3+k]]);\n"
+" v.forEach(function(q){var L=q[1];if(!(L>0.5))return;var t=q[0]*Math.PI/180,dx=Math.cos(t),dy=-Math.sin(t),x=c+L*dx,y=c+L*dy,bx=x-8*dx,by=y-8*dy,px=-dy*4,py=dx*4;\n"
+"  s+=`<path d='M${c},${c}L${x.toFixed(1)},${y.toFixed(1)}M${(bx+px).toFixed(1)},${(by+py).toFixed(1)}L${x.toFixed(1)},${y.toFixed(1)}L${(bx-px).toFixed(1)},${(by-py).toFixed(1)}' stroke='${q[3]}' stroke-width='2.6' fill='none' stroke-linecap='square'/>`;\n"
+"  s+=`<text x='${(x+11*dx).toFixed(1)}' y='${(y+11*dy+4).toFixed(1)}' text-anchor='middle' font-size='11' font-weight='700' fill='${q[3]}'>${q[2]}</text>`;});\n"
+" return s+`<circle cx='${c}' cy='${c}' r='2.2' fill='#333'/></svg>`;}\n"
+"function fPhase(f){return `<div class='ph9w'>${ph9(f)}</div>`;}\n"
+/* 읽기 실패: 상태 칸·배정은 유지하고 계측값만 '----' */
+"function fErr(){$('fstat').className='bad';$('fstat').innerHTML='&#9679; read error';if(lastFeed)fRender(lastFeed.map(function(x){var o={};for(var k in x)o[k]=(['n','wiring','reg','cb','ch','ct','vph'].indexOf(k)>=0)?x[k]:nv(x[k]);return o;}));}\n"
 "function loadFeeder(){return j('/api/feeders').then(function(r){\n"
 " if(!r.d.ok){fErr();return;}\n"
-" $('fstat').className='on';$('fstat').innerHTML='&#9679; live &#8635; 1s';lastFeed=r.d.feeders;$('fgrid').innerHTML=fCards(r.d.feeders);\n"
+" $('fstat').className='on';$('fstat').innerHTML='&#9679; live &#8635; 1s';lastFeed=r.d.feeders;fRender(lastFeed);\n"
 " }).catch(fErr);}\n"
 /* Channel */
 "var chTabCur='meter',CHN=[{n:1},{n:2},{n:3}];\n"
 "var harmOpt='pv',harmView='table',PCOL=['#8b5cf6','#38bdf8','#84cc16'];\n"
-"function chEnter(){chSetTab(chTabCur);}\n"
-"function chSetTab(t){chTabCur=t;egyEd=0;['meter','phase','minmax','harmonics','waveform','report','vq','monthly','energy','demand','alarm','event'].forEach(function(x){var e=$('ct-'+x);if(e)e.className='gp-tab'+(x===t?' on':'');});var cc=$('chctl');if(cc)cc.style.display=(t==='harmonics')?'flex':'none';syncHv();$('chbody').innerHTML=\"<p class='stub'>loading...</p>\";pollLoop();}\n"
+/* 메뉴(그룹)별 탭 묶음 — SV900 사이드바 구성. 탭이 1개뿐이면(Report) 탭 바를 숨긴다. chLast: 그룹별 마지막 탭 */
+"var CHG={meter:{t:'Meter',tabs:['meter','phase','energy','minmax','demand']},pq:{t:'Power Quality',tabs:['harmonics','waveform']},evt:{t:'Alarm / Event',tabs:['alarm','event']},rpt:{t:'Report',tabs:['report']}},chGrp='meter',chLast={};\n"
+"function chEnter(g){var G=CHG[g]||CHG.meter;chGrp=CHG[g]?g:'meter';$('chTitle').textContent=G.t;\n"
+" ['meter','phase','minmax','harmonics','waveform','report','energy','demand','alarm','event'].forEach(function(x){var e=$('ct-'+x);if(e)e.style.display=G.tabs.indexOf(x)>=0?'':'none';});\n"
+" $('chTabs').style.display=G.tabs.length>1?'':'none';chSetTab(chLast[chGrp]||G.tabs[0]);}\n"
+"function chSetTab(t){chTabCur=t;chLast[chGrp]=t;egyEd=0;['meter','phase','minmax','harmonics','waveform','report','energy','demand','alarm','event'].forEach(function(x){var e=$('ct-'+x);if(e)e.className='gp-tab'+(x===t?' on':'');});var cc=$('chctl');if(cc)cc.style.display=(t==='harmonics')?'flex':'none';syncHv();$('chbody').innerHTML=\"<p class='stub'>loading...</p>\";pollLoop();}\n"
 "function chStat(ok){var e=$('chstat');if(e){e.className='ph2 '+(ok?'on':'bad');e.innerHTML=ok?'&#9679; live &#8635; 1s':'&#9679; read error';}}\n"
 "function chFail(){chStat(false);var b=$('chbody');if(b&&b.innerHTML.indexOf('loading')>=0)b.innerHTML=\"<p class='stub'>read error - retrying...</p>\";}\n"
 "function chCards(list,fn){var h=\"<div class='chgrid'>\";list.forEach(function(x){h+=`<div class='chcard'><div class='chh'>CH${x.n}${x.wiring!==undefined?' '+fbadge(x.wiring):''}</div>${fn(x)}</div>`;});return h+'</div>';}\n"
@@ -2556,18 +2839,8 @@ static const char INDEX_HTML[] =
 " h+=r3('THD I (%)',x.thdi,2)+r3('TDD I (%)',x.tddi,2)+r3('K-Factor I',x.kfi,2)+r3('CF I',x.cfi,2);\n"
 " h+=r4('fU (V)',x.fu,1)+r4('fI (A)',x.fi,2);\n"
 " return h+'</table>';}\n"
-"function phVec(cx,cy,ang,len,col,mk,dash){var r=ang*Math.PI/180,x=(cx+len*Math.cos(r)).toFixed(1),y=(cy-len*Math.sin(r)).toFixed(1);return `<line x1='${cx}' y1='${cy}' x2='${x}' y2='${y}' stroke='${col}' stroke-width='2.2'${dash?\" stroke-dasharray='6,4'\":\"\"} marker-end='url(#${mk})'/>`;}\n"
-"function l2c(){return document.documentElement.getAttribute('data-theme')==='light'?'#D32F2F':'#FFFFFF'}\n"
-"function phasorSVG(x){var cx=130,cy=130,R=110,mk='ar'+x.n,a,k,r,PHV=['#B5651D',l2c(),'#7E8896'],PHI=['#B5651D',l2c(),'#7E8896','#1E64FF'],um=Math.max(Math.abs(x.u[0]),Math.abs(x.u[1]),Math.abs(x.u[2]))||1,im=Math.max(Math.abs(x.i[0]),Math.abs(x.i[1]),Math.abs(x.i[2]))||1;\n"
-" var s=`<svg class='phsvg' viewBox='0 0 260 260'><defs><marker id='${mk}' markerWidth='8' markerHeight='8' refX='6' refY='3' orient='auto'><path d='M0,0 L6,3 L0,6 Z' class='ph-mk'/></marker></defs>`;\n"
-" s+=`<circle cx='${cx}' cy='${cy}' r='${R}' class='ph-bg'/><circle cx='${cx}' cy='${cy}' r='55' class='ph-grid'/>`;\n"
-" for(a=0;a<360;a+=30){r=a*Math.PI/180;s+=`<line x1='${cx}' y1='${cy}' x2='${(cx+R*Math.cos(r)).toFixed(1)}' y2='${(cy-R*Math.sin(r)).toFixed(1)}' class='ph-grid'/>`;}\n"
-" [[0,'0°'],[120,'120°'],[240,'240°']].forEach(function(m){var mr=m[0]*Math.PI/180,tx=(cx+(R+13)*Math.cos(mr)).toFixed(1),ty=(cy-(R+13)*Math.sin(mr)+3).toFixed(1);s+=`<text x='${tx}' y='${ty}' text-anchor='middle' fill='#8b9bb0' font-size='10'>${m[1]}</text>`;});\n"
-" for(k=0;k<3;k++)s+=phVec(cx,cy,x.uang[k],R*0.92*Math.abs(x.u[k])/um,PHV[k],mk,0);\n"
-" for(k=0;k<3;k++)s+=phVec(cx,cy,x.iang[k],R*0.6*Math.abs(x.i[k])/im,PHI[k],mk,1);\n"
-" var ix=0,iy=0;for(k=0;k<3;k++){var rr=x.iang[k]*Math.PI/180,mm=Math.abs(x.i[k]);ix+=mm*Math.cos(rr);iy+=mm*Math.sin(rr);}var iM=Math.sqrt(ix*ix+iy*iy);if(iM>0.001)s+=phVec(cx,cy,Math.atan2(-iy,-ix)*180/Math.PI,R*0.6*iM/im,PHI[3],mk,1);\n"
-" return s+'</svg>';}\n"
-"function bPhase(x){var PL=['#B5651D',l2c(),'#7E8896','#1E64FF'],lg=['U1','U2','U3','In'].map(function(l,i){return \"<span><i style='background:\"+PL[i]+\"'></i>\"+l+\"</span>\";}).join('');var h=\"<div class='phbox'><div class='phleg'>\"+lg+\"</div>\"+phasorSVG(x)+\"</div><table class='ctbl'><tr><th></th><th>L1</th><th>L2</th><th>L3</th><th></th></tr>\";\n"
+/* [26/11/19] Channel Phase 벡터도도 Feeder 와 같은 SV900 형식(ph9). 아래 크기·각도 표는 유지 */
+"function bPhase(x){var h=\"<div class='ph9w' style='margin-bottom:10px'>\"+ph9(x)+\"</div><table class='ctbl'><tr><th></th><th>L1</th><th>L2</th><th>L3</th><th></th></tr>\";\n"
 " h+=r3('U mag (V)',x.u,1)+r3('U angle (&deg;)',x.uang,1)+r3('I mag (A)',x.i,2)+r3('I angle (&deg;)',x.iang,1);return h+'</table>';}\n"
 "function bMm(x){var h=clrBtn('clrMinmax',x.n)+`<div class='cmeta'>Reset: ${ts2(x.reset_ts)}</div><table class='ctbl mmtbl'><tr><th>Metric</th><th></th><th>Value</th><th>Time</th></tr>`;\n"
 " x.m.forEach(function(m){h+=`<tr><td class='rk' rowspan='2'>${m.nm}</td><td class='mk'>Max</td><td>${n(m.mx,2)}</td><td class='ts'>${ts2(m.mxt)}</td></tr><tr><td class='mk'>Min</td><td>${n(m.mn,2)}</td><td class='ts'>${ts2(m.mnt)}</td></tr>`;});return h+'</table>';}\n"
@@ -2594,12 +2867,13 @@ static const char INDEX_HTML[] =
 "var EN_ROWS=[['Frequency Variation 1','(+1%~-1%),99.5%/Wk',99.5],['Frequency Variation 2','(+4%~-6%),100%/Wk',100],['Voltage Variation 1','(+10%~-10%),95%/Wk',95],['Voltage Variation 2','(+10~-15%),100%/Wk',100],['Voltage Unbalance','(<2%),100%/Wk',100],['THD','(<8%),95%/Wk',95],['Harmonics','(0.5%~6%),95%/Wk',95],['Plt','(1),95%/Wk',95]],EN_INFO=['Voltage Sag','Voltage Swell','Short Interruption','Signaling Volt.'];\n"
 "function passOf(v,thr){var ok=true,any=false,i;for(i=0;i<3;i++){if(v[i]!=null){any=true;if(v[i]<thr)ok=false;}}return (any&&ok)?1:0;}\n"
 "function enNv(v){return (v==null)?'-':Number(v).toFixed(1);}\n"
-"function bVq(rows){var h=\"<div class='chcard'><div class='chh'>CH1 · Voltage Quality</div><table class='ctbl'><tr><th>Metric</th><th>L1</th><th>L2</th><th>L3</th></tr>\";(rows||[]).forEach(function(r){h+=\"<tr><td class='rk'>\"+r.name+(r.unit?' ('+r.unit+')':'')+\"</td><td>\"+(+r.l[0]).toFixed(3)+\"</td><td>\"+(+r.l[1]).toFixed(3)+\"</td><td>\"+(+r.l[2]).toFixed(3)+\"</td></tr>\";});return h+'</table></div>';}\n"
 "function bReport(x){var okAll=x.rows.every(function(r,ri){return passOf(r.v,EN_ROWS[ri][2])===1;});\n"
 " var h=`<div class='cmeta'>${ts2(x.start)} ~ ${ts2(x.end)} · <span class='enb ${okAll?'pass':'fail'}'>${okAll?'Compliant':'Non-compliant'}</span></div><table class='ctbl hsm'><tr><th>Parameter</th><th>L1</th><th>L2</th><th>L3</th><th>Comp</th><th>Requirement</th></tr>`;\n"
 " x.rows.forEach(function(r,ri){var p=passOf(r.v,EN_ROWS[ri][2]);h+=`<tr><td class='rk'>${EN_ROWS[ri][0]}</td><td>${enNv(r.v[0])}</td><td>${enNv(r.v[1])}</td><td>${enNv(r.v[2])}</td><td><span class='enb ${p?'pass':'fail'}'>${p?'Pass':'Fail'}</span></td><td class='ph2'>${EN_ROWS[ri][1]}</td></tr>`;});\n"
 " x.info.forEach(function(v,k){h+=`<tr><td class='rk'>${EN_INFO[k]}</td><td>${n(v,k<3?0:1)}</td><td>-</td><td>-</td><td><span class='enb info'>Info</span></td><td class='ph2'>Info Only</td></tr>`;});\n"
-" return h+`</table><div class='hsub'>ITIC (CBEMA) Curve</div><canvas id='it${x.n}' class='itcv'></canvas><div style='display:flex;gap:16px;margin-top:6px;font-size:11px;color:#8b9bb0'><span style='display:inline-flex;align-items:center;gap:5px'><i style='width:8px;height:8px;border-radius:50%;background:#f59e0b;display:inline-block'></i>Sag/Interruption</span><span style='display:inline-flex;align-items:center;gap:5px'><i style='width:8px;height:8px;border-radius:50%;background:#ef4444;display:inline-block'></i>Swell</span></div>`;}\n"
+" return h+'</table>';}\n"
+/* ITIC 차트 틀 — Report 탭 첫 표시 때 한 번만 그린다(1초 갱신은 표·차트 내용만 교체) */
+"var ITIC_HDR=\"<div class='hsub'>ITIC (CBEMA) Curve</div><canvas id='it1' class='itcv'></canvas><div style='display:flex;gap:16px;margin-top:6px;font-size:11px;color:#8b9bb0'><span style='display:inline-flex;align-items:center;gap:5px'><i style='width:8px;height:8px;border-radius:50%;background:#f59e0b;display:inline-block'></i>Sag/Interruption</span><span style='display:inline-flex;align-items:center;gap:5px'><i style='width:8px;height:8px;border-radius:50%;background:#ef4444;display:inline-block'></i>Swell</span></div>\";\n"
 "var ITIC_UP=[[0.0001,500],[0.001,200],[0.003,140],[0.003,120],[10,120],[10,110],[100,110]],ITIC_LO=[[0.0001,0],[0.02,0],[0.02,70],[0.5,70],[0.5,80],[10,80],[10,90],[100,90]];\n"
 "function drawITIC(id,events){var cv=$(id);if(!cv)return;var w=cv.clientWidth||400;cv.width=w;cv.height=240;var g=cv.getContext('2d'),pl=40,pr=10,pt=12,pb=22,h=240;\n"
 " var X=function(t){return pl+(Math.log(t)/Math.LN10+4)/6*(w-pl-pr);},Y=function(p){return h-pb-(p/500)*(h-pt-pb);};\n"
@@ -2609,13 +2883,6 @@ static const char INDEX_HTML[] =
 " function poly(pp,col){g.strokeStyle=col;g.lineWidth=2;g.beginPath();pp.forEach(function(q,i){var x=X(q[0]),y=Y(q[1]);if(i===0)g.moveTo(x,y);else g.lineTo(x,y);});g.stroke();}\n"
 " poly(ITIC_UP,'#3b82f6');poly(ITIC_LO,'#ef4444');\n"
 " (events||[]).forEach(function(ev){var ds=(ev.dur||0)/1000;if(ds<1e-4)ds=1e-4;if(ds>1e2)ds=1e2;var pc=ev.pct;if(pc==null||isNaN(pc))return;if(pc<0)pc=0;if(pc>500)pc=500;var col=(ev.type===2)?'#ef4444':'#f59e0b';g.beginPath();g.arc(X(ds),Y(pc),4,0,6.2832);g.fillStyle=col;g.fill();g.lineWidth=1;g.strokeStyle='#e8eef5';g.stroke();});}\n"
-"function mGroup(nm){if(/^(U\\d|U THD|U Unbal)/.test(nm))return 'V';if(/^(I\\d|In|I THD|I TDD|K-factor|I Unbal)/.test(nm))return 'I';if(/^temperature/i.test(nm))return 'T';return 'P';}\n"
-"function munit(nm){if(/thd|tdd|unbal/i.test(nm))return '%';if(/^temperature/i.test(nm))return '\\u2103';if(/^U/.test(nm))return 'V';if(/^(I|In)/.test(nm))return 'A';if(nm==='P')return 'kW';if(nm==='Q')return 'kVar';if(nm==='S')return 'kVA';return '';}\n"
-"function bMonthly(x){var G={V:[],I:[],P:[],T:[]},k;for(k in x.s){G[mGroup(k)].push([k,x.s[k]]);}\n"
-" function col(t,arr){var h=\"<div class='mcol'><div class='hsub'>\"+t+'</div>';arr.forEach(function(kv){h+=`<div class='srow'><span class='sk'>${kv[0]}</span><span class='sv'>${n(kv[1],2)} ${munit(kv[0])}</span></div>`;});return h+'</div>';}\n"
-" var h=\"<div class='mcols'>\"+col('Voltage',G.V)+col('Current',G.I)+col('Power / Temp',G.P.concat(G.T))+'</div>';\n"
-" h+=\"<div class='hsub'>Harmonics (% · orders 2\\u201325)</div><table class='ctbl hsm'><tr><th>Ord</th>\";x.harm.forEach(function(s){h+='<th>'+s.label+'</th>';});h+='</tr>';\n"
-" for(var o=0;o<24;o++){h+=\"<tr><td class='rk'>\"+(o+2)+'</td>';x.harm.forEach(function(s){var v=s.vals[o];h+='<td>'+(v?n(v,1):'\\u00b7')+'</td>';});h+='</tr>';}return h+'</table>';}\n"
 "function harmTable(x,ord){var h=\"<table class='ctbl hsm'><tr><th>Ord</th><th>L1</th><th>L2</th><th>L3</th></tr>\";ord.forEach(function(o,k){h+=`<tr><td class='rk'>${o}</td><td>${n(x.ph[0][k],1)}</td><td>${n(x.ph[1][k],1)}</td><td>${n(x.ph[2][k],1)}</td></tr>`;});return h+'</table>';}\n"
 "function drawHarm(id,ph,ord){var cv=$(id);if(!cv)return;var w=cv.clientWidth||300;cv.width=w;cv.height=180;var g=cv.getContext('2d'),pad=22,nn=ord.length,mx=1,i,p;\n"
 " for(p=0;p<3;p++)for(i=0;i<nn;i++){if(ph[p][i]>mx)mx=ph[p][i];}\n"
@@ -2624,22 +2891,36 @@ static const char INDEX_HTML[] =
 "  if(ord[i]%5===0||ord[i]===2){g.fillStyle='#8b9bb0';g.font='8px sans-serif';g.fillText(ord[i],pad+i*gw,178);}}\n"
 " g.strokeStyle='rgba(128,140,155,.3)';g.beginPath();g.moveTo(pad,180-pad);g.lineTo(w,180-pad);g.stroke();}\n"
 "function syncHv(){var a=$('hvt'),b=$('hvc');if(a)a.className='btn'+(harmView==='table'?' primary':'');if(b)b.className='btn'+(harmView==='chart'?' primary':'');}\n"
-"function bAlarm(x,ev){var st=ev.status.filter(function(s){return s.chn===x.n;}),lg=ev.alarmlog.filter(function(s){return s.chn===x.n;});\n"
-" var h=`<div class='hsub'>Alarm Status <span class='ph2'>(${st.length} active)</span></div><table class='ctbl'><tr><th>Alarm Channel</th><th>State</th><th>Count</th></tr>`;\n"
-" if(!st.length)h+=\"<tr><td colspan='3' class='empty'>No active alarms</td></tr>\";st.forEach(function(s){h+=`<tr><td class='rk'>${esc(acn(s.chan))}</td><td><span class='st set'>Set</span></td><td>${s.count}</td></tr>`;});\n"
-" h+=\"</table><div class='hsub'>Alarm Log</div>\"+pbar('pgAlarm',x.n,'clrAlarm','ackAlarm');\n"
-" h+=\"<table class='ctbl'><tr><th>Channel</th><th>State</th><th>Value</th><th>Time</th></tr>\";\n"
-" if(!lg.length)h+=\"<tr><td colspan='4' class='empty'>No alarm log</td></tr>\";lg.forEach(function(s){h+=`<tr><td class='rk'>${esc(acn(s.chan))}</td><td><span class='st ${s.set?'set':'clr'}'>${s.set?'Set':'Clear'}</span></td><td>${n(s.value,2)}</td><td class='ts'>${ts2(s.ts)}</td></tr>`;});return h+'</table>';}\n"
-"function bEvent(x,ev){var el=ev.eventlog.filter(function(s){return s.chn===x.n;});\n"
-" var h=pbar('pgEvent',x.n,'clrEvent','ackEvent');\n"
-" h+=\"<table class='ctbl'><tr><th>Type</th><th>Start Time</th><th>Dur(ms)</th><th>Phase</th><th>Level</th></tr>\";\n"
-" if(!el.length)h+=\"<tr><td colspan='5' class='empty'>No events</td></tr>\";el.forEach(function(e){var t=ET[e.type]||['#'+e.type,'oc'],ph=[];if(e.mask&1)ph.push('L1');if(e.mask&2)ph.push('L2');if(e.mask&4)ph.push('L3');h+=`<tr><td><span class='evt ${t[1]}'>${t[0]}</span></td><td class='ts'>${ts2(e.ts)}</td><td>${e.dur}</td><td>${ph.join(',')||'-'}</td><td>${n(e.level,2)}</td></tr>`;});return h+'</table>';}\n"
+/* [26/11/19] Alarm/Event/ITIC 이력 — /api/evlog 로 링버퍼(채널당 1024건)를 최신순 직접 조회.
+   Top/Up/Down/Bottom(Modbus 페이지 창 이동) 대신: 1초마다 최신 50건을 받아 목록 위에 합치고,
+   표 끝까지 스크롤하면 다음 50건을 이어받는다. 표 틀은 탭 진입 때 한 번만 만들어 스크롤 위치를 유지.
+   kind 0=알람, 1=이벤트, 2=ITIC(CH1) */
+"var EVS={};\n"
+"function evSt(k,ch){var id=k+'_'+ch;return EVS[id]||(EVS[id]={rows:[],total:0,busy:0});}\n"
+"function evKey(r){return JSON.stringify(r);}\n"
+/* 최신 페이지(pg)를 기존 목록 앞에 합친다: 기존 첫 행이 pg 안 d번째에 있으면 새로 d건이 들어온 것 */
+"function evMerge(s,pg,tot){var o=s.rows,d=-1,i,k0;if(o.length>pg.length){k0=evKey(o[0]);for(i=0;i<pg.length;i++)if(evKey(pg[i])===k0){d=i;break;}}s.rows=d<0?pg:pg.concat(o.slice(pg.length-d));if(s.rows.length>tot)s.rows.length=tot;s.total=tot;}\n"
+"function evPh(m){var p=[];if(m&1)p.push('L1');if(m&2)p.push('L2');if(m&4)p.push('L3');return p.join(',')||'-';}\n"
+"function evRow(k,e){if(k===0)return `<tr><td class='rk'>${esc(acn(e.chan))}</td><td><span class='st ${e.set?'set':'clr'}'>${e.set?'Set':'Clear'}</span></td><td>${n(e.value,2)}</td><td class='ts'>${ts2(e.ts)}</td></tr>`;\n"
+" var t=ET[e.type]||['#'+e.type,'oc'];return `<tr><td><span class='evt ${t[1]}'>${t[0]}</span></td><td class='ts'>${ts2(e.ts)}</td><td>${e.dur}</td><td>${evPh(e.mask)}</td><td>${n(e.level,2)}</td></tr>`;}\n"
+"function evHead(k){return k===0?'<tr><th>Channel</th><th>State</th><th>Value</th><th>Time</th></tr>':'<tr><th>Type</th><th>Start Time</th><th>Dur(ms)</th><th>Phase</th><th>Level</th></tr>';}\n"
+"function evBox(k,ch,btn){return `<div class='evmeta'><span class='ph2' id='evc${k}_${ch}'></span>${btn}</div><div class='evbox' onscroll='evScr(this,${k},${ch})'><table class='ctbl'><thead>${evHead(k)}</thead><tbody id='evt${k}_${ch}'></tbody></table></div>`;}\n"
+"function evBtn(ch,af,cf){return IS_ADMIN?`<span class='evbtn'><button class='btn' onclick='${af}(${ch})'>Ack</button><button class='btn warn' onclick='${cf}(${ch})'>Clear</button></span>`:'';}\n"
+"function evPaint(k,ch){var s=evSt(k,ch),b=$('evt'+k+'_'+ch),c=$('evc'+k+'_'+ch);if(!b)return;\n"
+" b.innerHTML=s.rows.length?s.rows.map(function(e){return evRow(k,e);}).join(''):`<tr><td colspan='${k===0?4:5}' class='empty'>${k===0?'No alarm log':'No events'}</td></tr>`;\n"
+" if(c)c.textContent=s.total?(s.rows.length+' / '+s.total):'';if(k===2)drawITIC('it1',s.rows);}\n"
+"function evScr(el,k,ch){if(el.scrollTop+el.clientHeight>=el.scrollHeight-40)evMore(k,ch);}\n"
+/* 다음 페이지: 마지막 행 1건을 겹쳐 받아, 그 사이 새 이력이 들어와 밀린 만큼 중복을 잘라낸다 */
+"function evMore(k,ch){var s=evSt(k,ch);if(s.busy||s.rows.length>=s.total)return;s.busy=1;var off=s.rows.length?s.rows.length-1:0;\n"
+" j('/api/evlog?kind='+k+'&ch='+ch+'&off='+off+'&num=51').then(function(r){s.busy=0;var x=r.d&&r.d.ok&&r.d.ch[0];if(!x)return;\n"
+"  var a=x.rows,i,l=s.rows.length?evKey(s.rows[s.rows.length-1]):null;if(l)for(i=0;i<a.length;i++)if(evKey(a[i])===l){a=a.slice(i+1);break;}\n"
+"  s.rows=s.rows.concat(a);if(s.rows.length>x.total)s.rows.length=x.total;s.total=x.total;evPaint(k,ch);}).catch(function(){s.busy=0;});}\n"
+"function alStat(x){var t=$('ast'+x.n),c=$('asn'+x.n);if(!t)return;var h='<tr><th>Alarm Channel</th><th>State</th><th>Count</th></tr>';\n"
+" if(!x.status.length)h+=\"<tr><td colspan='3' class='empty'>No active alarms</td></tr>\";x.status.forEach(function(s){h+=`<tr><td class='rk'>${esc(acn(s.chan))}</td><td><span class='st set'>Set</span></td><td>${s.count}</td></tr>`;});\n"
+" t.innerHTML=h;if(c)c.textContent='('+x.status.length+' active)';}\n"
 "function wrCmd(a,v){if(!IS_ADMIN){alert('Admin only');return;}jp('/api/setreg',{addr:a,type:'u16',val:v}).then(function(){setTimeout(pollLoop,300);});}\n"
-"function pgAlarm(n,c){wrCmd(7840+n,c);}\n"
 "function clrAlarm(n){if(confirm('Clear Alarm CH'+n+'?'))wrCmd(7828+n,4660);}\n"
-"function pgEvent(n,c){wrCmd(7836+n,c);}\n"
 "function clrEvent(n){if(confirm('Clear Event CH'+n+'?'))wrCmd(7832+n,4660);}\n"
-"function pgItic2(n,c){wrCmd(7853,c);}\n"
 "function clrBtn(fn,n){return IS_ADMIN?\"<div class='pgctl'><button class='btn warn' onclick='\"+fn+\"(\"+n+\")'>Clear</button></div>\":'';}\n"
 "function clrMinmax(n){if(confirm('Clear Min/Max CH'+n+'?'))wrCmd(7820+n,4660);}\n"
 "function clrEnergy(n){if(confirm('Clear Energy CH'+n+'?'))wrCmd(7824+n,4660);}\n"
@@ -2650,9 +2931,6 @@ static const char INDEX_HTML[] =
 "var egyEd=0,egyD=null;\n"
 "function egyRender(){if(!egyD)return;var b=IS_ADMIN?(egyEd?\"<div class='pgctl'><button class='btn primary' onclick='egyWr()'>Write</button><button class='btn' onclick='egyEd=0;egyRender()'>Cancel</button></div>\":\"<div class='pgctl'><button class='btn' onclick='egyEd=1;egyRender()'>Edit</button></div>\"):'';$('chbody').innerHTML=chCards(egyD.now,function(x){var lg=egyD.log.filter(function(e){return e.n===x.n;})[0];return b+(egyEd?'':clrBtn('clrEnergy',x.n))+bEgyNow(x,egyEd)+(lg?bEgyLog(lg):'');});}\n"
 "function egyWr(){var els=document.querySelectorAll('#chbody .ein'),c=[],i=0,chs={};els.forEach(function(e){if(e.value!==e.getAttribute('data-o'))c.push(e);});if(!c.length){egyEd=0;egyRender();return;}(function w(){if(i>=c.length){Object.keys(chs).forEach(function(ch){wrCmd(7824+parseInt(ch),0x5678);});if(confirm('Save energy edit to FLASH now? (OK=persist via Save Set / Cancel=RAM only, revert on reboot)'))setTimeout(function(){wrCmd(7799,0x1234);},1200);egyEd=0;setTimeout(pollLoop,400);return;}var e=c[i++],v=Math.round(parseFloat(e.value)*10);if(!isFinite(v)||v<0)v=0;var a=+e.getAttribute('data-a');chs[Math.floor(a/10000)+1]=1;jp('/api/setreg',{addr:a,type:'u32',val:v}).then(w).catch(w);})();}\n"
-"function pbar(fn,n,cf,af){if(!IS_ADMIN)return '';var s=\"<div class='pgctl'>\",L=[[3,'&#8593;&#8593; Top'],[2,'&#8593; Up'],[1,'&#8595; Down'],[4,'&#8595;&#8595; Bottom']];L.forEach(function(t){s+=\"<button class='btn' onclick='\"+fn+\"(\"+n+\",\"+t[0]+\")'>\"+t[1]+\"</button>\";});if(af)s+=\"<button class='btn' onclick='\"+af+\"(\"+n+\")'>Ack</button>\";if(cf)s+=\"<button class='btn warn' onclick='\"+cf+\"(\"+n+\")'>Clear</button>\";return s+'</div>';}\n"
-"function bItic(list,title,fn){var h=\"<div class='hsub'>\"+title+\"</div>\"+pbar(fn,1)+\"<table class='ctbl'><tr><th>Type</th><th>Start Time</th><th>Dur(ms)</th><th>Phase</th><th>Level</th></tr>\";\n"
-" if(!list||!list.length)h+=\"<tr><td colspan='5' class='empty'>No data</td></tr>\";(list||[]).forEach(function(e){var t=ET[e.type]||['#'+e.type,'oc'],ph=[];if(e.mask&1)ph.push('L1');if(e.mask&2)ph.push('L2');if(e.mask&4)ph.push('L3');h+=\"<tr><td><span class='evt \"+t[1]+\"'>\"+t[0]+\"</span></td><td class='ts'>\"+ts2(e.ts)+\"</td><td>\"+e.dur+\"</td><td>\"+(ph.join(',')||'-')+\"</td><td>\"+n(e.level,2)+\"</td></tr>\";});return h+'</table>';}\n"
 "function loadChannelTab(){var t=chTabCur;\n"
 " if(t==='meter'||t==='phase'){var fn=(t==='meter'?bMeter:bPhase);return j('/api/channels').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chErr(fn);return;}chStat(true);lastCh=r.d.ch;$('chbody').innerHTML=chCards(r.d.ch,fn);}).catch(function(){if(chTabCur===t)chErr(fn);});}\n"
 " if(t==='minmax')return j('/api/minmax').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chErr(bMm);return;}chStat(true);lastCh=r.d.ch;$('chbody').innerHTML=chCards(r.d.ch,bMm);}).catch(function(){if(chTabCur==='minmax')chErr(bMm);});\n"
@@ -2665,16 +2943,19 @@ static const char INDEX_HTML[] =
 "  if(harmOpt==='cur'){$('chbody').innerHTML=chCards(r.d.ch,function(x){return \"<div class='hsub'>Chart</div><canvas id='hc\"+x.n+\"' class='hcv'></canvas><div class='hsub' style='margin-top:10px'>Table</div>\"+harmTable(x,r.d.orders);});r.d.ch.forEach(function(x){drawHarm('hc'+x.n,x.ph,r.d.orders);});return;}\n"
 "  var x=r.d.ch.filter(function(c){return c.n===1;})[0];\n"
 "  if(!x){$('chbody').innerHTML=\"<p class='stub'>no data</p>\";return;}\n"
-"  $('chbody').innerHTML=\"<div class='chcard'><div class='chh'>CH1</div><div class='hsub'>Chart</div><canvas id='hc1' class='hcv'></canvas><div class='hsub' style='margin-top:10px'>Table</div>\"+harmTable(x,r.d.orders)+\"</div>\";\n"
+"  $('chbody').innerHTML=\"<div class='chcard'><div class='chh'>Voltage (common, CH1~3)</div><div class='hsub'>Chart</div><canvas id='hc1' class='hcv'></canvas><div class='hsub' style='margin-top:10px'>Table</div>\"+harmTable(x,r.d.orders)+\"</div>\";\n"
 "  drawHarm('hc1',x.ph,r.d.orders);\n"
 " }).catch(chFail);\n"
 " if(t==='waveform')return j('/api/waveform').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);\n"
 "  $('chbody').innerHTML=chCards(r.d.channels,function(x){return \"<div class='hsub'>Voltage</div><canvas id='wv\"+x.n+\"' class='wcv'></canvas><div class='hsub'>Current</div><canvas id='wi\"+x.n+\"' class='wcv'></canvas>\";});\n"
 "  r.d.channels.forEach(function(x){drawLines('wv'+x.n,x.v);drawLines('wi'+x.n,x.i);});}).catch(chFail);\n"
-" if(t==='report')return j('/api/en50160').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);var x=r.d.ch[0];if(!x)return;$('chbody').innerHTML=\"<div class='chcard'><div class='chh'>CH\"+x.n+\" · EN50160</div>\"+bReport(x)+bItic(r.d.itic2,'ITIC List (Voltage)','pgItic2')+'</div>';drawITIC('it'+x.n,r.d.itic2);}).catch(chFail);\n"
-" if(t==='vq')return j('/api/vq').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=bVq(r.d.rows);}).catch(chFail);\n"
-" if(t==='monthly')return j('/api/monthly').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=chCards(r.d.ch,bMonthly);}).catch(chFail);\n"
-" if(t==='alarm'||t==='event')return j('/api/sv300/events').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);$('chbody').innerHTML=chCards(CHN,function(x){return (t==='alarm'?bAlarm:bEvent)(x,r.d);});}).catch(chFail);\n"
+" if(t==='report')return Promise.all([j('/api/en50160'),j('/api/evlog?kind=2&off=0&num=50')]).then(function(a){if(chTabCur!==t)return;var r=a[0],q=a[1];if(!r.d.ok){chStat(false);return;}chStat(true);var x=r.d.ch[0];if(!x)return;\n"
+"  if(!$('rp1')){var s=evSt(2,1);s.rows=[];s.total=0;$('chbody').innerHTML=\"<div class='chcard'><div class='chh'>CH1 · EN50160</div><div id='rp1'></div>\"+ITIC_HDR+\"<div class='hsub'>ITIC List (Voltage)</div>\"+evBox(2,1,'')+'</div>';}\n"
+"  $('rp1').innerHTML=bReport(x);var y=q.d&&q.d.ok&&q.d.ch[0];if(y)evMerge(evSt(2,1),y.rows,y.total);evPaint(2,1);}).catch(chFail);\n"
+" if(t==='alarm'||t==='event'){var k=(t==='alarm')?0:1;return j('/api/evlog?kind='+k+'&off=0&num=50').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);\n"
+"  if(!$('evt'+k+'_1')){CHN.forEach(function(x){var s=evSt(k,x.n);s.rows=[];s.total=0;});\n"
+"   $('chbody').innerHTML=chCards(CHN,function(x){return k===0?`<div class='hsub'>Alarm Status <span class='ph2' id='asn${x.n}'></span></div><table class='ctbl' id='ast${x.n}'></table><div class='hsub'>Alarm Log</div>`+evBox(0,x.n,evBtn(x.n,'ackAlarm','clrAlarm')):evBox(1,x.n,evBtn(x.n,'ackEvent','clrEvent'));});}\n"
+"  r.d.ch.forEach(function(x){evMerge(evSt(k,x.n),x.rows,x.total);evPaint(k,x.n);if(k===0)alStat(x);});}).catch(chFail);}\n"
 " return Promise.resolve();}\n"
 "function runCmd(ci){var c=CMDS[ci],id='c'+ci;\n"
 " if(c.utc){var v=$('u_'+id).value;if(!v){alert('Enter time');return;}var m=v.split(/[-T:]/),ep=Math.floor(Date.UTC(+m[0],+m[1]-1,+m[2],+m[3],+m[4],+m[5]||0)/1000);if(!confirm('Set Time to '+v.replace('T',' ')+' ?'))return;jp('/api/setreg',{addr:c.addr,type:'u32',val:ep}).then(function(r){cmdDone(r,c);});return;}\n"
@@ -2690,9 +2971,11 @@ static const char INDEX_HTML[] =
 "function alSelCell(addr,val,opts,cls){return \"<select class='\"+cls+\"' data-addr='\"+addr+\"' data-type='u16' data-orig='\"+val+\"' data-val='\"+val+\"' \"+(IS_ADMIN?'':'disabled')+\" onchange='setMark(this)'>\"+opts+'</select>';}\n"
 "function alNum(addr,val){return \"<input type='number' data-addr='\"+addr+\"' data-type='u16' data-orig='\"+val+\"' value='\"+val+\"' \"+(IS_ADMIN?'':'disabled')+\" oninput='setMark(this)'>\";}\n"
 "function alFloat(addr,val){var s=fnum(val);return \"<input type='number' step='0.1' data-addr='\"+addr+\"' data-type='float' data-orig='\"+s+\"' value='\"+s+\"' \"+(IS_ADMIN?'':'disabled')+\" oninput='setMark(this)'>\";}\n"
-"function loadAlarm(){var base=(alCh-1)*10000+6858;\n"
-" return j('/api/regs?addr='+base+'&n=192').then(function(r){if(!r.d.ok){$('setBody').innerHTML=\"<p class='stub'>load error</p>\";return;}var w=r.d.words;\n"
+/* 6854(compare Time Delay, 종전 Alarm Def 탭)부터 함께 읽는다: w[0]=6854, 알람 32행은 w[4]~ (6858~) */
+"function loadAlarm(){var ab=(alCh-1)*10000,base=ab+6858;\n"
+" return j('/api/regs?addr='+(ab+6854)+'&n=196').then(function(r){if(!r.d.ok){$('setBody').innerHTML=\"<p class='stub'>load error</p>\";return;}var w0=r.d.words,w=w0.slice(4);\n"
 "  var h=\"<div style='margin-bottom:12px'>\";for(var c=1;c<=NCH;c++)h+=\"<button class='btn\"+(c===alCh?' primary':'')+\"' style='margin-right:6px' onclick='alSel(\"+c+\")'>CH\"+c+'</button>';h+='</div>';\n"
+"  h+=\"<div class='srow' style='max-width:420px;margin-bottom:10px'><span class='sk'>Compare Time Delay (s)</span>\"+alNum(ab+6854,w0[0])+'</div>';\n"
 "  var acOpt='';for(var i=0;i<AC.length;i++)acOpt+=\"<option value='\"+i+\"'>\"+esc(AC[i])+'</option>';\n"
 "  h+=\"<div style='overflow-x:auto'><table class='atbl'><tr><th>#</th><th>Channel</th><th>Cond</th><th>Hyst(%)</th><th>Action</th><th>Level</th></tr>\";\n"
 "  for(var n=0;n<32;n++){var b=base+6*n,o=6*n,chan=w[o],en=chan>0;\n"
@@ -2708,7 +2991,7 @@ static const char INDEX_HTML[] =
 " else if(cur==='feeder'){_busy=true;loadFeeder().catch(function(){}).then(pollFin);}\n"
 " else if(cur==='channel'){_busy=true;loadChannelTab().catch(function(){}).then(pollFin);}\n"
 " else if(cur==='io'){_busy=true;loadIom().catch(function(){}).then(pollFin);}\n"
-" else if(cur==='setup'&&setMode==='main'&&setCur==='general'){_busy=true;loadStatus().catch(function(){}).then(pollFin);}\n"
+" else if(cur==='maint'){_busy=true;sysStat().catch(function(){}).then(pollFin);}\n"
 "}\n"
 "tbtn();clk();setInterval(clk,1000);setInterval(pollLoop,1000);me();\n"
 "</script></body></html>\n";
@@ -2736,7 +3019,7 @@ static error_t serveIndex(HttpConnection *c)
 }
 
 /*----------------------------------------------------------------------------
- * 요청 라우터 — NO_ERROR=처리완료, ERROR_NOT_FOUND=정적파일(S0:)로 폴백
+ * 요청 라우터 — 항상 직접 응답(미처리 경로 404). ERROR_NOT_FOUND(=정적파일 S0: 폴백)는 쓰지 않는다
  *  CycloneTCP(http_server_misc.c)는 "/"를 defaultDocument("index.html", 슬래시 없음)로
  *  치환해 콜백에 넘긴다 → 루트는 "index.html"(슬래시 없음)로도 매칭.
  *  로그인 필요 API는 세션 없으면 401.
@@ -2754,7 +3037,7 @@ static error_t webRequestCallback(HttpConnection *c, const char_t *uri)
 	if (!strcmp(uri, "/api/me"))     return apiMe(c);
 
 	/* 원격 대시보드 서명링크(무개방 — 서명·nonce로 인증). 기본 꺼짐: comm.remoteEn(7420)=0이면
-	 * 처리하지 않고 정적파일 폴백 → 404(기능이 없는 장비와 동일하게 보임). 저장 즉시 반영 */
+	 * 처리하지 않고 맨 아래 404(기능이 없는 장비와 동일하게 보임). 저장 즉시 반영 */
 	if (pdb->comm.remoteEn == 1) {		/* 저장 경로엔 정규화가 없어 1만 ON으로 본다 */
 		if (!strcmp(uri, "/auth/remoteNonce"))     return apiRemoteNonce(c);
 		if (!strncmp(uri, "/dashboard/", 11))      return apiRemoteDashboard(c, uri);
@@ -2768,6 +3051,8 @@ static error_t webRequestCallback(HttpConnection *c, const char_t *uri)
 	if (!strcmp(uri, "/api/fwupload"))      return apiFwUpload(c);
 	if (!strcmp(uri, "/api/fwstatus"))      return apiFwStatus(c);
 	if (!strcmp(uri, "/api/fwapply"))       return apiFwApply(c);
+	if (!strcmp(uri, "/api/logo") && !strcmp(c->request.method, "POST")) return apiLogoUpload(c);
+	if (!strcmp(uri, "/api/logoreset"))     return apiLogoReset(c);
 
 	/* 조회(로그인 필요) */
 	if (!strncmp(uri, "/api/", 5)) {
@@ -2775,6 +3060,7 @@ static error_t webRequestCallback(HttpConnection *c, const char_t *uri)
 			return webJsonStatus(c, 401, "{\"ok\":false,\"error\":\"auth\"}");
 		if (!strcmp(uri, "/api/dashboard"))    return apiDashboard(c);
 		if (!strcmp(uri, "/api/sv300/events")) return apiEvents(c);
+		if (!strcmp(uri, "/api/evlog"))        return apiEvLog(c);
 		if (!strcmp(uri, "/api/feeders"))      return apiFeeders(c);
 		if (!strcmp(uri, "/api/channels"))     return apiChannels(c);
 		if (!strcmp(uri, "/api/minmax"))       return apiMinmax(c);
@@ -2786,16 +3072,19 @@ static error_t webRequestCallback(HttpConnection *c, const char_t *uri)
 		if (!strcmp(uri, "/api/harmonics"))    return apiHarmonics(c);
 		if (!strcmp(uri, "/api/waveform"))     return apiWaveform(c);
 		if (!strcmp(uri, "/api/en50160"))      return apiEn50160(c);
-		if (!strcmp(uri, "/api/vq"))           return apiVq(c);
-		if (!strcmp(uri, "/api/monthly"))      return apiMonthly(c);
 		if (!strcmp(uri, "/api/general"))      return apiGeneral(c);
 		if (!strcmp(uri, "/api/snmp"))         return apiSnmpGet(c);
 		if (!strcmp(uri, "/api/remotelog"))    return apiRemoteLog(c);
+		if (!strcmp(uri, "/api/logoinfo"))     return apiLogoInfo(c);
+		if (!strcmp(uri, "/api/logo"))         return apiLogoGet(c);
 		if (!strncmp(uri, "/api/regs", 9))     return apiRegs(c);
 		return webJsonStatus(c, 404, "{\"ok\":false,\"error\":\"notfound\"}");
 	}
 
-	return ERROR_NOT_FOUND;
+	/* [26/11/19] 정적파일(S0:) 폴백 차단 — ERROR_NOT_FOUND 를 돌려주면 CycloneTCP 가 rootDirectory("/")
+	 * 기준으로 NOR 파일을 인증 없이 그대로 보낸다(/system/websec.d·usrApp.bin·설정 파일 등).
+	 * 내장 웹·confWebApp 모두 정적파일을 쓰지 않음(confWebApp 은 FTP) → 모든 미처리 경로는 404 */
+	return webJsonStatus(c, 404, "{\"ok\":false,\"error\":\"notfound\"}");
 }
 
 /*----------------------------------------------------------------------------

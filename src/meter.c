@@ -17,7 +17,7 @@
 #define	FW_VER	0005
 #define	FW_BUILD_YEAR 26
 #define	FW_BUILD_MON  11
-#define	FW_BUILD_DAY  16
+#define	FW_BUILD_DAY  19
 
 #define	SQRT_2	 1.414213562 
 
@@ -534,6 +534,7 @@ void commCfgNormalize(COMM_CFG *c)
 		memset(c->trap_ip, 0, sizeof(c->trap_ip));
 	}
 	if (c->snmpVer > 2)     c->snmpVer = 0;
+	if (c->snmpV3AuthProto > 1) c->snmpV3AuthProto = 0;	/* 0:SHA-1, 1:SHA-256 */
 	if (c->snmpCommunity[0] == '\0') strcpy(c->snmpCommunity, "public");
 
 	/* SNTP — Timezone UTC-12:00 ~ +14:00 */

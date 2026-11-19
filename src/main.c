@@ -751,11 +751,12 @@ void init(void)
          const SNMP_CFG *v3 = snmpCfgActive();
          int priv = (v3->v3Flags & SNMP_V3F_PRIV) != 0;
 
-         //Read-only USM user — HMAC-SHA-1 (+ AES-128), raw keys (Ku) from snmp.d
+         //Read-only USM user — HMAC-SHA-1 또는 HMAC-SHA-256(comm 7297) (+ AES-128), raw keys (Ku)
          error = snmpAgentCreateUser(&snmpAgentContext, v3->v3User, SNMP_ACCESS_READ_ONLY,
-            SNMP_KEY_FORMAT_RAW, SNMP_AUTH_PROTOCOL_SHA1, v3->v3AuthKey,
+            SNMP_KEY_FORMAT_RAW, (SnmpAuthProtocol)v3->v3AuthProto, v3->v3AuthKey,
             priv ? SNMP_PRIV_PROTOCOL_AES : SNMP_PRIV_PROTOCOL_NONE, priv ? v3->v3PrivKey : NULL);
-         printf("[SNMP] v3 user '%s' %s (%s, engineBoots=%u)\n", v3->v3User, error ? "FAILED" : "ok",
+         printf("[SNMP] v3 user '%s' %s (%s, %s, engineBoots=%u)\n", v3->v3User, error ? "FAILED" : "ok",
+            v3->v3AuthProto == SNMP_AUTH_PROTOCOL_SHA256 ? "SHA-256" : "SHA-1",
             priv ? "authPriv" : "authNoPriv", (unsigned)v3->engineBoots);
       }
 #endif
