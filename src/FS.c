@@ -663,9 +663,9 @@ static void cmd_datetime(char *par) {
 		return;
 	}
 
-	utc = mktime(&ltm);
+	utc = mktime(&ltm) - TZ_SEC;	/* [26/11/20] 입력은 로컬 시각 → UTC 로 저장 */
 
-	printf("[%d-%d-%d, %d:%d:%d] => {%d}\n", ltm.tm_year+1900, ltm.tm_mon+1, ltm.tm_mday, ltm.tm_hour, ltm.tm_min, ltm.tm_sec, (int)utc);
+	printf("[%d-%d-%d, %d:%d:%d] local => UTC {%d}\n", ltm.tm_year+1900, ltm.tm_mon+1, ltm.tm_mday, ltm.tm_hour, ltm.tm_min, ltm.tm_sec, (int)utc);
 	tickSet((uint32_t)utc, 0, 1);
 	RTC_SetTimeUTC((uint32_t)utc);
 }

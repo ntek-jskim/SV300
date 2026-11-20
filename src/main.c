@@ -303,9 +303,9 @@ error_t sntpGetTime(char *ntp_server)
          fraction = timestamp.fraction;
          // 밀리초 계산 (하위 32비트를 2^32로 나누고 1000을 곱함)
          msec = (uint32_t)((fraction * 1000ULL) >> 32);
-			// utc time to localtime
-			unixTime += (getTimeZone() * 60);	// timezon			
+			/* [26/11/20] 장치 시계는 UTC 그대로(종전: +timezone 해서 로컬 epoch). 로컬 표시는 uLocalTime */
 			tickSet(unixTime, msec, 0);
+			unixTime += (getTimeZone() * 60);	/* 아래 로컬 디버그 출력용 */
 #endif
 			//Convert Unix timestamp to date
          convertUnixTimeToDate(unixTime, &date);           
@@ -1179,6 +1179,10 @@ error_t modbusServerOpenCallback(ModbusClientConnection *connection,
 
 void modbusServerLockCallback(void)
 {
+   /* [26/11/20] Modbus/TCP 요청 1건당 1회 호출(읽기·쓰기 모든 FC) — System Status 'Modbus RX' 카운트.
+      종전엔 readMemCb 에서 워드마다 세어 웹 /api/regs 조회까지 포함됐음 */
+   extern void mbRxCount(void);
+   mbRxCount();
 }
 
 

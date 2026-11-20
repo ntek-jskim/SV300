@@ -2291,6 +2291,11 @@ typedef struct {
 #define	Tid_Led			14
 #define	Tid_GW			15
 
+/* [26/11/20] ffind 반복 루프에서 항목마다 호출: FS 감시 카운트 갱신 + 1 tick 양보.
+ *  OS_ROBIN=0 이라 FS_task(LOW)가 ffind 를 연속 수행하면 같은 LOW(IOM·웹)·LLOW(Shell)가
+ *  실행되지 못해 감시 초과로 리셋됨(11/20 무한 리부팅). */
+#define	FS_FIND_YIELD()	do { meter[0].cntl.wdtTbl[Tid_Fs].count++; osDelayTask(1); } while (0)
+
 //#define _EGY_LOG_ 
 //#define EGY_LOG
 
@@ -2309,6 +2314,11 @@ extern SETTINGS		db;
 extern SETTINGS		setting[];
 extern METERING 	*pmeter;
 extern SETTINGS		*pdb, *pdbk;
+/* [26/11/20] 장치 시계는 UTC 로 운영: sysTick1s·RTC·모든 기록 ts·Modbus 시각 = UTC epoch.
+ *  로컬 달력(tod·파일 날짜·일/주/월 경계)은 uLocalTime(UTC 입력 → 내부에서 +TZ_SEC)으로만 구한다.
+ *  로컬 달력 필드를 mktime 으로 epoch 화하면 '로컬 epoch' 이므로 TZ_SEC 를 빼야 UTC. (종전: 로컬 epoch 로 운영) */
+#define	TZ_SEC	((int32_t)pdb->comm.timezone * 60)
+extern int checkMaxMinItv(int id);	/* meter.c — Max/Min 자동 초기화 주기 판정(0=None,1=Daily,2=Weekly,3=Monthly), 1초마다 */
 extern uint16_t		*pmset;
 extern METER_INFO *pInfo;
 //extern CMD_AREA 	*pcmd;

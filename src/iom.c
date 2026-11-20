@@ -909,7 +909,9 @@ void IOM_Task(void *arg)
 	keybuf[0].lastVal = (uint8_t)KEY_Read(0);
 	keybuf[1].lastVal = (uint8_t)KEY_Read(1);
 
-	_enableTaskMonitor(Tid_Iom, 50);
+	/* [26/11/20] 50(5초) → 150(15초): 같은 LOW 의 FS_task 가 NOR EFS 작업(ffind·조각 많은 파일 열기)을
+	 *  하는 동안 실행 못 해 감시 초과 → 무한 리부팅. FS 쪽 양보(FS_FIND_YIELD)와 함께 여유 확보. */
+	_enableTaskMonitor(Tid_Iom, 150);
 // 	pcntl->ioDbFlag = 0x1234;	// fisrst scan 시 db 전송
 //	pInfo->Io_sts = STS_ERROR;
 

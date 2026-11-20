@@ -71,7 +71,7 @@ static float avg3(const float *v, int from, int n)
 static int buildPayload(void)
 {
 	const SMP_MAP *m = psmpMap;
-	uint32_t utc = sysTick1s - (int32_t)pdb->comm.timezone * 60;	/* 장치 시각=로컬 → UTC */
+	uint32_t utc = sysTick1s;	/* [26/11/20] 장치 시계가 UTC — 변환 불필요(종전 로컬 → UTC 환산) */
 	uint16_t fw = meter[0].info.fwVer;
 	int f, k, nf = 0;
 

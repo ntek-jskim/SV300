@@ -361,9 +361,10 @@ static error_t apiMe(HttpConnection *c)
 	else {
 		int nch = getHwCh();	/* HWMODEL 채널 수(2/3) — 배열 크기(METER_CH_COUNT) 초과 방지 캡 */
 		if (nch > METER_CH_COUNT) nch = METER_CH_COUNT;
+		/* tz = 장치 Timezone(분). 장치 시각·기록 ts 는 UTC → 웹이 +tz 해서 장치 로컬 시각으로 표시(26/11/20) */
 		snprintf(b, sizeof(b),
-			"{\"ok\":true,\"auth\":true,\"user\":\"%s\",\"role\":\"%s\",\"nch\":%d}",
-			r == ROLE_ADMIN ? "ntek" : "sv300", roleName(r), nch);
+			"{\"ok\":true,\"auth\":true,\"user\":\"%s\",\"role\":\"%s\",\"nch\":%d,\"tz\":%d}",
+			r == ROLE_ADMIN ? "ntek" : "sv300", roleName(r), nch, (int)pdb->comm.timezone);
 		w(c, b);
 	}
 	return httpCloseStream(c);
@@ -470,7 +471,7 @@ static void rnStir(const void *x, size_t n)
  *  파일(REMOTE_LOG_FILE)에는 성공만 추가(FS_task가 기록·20건 트림) — 서명 공격이 와도
  *  플래시 쓰기가 늘지 않게(파형 캡처 g_sdBusy·NOR 수명). 값싼 거부(형식·계정·nonce·횟수)는 개수만 센다. */
 typedef struct {
-	uint32_t ts;          /* sysTick1s(장비 로컬 시각, 이벤트와 동일 기준) */
+	uint32_t ts;          /* sysTick1s(UTC, 이벤트와 동일 기준 — 26/11/20 장치 시계 UTC 운영) */
 	uint8_t  ip[4];       /* 접속 IPv4 */
 	uint8_t  acct;        /* 1=ntek, 2=sv300 */
 	uint8_t  ok;          /* 1=로그인 성공, 0=서명 불일치 */
@@ -1183,7 +1184,7 @@ static error_t apiHarmonics(HttpConnection *c)
 		w(c, b);
 		for (ph = 0; ph < 3; ph++) {
 			w(c, ph ? ",[" : "[");
-			for (o = 2; o <= 63; o++) { snprintf(b, sizeof(b), "%s%.1f", o > 2 ? "," : "", arr[ph][o] / 100.0f); w(c, b); }	/* hd=비율×10000=%×100 → /100=% (기존 /10은 10×오류) */
+			for (o = 2; o <= 63; o++) { snprintf(b, sizeof(b), "%s%.2f", o > 2 ? "," : "", arr[ph][o] / 100.0f); w(c, b); }	/* hd=비율×10000=%×100 → /100=% (기존 /10은 10×오류). [26/11/20] 0.01% 분해능 그대로 %.2f */
 			w(c, "]");
 		}
 		w(c, "]}");
@@ -1192,22 +1193,26 @@ static error_t apiHarmonics(HttpConnection *c)
 	return httpCloseStream(c);
 }
 
-/* GET /api/waveform — 채널별 V/I 파형(상별 160샘플). wv는 read-trigger라 갱신 후 직렬화 */
+/* GET /api/waveform[?ch=N] — 채널별 V/I 파형(상별 160샘플). wv는 read-trigger라 갱신 후 직렬화 */
 static error_t apiWaveform(HttpConnection *c)
 {
 	char b[48];
-	int i, ph, k;
+	int i, ph, k, first = 1;
+	int only = qparam(c->request.queryString, "ch");	/* [26/11/20] ?ch=N 이면 그 채널만(캡처·JSON 1/3) */
 
+	if (only < 1 || only > webNch()) only = 0;
 	if (beginJson(c)) return ERROR_WRITE_FAILED;
 	w(c, "{\"ok\":true,\"channels\":[");
 	for (i = 0; i < webNch(); i++) {
 		WAVEFORM_L16 *wv;
 		float vs, is;
+		if (only && i != only - 1) continue;
 		copyModbusWaveData(i);   /* 최신 파형 캡처(Modbus 읽기 경로와 동일) */
 		wv = &meter[i].wv;
 		vs = wv->vscale ? wv->vscale : 1.0f;
 		is = wv->iscale ? wv->iscale : 1.0f;
-		snprintf(b, sizeof(b), "%s{\"n\":%d,\"v\":[", i ? "," : "", i + 1);
+		snprintf(b, sizeof(b), "%s{\"n\":%d,\"v\":[", first ? "" : ",", i + 1);
+		first = 0;
 		w(c, b);
 		for (ph = 0; ph < 3; ph++) {
 			w(c, ph ? ",[" : "[");
@@ -1777,7 +1782,8 @@ typedef struct {
 	uint8_t     type, card, ro, nw;
 } GField;
 
-/* card: 0=Device Information, 1=Communication, 2=ETC, 3=(비움, 종전 Status), 4=SNMP, 5=MQTT, 6=Remote Link
+/* card: 0=Device Information, 1=Communication, 2=Metering(종전 ETC), 3=(비움, 종전 Status), 4=SNMP, 5=MQTT, 6=Remote Link,
+ *       7=Test Mode(Administration 에서만 표시)
  * 설정 영역 주소는 MBAD_SET_FIELD()로 구조체에서 계산(2026-10-28 통신 설정 410워드 재배치). nw=문자열 워드 수 */
 #define SF(f)	MBAD_SET_FIELD(f)
 static const GField GEN[] = {
@@ -1804,37 +1810,43 @@ static const GField GEN[] = {
 	{ "sntp",            "SNTP",                 SF(comm.useSntp),      WT_BOOL, 1, 0, 0 },
 	{ "sntp_server",     "SNTP Server",          SF(comm.sntpServer),   WT_STR,  1, 0, COMM_STR_S / 2 },
 	{ "sntp_interval",   "SNTP Interval (min)",  SF(comm.sntpInterval), WT_U16,  1, 0, 0 },
-	{ "timezone",        "Timezone",             SF(comm.timezone),     WT_I16,  1, 0, 0 },
 	/* card 4 = SNMP — 숫자형. 문자열(커뮤니티·Contact/Location·v3)은 /api/snmp로 카드에 덧붙임 */
 	{ "snmp",            "SNMP",                 SF(comm.snmpEn),       WT_BOOL, 4, 0, 0 },
 	{ "snmp_ver",        "SNMP Version",         SF(comm.snmpVer),      WT_U16,  4, 0, 0 },
 	{ "snmp_v3proto",    "v3 Auth Protocol",     SF(comm.snmpV3AuthProto), WT_U16, 4, 0, 0 },
 	{ "snmp_trap",       "Trap",                 SF(comm.trapEn),       WT_BOOL, 4, 0, 0 },
 	{ "trap_ip",         "Trap Server",          SF(comm.trap_ip),      WT_IP,   4, 0, 0 },
-	/* card 5 = MQTT — 부팅 시 반영 */
+	/* card 5 = MQTT — 부팅 시 반영.
+	 * [26/11/20] 용어 통일(MQTT 규격·주요 도구 기준): User→Username, Interval→Publish Interval. Broker·Client ID·Topic 유지
+	 * (SV900 의 Host/Device ID 는 Broker/Client ID 로 맞출 것). 화면 순서 = 접속 → 인증 → 발행 (주소 불변) */
 	{ "mqtt",            "MQTT",                 SF(comm.mqttEn),       WT_BOOL, 5, 0, 0 },
 	{ "mqtt_host",       "Broker",               SF(comm.mqttHost),     WT_STR,  5, 0, COMM_STR_L / 2 },
 	{ "mqtt_port",       "Port",                 SF(comm.mqttPort),     WT_U16,  5, 0, 0 },
-	{ "mqtt_interval",   "Interval (sec)",       SF(comm.mqttInterval), WT_U16,  5, 0, 0 },
-	{ "mqtt_qos",        "QoS",                  SF(comm.mqttQos),      WT_U16,  5, 0, 0 },
-	{ "mqtt_retain",     "Retain",               SF(comm.mqttRetain),   WT_BOOL, 5, 0, 0 },
-	{ "mqtt_keepalive",  "Keep Alive (sec)",     SF(comm.mqttKeepAlive),WT_U16,  5, 0, 0 },
 	{ "mqtt_client",     "Client ID",            SF(comm.mqttClientId), WT_STR,  5, 0, COMM_STR_S / 2 },
-	{ "mqtt_user",       "User",                 SF(comm.mqttUser),     WT_STR,  5, 0, COMM_STR_S / 2 },
+	{ "mqtt_user",       "Username",             SF(comm.mqttUser),     WT_STR,  5, 0, COMM_STR_S / 2 },
 	{ "mqtt_pass",       "Password",             SF(comm.mqttPass),     WT_STR,  5, 0, COMM_STR_S / 2 },
 	{ "mqtt_topic",      "Topic",                SF(comm.mqttTopic),    WT_STR,  5, 0, COMM_STR_L / 2 },
+	{ "mqtt_interval",   "Publish Interval (sec)", SF(comm.mqttInterval), WT_U16, 5, 0, 0 },
+	{ "mqtt_keepalive",  "Keep Alive (sec)",     SF(comm.mqttKeepAlive),WT_U16,  5, 0, 0 },
+	{ "mqtt_qos",        "QoS",                  SF(comm.mqttQos),      WT_U16,  5, 0, 0 },
+	{ "mqtt_retain",     "Retain",               SF(comm.mqttRetain),   WT_BOOL, 5, 0, 0 },
 	/* card 6 = Remote Link — 원격 대시보드 서명링크(기본 꺼짐, 저장 즉시 반영). 접속 기록은 /api/remotelog로 덧붙임 */
 	{ "remote_link",     "Signed Link Login",    SF(comm.remoteEn),     WT_BOOL, 6, 0, 0 },
-	/* card 2 = ETC */
+	/* card 2 = Metering(웹 표시명, 26/11/20 'ETC' 에서 변경) */
 	{ "freq",            "Frequency (Hz)",       SF(freq),              WT_U16,  2, 0, 0 },
 	{ "va_type",         "VA Type",              SF(etc.VA_type),       WT_U16,  2, 0, 0 },
 	{ "pf_sign",         "PF Sign",              SF(etc.PF_sign),       WT_U16,  2, 0, 0 },
 	{ "demand_interval", "Demand Interval (min)",SF(etc.interval),      WT_U16,  2, 0, 0 },
 	{ "target_demand",   "Target Demand (W)",    SF(etc.P_target),      WT_U32,  2, 0, 0 },
 	/* Auto Rotation은 미사용이라 UI에서 제거 — 레지스터 자체는 그대로 둔다 */
-	{ "test_mode",       "Test Mode",            SF(etc.testMode),      WT_BOOL, 2, 0, 0 },
-	{ "update_interval", "Update Interval (sec)",SF(etc.testMode_Period),WT_U16, 2, 0, 0 },
+	/* card 7 = Test Mode — Configuration 에는 안 그리고 Administration 'Test Mode' 카드(웹 tmLoad/tmSave)에서 편집.
+	 * [26/11/20] 실제 계측 대신 임의 데이터를 내는 기능이라 Metering 에서 분리(현장에서 실수로 켜지 않게).
+	 * Test Interval = Test_task(meter.c)가 시험용 임의 데이터를 만드는 주기(초, 0=5초), 둘 다 부팅 시 반영 */
+	{ "test_mode",       "Test Mode",            SF(etc.testMode),      WT_BOOL, 7, 0, 0 },
+	{ "update_interval", "Test Interval (sec)",  SF(etc.testMode_Period),WT_U16, 7, 0, 0 },
 	{ "minmax_reset",    "Max/Min Reset",        SF(etc.maxminItv),     WT_U16,  2, 0, 0 },
+	/* [26/11/20] Communication(SNTP 아래) → Metering 맨 아래로 이동 — 레지스터는 comm.timezone 그대로 */
+	{ "timezone",        "Timezone",             SF(comm.timezone),     WT_I16,  2, 0, 0 },
 };
 #define GEN_N ((int)(sizeof(GEN) / sizeof(GEN[0])))
 
@@ -2114,6 +2126,9 @@ static const char INDEX_HTML[] =
 ".btn.warn{background:var(--warn);border-color:var(--warn);color:#1a212b;font-weight:600}\n"
 ".alert.err{background:#3a1620;color:#fca5a5;border:1px solid #5b2230;padding:10px 12px;border-radius:8px;margin:10px 0}\n"
 ".hint{color:var(--muted);font-size:12px;margin-top:14px}\n"
+/* [26/11/20] 로그인 글꼴 SV900(Inter, Tailwind): 제목 30px/700, 라벨 14px/500 본문색. Inter 미설치 PC 는 Segoe UI 로 대체(장비 내장 안 함) */
+"#v-login{font-family:Inter,Pretendard,'Segoe UI',-apple-system,Roboto,'Malgun Gothic',sans-serif}#v-login h1{font-size:30px;font-weight:700;letter-spacing:-.01em;margin:0 0 6px}\n"
+"#v-login label{font-size:14px;font-weight:500;color:var(--fg)}#v-login input{font-family:inherit}#v-login .btn{font-family:inherit;font-weight:600}\n"
 /* dashboard */
 ".dash{display:flex;flex-direction:column;height:calc(100vh - 56px - 28px);min-height:560px}\n"
 ".dash h1{font-size:19px;font-weight:800;margin:0}\n"
@@ -2238,12 +2253,18 @@ static const char INDEX_HTML[] =
 ".hsub{font-size:11px;color:var(--muted);font-weight:700;margin:10px 0 4px}\n"
 ".ctbl.hsm td,.ctbl.hsm th{padding:3px 5px;font-size:11px}\n"
 ".hcv{width:100%;height:180px;display:block}\n"
+/* [26/11/20] SV900 Harmonics: 상 제목, Table|Chart 붙은 버튼, 표 가로 분할 */
+".hph{font-size:14px;font-weight:700;margin:14px 0 4px}.hph small{font-size:11px;font-weight:400;color:var(--muted)}\n"
+".hvsw{display:inline-flex}.hvsw .btn{border-radius:0;margin:0}.hvsw .btn:first-child{border-radius:8px 0 0 8px}.hvsw .btn:last-child{border-radius:0 8px 8px 0;margin-left:-1px}\n"
+".htw{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start}.htw table{flex:1 1 170px;min-width:0}\n"
 ".pgctl{display:flex;gap:6px;flex-wrap:wrap;margin:2px 0 10px}.pgctl .btn{padding:3px 9px;font-size:12px}\n"
 /* [26/11/19] 이력 표: 카드 안 스크롤(끝까지 내리면 다음 50건), 머리행 고정 */
 ".evmeta{display:flex;align-items:center;gap:8px;margin:2px 0 8px;min-height:24px}.evbtn{margin-left:auto;display:flex;gap:6px}.evbtn .btn{padding:3px 9px;font-size:12px}\n"
 ".evbox{max-height:calc(100vh - 300px);min-height:160px;overflow:auto}.evbox th{position:sticky;top:0;background:var(--panel)}\n"
 ".dmcv{width:100%;height:200px;display:block}\n"
-".wcv{width:100%;height:160px;display:block;margin-bottom:6px}\n"
+".wcv{width:100%;height:260px;display:block;margin-bottom:6px}\n"
+/* [26/11/20] SV900 Waveform 범례(테두리 상자 + 상 이름) */
+".wlg{display:flex;justify-content:center;gap:14px;font-size:11px;color:var(--muted);margin:4px 0 2px}.wlg i{display:inline-block;width:40px;height:11px;border:2px solid;border-radius:2px;margin-right:5px;vertical-align:-2px}\n"
 ".itcv{width:100%;height:240px;display:block}\n"
 ".enb{font-size:10px;font-weight:700;padding:1px 6px;border-radius:5px}\n"
 ".enb.pass{color:#06281a;background:var(--ok)}.enb.fail{color:#fff;background:var(--bad)}.enb.info{color:var(--muted);background:var(--panel2)}\n"
@@ -2266,10 +2287,17 @@ static const char INDEX_HTML[] =
 /* [26/11/19] SV900 General 설정: 1열(<768) / 2열(768~1279) / 4열(>=1280) */
 ".setgrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:20px;align-items:start}\n"
 "@media(max-width:1279px){.setgrid{grid-template-columns:repeat(2,minmax(0,1fr))}}\n"
-/* Maintenance 는 카드가 2장이라 3열에 두면 Set Time 행(입력 230px+버튼2)이 트랙을
-   밀어 System 만 넓어진다(446 vs 331). 2열로 두면 양쪽이 같은 폭이다. */
-".setgrid.two{grid-template-columns:repeat(2,1fr)}\n"
-"@media(max-width:767px){.setgrid,.setgrid.two{grid-template-columns:1fr}}\n"
+"@media(max-width:767px){.setgrid{grid-template-columns:1fr}}\n"
+/* [26/11/20] Administration 4열 — Set Time 은 라벨 / 입력(전체폭) / [PC Time][⏰ Set Time] 세 줄로 접어 좁은 카드에도 맞춤 */
+".srow.tsr{flex-direction:column;align-items:stretch;gap:8px}.srow.tsr .tsin{width:100%;box-sizing:border-box;font-family:'Consolas',monospace}\n"
+".tsbtns{display:flex;gap:8px;justify-content:flex-end}.tsbtn{display:inline-flex;align-items:center;gap:6px}.tsbtn svg,.tbtn svg.ck{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}\n"
+/* [26/11/20] Administration 같은 줄 카드 높이 맞춤(stretch). System Status 2열 타일: 이름(작게) 위, 값(고정폭) 아래 */
+".setgrid.adm>.setcard{align-self:stretch}\n"
+".sstg{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.sstg>div{background:var(--panel2);border-radius:6px;padding:7px 9px;min-width:0}\n"
+".sstg .sk{display:block;font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.sstg .sv{display:block;font-family:'Consolas',monospace;font-size:14px;margin-top:2px}\n"
+/* [26/11/20] 상단바 시계 팝오버(SV900): DEVICE TIME + 새로고침 + Set Time(PC 시각) */
+".tpop{position:relative}.tpbox{display:none;position:absolute;right:0;top:40px;z-index:50;width:250px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px;box-shadow:0 8px 24px rgba(0,0,0,.25)}.tpop.open .tpbox{display:block}\n"
+".tpbox .tph{display:flex;align-items:center;justify-content:space-between;font-size:11px;font-weight:600;letter-spacing:.05em;color:var(--muted)}.tpbox .tpt{font-family:'Consolas',monospace;font-size:17px;margin:8px 0 4px}.tpbox .tpz{font-size:11px;color:var(--muted);margin-bottom:12px}.tpbox .btn{width:100%;justify-content:center}\n"
 /* [26/11/19] 카드·소제목 — SV900: 둥근 8px 카드, 제목 = 파란 세로막대(4x16) + 대문자 작은 글씨, 그룹 = 하늘색 막대 */
 ".setcard{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px;box-shadow:0 1px 2px rgba(0,0,0,.05)}\n"
 ".setcard h3{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--fg);padding:0;margin:0 0 12px}\n"
@@ -2279,6 +2307,26 @@ static const char INDEX_HTML[] =
 ".sgrp{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--fg);padding:0;margin:16px 0 8px}\n"
 ".sgrp::before{background:#67bfff}\n"
 ".setcard h3+.sgrp{margin-top:0}\n"
+/* [26/11/20] Configuration General 카드 — SV900 형식: 위 강조선(--gc), 머리 = 색 아이콘 칸 + 16px 제목 + 구분선,
+   라벨 밝게, 2열 묶음(.spair), 토글은 작은 스위치(켜짐 violet, 글자 숨김 — 변경 표시는 주황 테두리) */
+".setcard.gc{border-top:2px solid var(--gc);padding-top:12px}\n"
+/* 아랫줄 넓은 카드(Device Information·Remote Link): 2칸 폭, 같은 줄 높이로 늘림. 1열 화면에서는 1칸 */
+/* 윗줄 카드(Metering·Communication·MQTT·SNMP)도 같은 줄에서 가장 높은 카드 높이로 늘려 맞춤 */
+".setcard.gc{align-self:stretch}.setcard.gwide{grid-column:span 2;align-self:stretch}@media(max-width:767px){.setcard.gwide{grid-column:auto}}\n"
+/* Remote Link 본문은 줄 높이 계산에서 빠짐(contain:size) → 줄 높이 = Device Information, 넘치면 카드 안 스크롤. 1열 화면은 원래 높이 */
+"#rlCard{display:flex;flex-direction:column}.rlbody{flex:1 1 auto;min-height:0;overflow:auto;contain:size}@media(max-width:767px){.rlbody{contain:none}}\n"
+/* [26/11/20] Device Information 항목 2열, Remote Link 본문 2열(왼쪽 On/Off·설명 | 오른쪽 로그인 기록) */
+".gcols{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:0 28px}\n"
+".rlbody{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.7fr);gap:0 20px;align-items:start}.rlR{border-left:1px solid var(--line);padding-left:20px}\n"
+"@media(max-width:767px){.rlbody{grid-template-columns:1fr}.rlR{border-left:0;padding-left:0}}\n"
+".rlsum{margin-left:auto;font-size:11.5px;font-weight:500;color:var(--muted)}.rlbody .settbl th,.rlbody .settbl td{padding:3px 8px;font-size:12px}.rlbody .setnote{margin:4px 2px;font-size:11.5px}.rlbody .srow{padding:2px 0}\n"
+".setcard.gc h3{font-size:16px;font-weight:700;text-transform:none;letter-spacing:0;gap:10px;padding:0 0 12px;margin:0 0 12px;border-bottom:1px solid var(--line)}.setcard.gc h3::before{display:none}\n"
+".gci{width:30px;height:30px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;background:color-mix(in srgb,var(--gc) 18%,transparent);flex-shrink:0}\n"
+".gci svg{width:18px;height:18px;fill:none;stroke:var(--gc);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}\n"
+"#setBody .gc .srow .sk{color:var(--fg);font-weight:600}.spair{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:0 12px}\n"
+"#setBody .gc .srow button.tog{width:auto;padding:0;border:0;background:none}#setBody .gc .srow button.tog .txt{display:none}\n"
+"#setBody .gc .srow button.tog .knob{width:36px;height:20px;border-radius:10px}#setBody .gc .srow button.tog .knob::after{top:2px;left:2px;width:16px;height:16px}\n"
+"#setBody .gc .srow button.tog.on .knob{background:#8470FF}#setBody .gc .srow button.tog.on .knob::after{transform:translateX(16px)}#setBody .gc .srow button.tog.chg .knob{box-shadow:0 0 0 2px var(--warn)}\n"
 ".srow .sv{font-family:'Consolas',monospace}\n"
 ".srow input,.srow select{width:160px;margin:0;padding:6px 8px;font-size:13px}\n"
 ".srow input[type=checkbox]{width:auto}\n"
@@ -2343,6 +2391,10 @@ static const char INDEX_HTML[] =
 "    <symbol id='i-rpt' viewBox='0 0 24 24'><path d='M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z'/><path d='M14 2v4a2 2 0 0 0 2 2h4'/><path d='M16 13H8M16 17H8M10 9H8'/></symbol>\n"
 "    <symbol id='i-io' viewBox='0 0 24 24'><rect x='3' y='3' width='7' height='7' rx='1'/><rect x='14' y='3' width='7' height='7' rx='1'/><rect x='14' y='14' width='7' height='7' rx='1'/><rect x='3' y='14' width='7' height='7' rx='1'/></symbol>\n"
 "    <symbol id='i-setup' viewBox='0 0 24 24'><path d='M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z'/><circle cx='12' cy='12' r='3'/></symbol>\n"
+/* [26/11/20] Configuration General 카드 머리 아이콘(SV900 형식): wifi=Communication, server=SNMP, link=Remote Link */
+"    <symbol id='i-wifi' viewBox='0 0 24 24'><path d='M5 12.55a11 11 0 0 1 14.08 0'/><path d='M1.42 9a16 16 0 0 1 21.16 0'/><path d='M8.53 16.11a6 6 0 0 1 6.95 0'/><path d='M12 20h.01'/></symbol>\n"
+"    <symbol id='i-server' viewBox='0 0 24 24'><rect x='2' y='2' width='20' height='8' rx='2'/><rect x='2' y='14' width='20' height='8' rx='2'/><path d='M6 6h.01M6 18h.01'/></symbol>\n"
+"    <symbol id='i-link' viewBox='0 0 24 24'><path d='M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71'/><path d='M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71'/></symbol>\n"
 "    <symbol id='i-admin' viewBox='0 0 24 24'><path d='M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4'/></symbol>\n"
 "   </svg>\n"
 /* [26/11/19] 사이드바 맨 위 로고(SV900 형식) — 업로드 로고가 없으면 글자 'SV300'. logoSet()이 채운다 */
@@ -2367,7 +2419,11 @@ static const char INDEX_HTML[] =
 "  <div class='crumb'><svg viewBox='0 0 24 24'><path d='M12 2a7 7 0 0 0-7 7c0 5.25 7 13 7 13s7-7.75 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z'/></svg>SV300 <span>/</span> <b id='crumb'>Dashboard</b></div>\n"
 "  <div class='status'>\n"
 "   <span class='clock' id='clock'>-</span>\n"
-"   <button class='tbtn' id='themeBtn' onclick='toggleTheme()' title='Light / Dark'>&#127769;</button>\n"
+/* [26/11/20] 시계 아이콘 → DEVICE TIME 팝오버(SV900). Set Time 은 PC 시각(UTC epoch)을 7788 에 기록 */
+"   <span class='tpop' id='tpop'><button class='tbtn' onclick='tpToggle(event)' title='Device Time'><svg class='ck' viewBox='0 0 24 24'><circle cx='12' cy='12' r='9'/><path d='M12 7v5l3 2'/></svg></button>\n"
+"    <div class='tpbox' onclick='event.stopPropagation()'><div class='tph'>DEVICE TIME<button class='tbtn' style='width:26px;height:26px' onclick='tpRef()' title='Refresh'><svg class='ck' viewBox='0 0 24 24'><path d='M21 12a9 9 0 1 1-2.64-6.36L21 8'/><path d='M21 3v5h-5'/></svg></button></div>\n"
+"     <div class='tpt' id='tpT'>-</div><div class='tpz' id='tpZ'>-</div><button class='btn primary tsbtn' id='tpSet' style='width:100%;justify-content:center' onclick='tpSet()'><svg viewBox='0 0 24 24'><circle cx='12' cy='12' r='9'/><path d='M12 7v5l3 2'/></svg>Set Time (PC)</button></div></span>\n"
+"   <button class='tbtn' id='themeBtn' onclick='toggleTheme()' title='Light / Dark'></button>\n"
 "   <span class='avatar'><svg viewBox='0 0 24 24'><circle cx='12' cy='9' r='4'/><path d='M4 21a8 8 0 0 1 16 0z'/></svg><span class='role' id='role'>-</span></span>\n"
 "   <button class='tbtn' onclick='logout()' title='Logout'><svg viewBox='0 0 24 24' width='17' height='17' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'><path d='M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9'/></svg></button>\n"
 "  </div>\n"
@@ -2447,8 +2503,10 @@ static const char INDEX_HTML[] =
 "     <a class='gp-tab' id='ct-report' onclick=\"chSetTab('report')\">Report</a>\n"
 "    </div>\n"
 "    <div id='chctl' style='display:none;margin:0 0 10px;align-items:center;gap:8px'>\n"
-"     <span class='ph2'>Option</span>\n"
-"     <select id='hopt' style='width:150px' onchange=\"harmOpt=this.value;pollLoop()\"><option value='pv'>Phase Voltage</option><option value='lv'>Line Voltage</option><option value='cur'>Current</option></select>\n"
+"     <span class='ph2'>Select Option</span>\n"
+"     <select id='hopt' style='width:170px' onchange=\"harmOpt=this.value;pqT=0;pollLoop()\"><option value='pv'>Phase Voltage</option><option value='lv'>Line Voltage</option><option value='cur'>Current</option></select>\n"
+/* [26/11/20] SV900 Harmonics: Table | Chart 전환 */
+"     <span class='hvsw'><button class='btn' id='hvt' onclick=\"harmView='table';syncHv();pqT=0;pollLoop()\">Table</button><button class='btn' id='hvc' onclick=\"harmView='chart';syncHv();pqT=0;pollLoop()\">Chart</button></span>\n"
 "    </div>\n"
 "    <div id='chbody'></div>\n"
 "   </div>\n"
@@ -2495,17 +2553,24 @@ static const char INDEX_HTML[] =
 "function esc(s){return String(s).replace(/[&<>]/g,function(x){return{'&':'&amp;','<':'&lt;','>':'&gt;'}[x]})}\n"
 /* theme + clock */
 "function toggleTheme(){var h=document.documentElement,t=h.getAttribute('data-theme')==='light'?'dark':'light';h.setAttribute('data-theme',t);try{localStorage.setItem('theme',t)}catch(e){}tbtn()}\n"
-"function tbtn(){var b=$('themeBtn');if(b)b.innerHTML=document.documentElement.getAttribute('data-theme')==='light'?'\\u2600\\uFE0F':'\\uD83C\\uDF19'}\n"
+/* [26/11/20] 테마 아이콘 = SV900 ThemeToggle 의 해(라이트)·달(다크) 16px SVG (종전 이모지) */
+"var IC_SUN=\"<svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M8 0a1 1 0 0 1 1 1v.5a1 1 0 1 1-2 0V1a1 1 0 0 1 1-1Z'/><path d='M12 8a4 4 0 1 1-8 0 4 4 0 0 1 8 0Zm-4 2a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z'/><path d='M13.657 3.757a1 1 0 0 0-1.414-1.414l-.354.354a1 1 0 0 0 1.414 1.414l.354-.354ZM13.5 8a1 1 0 0 1 1-1h.5a1 1 0 1 1 0 2h-.5a1 1 0 0 1-1-1ZM13.303 11.889a1 1 0 0 0-1.414 1.414l.354.354a1 1 0 0 0 1.414-1.414l-.354-.354ZM8 13.5a1 1 0 0 1 1 1v.5a1 1 0 1 1-2 0v-.5a1 1 0 0 1 1-1ZM4.111 13.303a1 1 0 1 0-1.414-1.414l-.354.354a1 1 0 1 0 1.414 1.414l.354-.354ZM0 8a1 1 0 0 1 1-1h.5a1 1 0 0 1 0 2H1a1 1 0 0 1-1-1ZM3.757 2.343a1 1 0 1 0-1.414 1.414l.354.354A1 1 0 1 0 4.11 2.697l-.354-.354Z'/></svg>\";\n"
+"var IC_MOON=\"<svg width='16' height='16' viewBox='0 0 16 16' fill='currentColor'><path d='M11.875 4.375a.625.625 0 1 0 1.25 0c.001-.69.56-1.249 1.25-1.25a.625.625 0 1 0 0-1.25 1.252 1.252 0 0 1-1.25-1.25.625.625 0 1 0-1.25 0 1.252 1.252 0 0 1-1.25 1.25.625.625 0 1 0 0 1.25c.69.001 1.249.56 1.25 1.25Z'/><path d='M7.019 1.985a1.55 1.55 0 0 0-.483-1.36 1.44 1.44 0 0 0-1.53-.277C2.056 1.553 0 4.5 0 7.9 0 12.352 3.648 16 8.1 16c3.407 0 6.246-2.058 7.51-4.963a1.446 1.446 0 0 0-.25-1.55 1.554 1.554 0 0 0-1.372-.502c-4.01.552-7.539-2.987-6.97-7ZM2 7.9C2 5.64 3.193 3.664 4.961 2.6 4.82 7.245 8.72 11.158 13.36 11.04 12.265 12.822 10.341 14 8.1 14 4.752 14 2 11.248 2 7.9Z'/></svg>\";\n"
+"function tbtn(){var b=$('themeBtn');if(b)b.innerHTML=document.documentElement.getAttribute('data-theme')==='light'?IC_SUN:IC_MOON}\n"
 "function p2(x){return(x<10?'0':'')+x}\n"
 "function fdt(d){return d.getFullYear()+'-'+p2(d.getMonth()+1)+'-'+p2(d.getDate())+' '+p2(d.getHours())+':'+p2(d.getMinutes())+':'+p2(d.getSeconds())}\n"
-/* fdtU: 펌웨어 ts=로컬 epoch → UTC게터로 device 로컬시간 그대로 표시(브라우저 tz 미적용) */
+/* fdtU: Date 의 UTC 게터로 표시(브라우저 tz 미적용). [26/11/20] 펌웨어 ts=UTC → ts2/devNow 가 +TZ(장치 Timezone, /api/me) 해서 장치 로컬 시각으로 */
 "function fdtU(d){return d.getUTCFullYear()+'-'+p2(d.getUTCMonth()+1)+'-'+p2(d.getUTCDate())+' '+p2(d.getUTCHours())+':'+p2(d.getUTCMinutes())+':'+p2(d.getUTCSeconds())}\n"
-"function clk(){var e=$('clock');if(e)e.textContent=fdt(new Date())}\n"
+"function clk(){var e=$('clock');if(e)e.textContent=fdt(new Date());devTick();}\n"
+/* [26/11/20] 장비 시각: 읽은 값(DEVB.t)+경과 초로 매초 표시(매초 조회 안 함). devNow/tpRef 가 기준을 다시 맞춤 */
+"var DEVB=null;function devSet(t){DEVB=t?{t:t,at:Date.now()}:null;devTick();}\n"
+"function devTick(){if(!DEVB)return;var t=DEVB.t+Math.floor((Date.now()-DEVB.at)/1000),a=$('devNow'),b=$('devUtc'),c=$('tpT'),d=$('tpZ');\n"
+" if(a)a.textContent=ts2(t);if(b)b.textContent=fdtU(new Date(t*1000));if(c)c.textContent=ts2(t);if(d)d.textContent=tzs()+'  \\u00b7  UTC '+fdtU(new Date(t*1000)).slice(11);}\n"
 /* auth flow */
 "function showLogin(){$('v-login').style.display='';$('v-app').style.display='none'}\n"
 "function showApp(){$('v-login').style.display='none';$('v-app').style.display=''}\n"
 "function me(){return j('/api/me').then(function(r){\n"
-" if(r.d.auth){AUTHGEN++;IS_ADMIN=(r.d.role==='admin');if(r.d.nch)NCH=r.d.nch;\n"
+" if(r.d.auth){AUTHGEN++;IS_ADMIN=(r.d.role==='admin');if(r.d.nch)NCH=r.d.nch;TZ=+r.d.tz||0;\n"
 "  $('role').textContent=r.d.user+' ('+(IS_ADMIN?'Admin':'Viewer')+')';$('role').className='role '+(IS_ADMIN?'admin':'viewer');\n"
 "  ['b-clral','b-clrev'].forEach(function(id){$(id).disabled=!IS_ADMIN});\n"
 "  showApp();logoLoad();go('dash');pollLoop();return true;}\n"
@@ -2560,7 +2625,7 @@ static const char INDEX_HTML[] =
 " $('d-iom').innerHTML=\"<div style='display:flex;gap:14px;flex-wrap:wrap'><div style='flex:1;min-width:300px'>\"+di+\"</div>\"+(tp?\"<div style='min-width:150px'>\"+tp+\"</div>\":'')+\"</div>\";}\n"
 "function ioSave(){var els=document.querySelectorAll('#d-iom [data-addr]'),c=[],i=0;els.forEach(function(e){if(e.value!==e.getAttribute('data-orig'))c.push(e);});if(!c.length){ioEd=0;renderIom();return;}(function w(){if(i>=c.length){ioEd=0;j('/api/savecfg',{method:'POST'}).then(function(){setTimeout(pollLoop,300);});return;}var e=c[i++],v=+e.value,mn=e.getAttribute('min'),mx=e.getAttribute('max');if(mn)v=Math.max(+mn,v);if(mx)v=Math.min(+mx,v);jp('/api/setreg',{addr:+e.getAttribute('data-addr'),type:'u16',val:v}).then(w).catch(w);})();}\n"
 "function chip(c){return \"<span class='chchip'>CH\"+c+'</span>'}\n"
-"function ts2(s){return s?fdtU(new Date(s*1000)):'-'}\n"
+"var TZ=0;function ts2(s){return s?fdtU(new Date((s+TZ*60)*1000)):'-'}\n"
 "function loadEvents(){return j('/api/sv300/events').then(function(r){if(!r.d.ok)return;var d=r.d;\n"
 "  dAlm=[0,0,0,0];d.status.forEach(function(x){if(x.chn>=1&&x.chn<=3)dAlm[x.chn]++;});dChBtns();\n"
 "  $('as-cnt').textContent=d.status.length;$('as-cnt').className='dbadge'+(d.status.length?' hot':'');\n"
@@ -2583,8 +2648,13 @@ static const char INDEX_HTML[] =
 "  if(r.s===403){alert('Admin only');return}if(!r.d.ok){alert('Command failed');return}loadEvents();});}\n"
 /* setup */
 "var OPTDIS={};\n"
-"var OPT={snmp_ver:{0:'v1/v2c',1:'v1/v2c/v3',2:'v3 only'},snmp_v3proto:{0:'SHA-1',1:'SHA-256'},freq:{0:'60 Hz',1:'50 Hz'},va_type:{0:'RMS (S=VA)',1:'Vector'},pf_sign:{0:'IEC',1:'IEEE'},demand_interval:{0:'1 min',1:'5 min',2:'15 min',3:'30 min',4:'60 min'},minmax_reset:{0:'Daily',1:'Weekly',2:'Monthly'},timezone:{'-720':'UTC-12:00','-600':'Hawaii -10:00','-540':'Alaska -09:00','-480':'Pacific -08:00','-420':'Mountain -07:00','-360':'Central -06:00','-300':'Eastern -05:00','-180':'-03:00','0':'UTC +00:00','60':'Berlin +01:00','120':'Athens +02:00','180':'Moscow +03:00','210':'Tehran +03:30','240':'Dubai +04:00','300':'Karachi +05:00','330':'India +05:30','345':'Nepal +05:45','360':'Dhaka +06:00','420':'Bangkok +07:00','480':'Shanghai +08:00','540':'Seoul +09:00','570':'Adelaide +09:30','600':'Sydney +10:00','720':'Auckland +12:00'}};\n"
-"var CARDN=['Device Information','Communication','ETC','Status','SNMP','MQTT','Remote Link'],setCur='general';\n"
+"var OPT={snmp_ver:{0:'v1/v2c',1:'v1/v2c/v3',2:'v3 only'},snmp_v3proto:{0:'SHA-1',1:'SHA-256'},freq:{0:'60 Hz',1:'50 Hz'},va_type:{0:'RMS (S=VA)',1:'Vector'},pf_sign:{0:'IEC',1:'IEEE'},demand_interval:{0:'1 min',1:'5 min',2:'15 min',3:'30 min',4:'60 min'},minmax_reset:{0:'None',1:'Daily',2:'Weekly (PQ Report Start Day)',3:'Monthly'},timezone:{'-720':'UTC-12:00','-600':'Hawaii -10:00','-540':'Alaska -09:00','-480':'Pacific -08:00','-420':'Mountain -07:00','-360':'Central -06:00','-300':'Eastern -05:00','-180':'-03:00','0':'UTC +00:00','60':'Berlin +01:00','120':'Athens +02:00','180':'Moscow +03:00','210':'Tehran +03:30','240':'Dubai +04:00','300':'Karachi +05:00','330':'India +05:30','345':'Nepal +05:45','360':'Dhaka +06:00','420':'Bangkok +07:00','480':'Shanghai +08:00','540':'Seoul +09:00','570':'Adelaide +09:30','600':'Sydney +10:00','720':'Auckland +12:00'}};\n"
+/* [26/11/20] card 2 'ETC' → 'Metering'(주파수·VA/PF 방식·Demand·Max/Min·Test Mode 는 모두 계측·계산 설정).
+   GCARD: General 카드 머리(SV900 형식) [강조색, 아이콘 symbol]. GSECT: 카드 안 소제목, GPAIR: 이 키와 다음 항목을 2열로 */
+/* card 7(Test Mode)은 Configuration 배치 목록에 없음 — Administration 에서만 표시 */
+"var CARDN=['Device Information','Communication','Metering','Status','SNMP','MQTT','Remote Link','Test Mode'],setCur='general';\n"
+"var GCARD=[['#22c55e','i-rpt'],['#67BFFF','i-wifi'],['#F97316','i-dash'],null,['#8470FF','i-server'],['#3b82f6','i-meter'],['#ec4899','i-link'],null];\n"
+"var GSECT={cur_ip:'TCP/IP',mb_tcp:'Modbus',sntp:'SNTP'},GPAIR={ip:1,gateway:1,tcp_port:1,mqtt_host:1,mqtt_user:1,mqtt_interval:1,snmp_ver:1};\n"
 "var WM={0:'not used',1:'3P4W',2:'3P3W(2CT)',3:'3P3W(3CT)',4:'1P2W(L1)',5:'1P2W(L2)',6:'1P2W(L3)',7:'1P3W',8:'SIM'};\n"
 "var CT2M={0:'5A',1:'100mA/333mV',2:'Rogowski'},ZCTM={1:'200mV:100mV',2:'200mV:1.5mA',3:'200mV:0.1mA'},DIM={0:'DI',1:'PI'},DIRM={0:'+',1:'-'};\n"
 "var PT_F=[{o:0,l:'Wiring Mode',t:'u16',opt:WM},{o:2,l:'V Nominal',t:'u32'},{o:4,l:'PT1',t:'u32'},{o:6,l:'PT2',t:'u16'}];\n"
@@ -2647,7 +2717,7 @@ static const char INDEX_HTML[] =
 /* 0/1 항목은 체크박스 대신 토글 버튼(gems3500_keil5 참조). 값은 value 속성에 실리므로
    setMark/saveSet 는 기존 경로 그대로 동작한다(<button>.value = '0'|'1'). */
 "function togBtn(d,on,dis,dep,inv,hid){return \"<button type='button' class='tog\"+(on?' on':'')+\"' \"+d+\" value='\"+(on?1:0)+\"' \"+dis+(dep?(\" data-dep='\"+dep+\"'\"):'')+(inv?\" data-inv='1'\":'')+(hid?\" data-hide='1'\":'')+\" onclick='togClick(this)'><span class='knob'></span><span class='txt'>\"+(on?'ENABLE':'DISABLE')+\"</span></button>\";}\n"
-"function togClick(b){if(b.disabled)return;var on=(b.value!=='1');b.value=on?'1':'0';b.classList.toggle('on',on);var t=b.querySelector('.txt');if(t)t.textContent=on?'ENABLE':'DISABLE';setMark(b);togDeps($('setBody'));}\n"
+"function togClick(b){if(b.disabled)return;var on=(b.value!=='1');b.value=on?'1':'0';b.classList.toggle('on',on);var t=b.querySelector('.txt');if(t)t.textContent=on?'ENABLE':'DISABLE';setMark(b);togDeps(b.closest('#setBody,#tmBody')||$('setBody'));}\n"
 /* data-dep = 종속 필드 key 목록(콤마 구분).
    data-inv=1 : 켜졌을 때 잠근다 — DHCP 처럼 자동할당이라 수동입력이 무의미한 경우.
    data-hide=1: 비활성 대신 행 자체를 숨긴다(Trend 그룹).
@@ -2656,7 +2726,7 @@ static const char INDEX_HTML[] =
 " var on=(b.value==='1'),inv=b.getAttribute('data-inv')==='1',hid=b.getAttribute('data-hide')==='1',lock=b.disabled||(inv?on:!on);\n"
 " b.getAttribute('data-dep').split(',').forEach(function(k){root.querySelectorAll(\"[data-k='\"+k.trim()+\"']\").forEach(function(el){\n"
 "  if(hid){var r=el.closest('.srow');if(r)r.style.display=lock?'none':'';}else el.disabled=lock;});});});if(window.snmpVerDeps)snmpVerDeps();}\n"
-"var GDEP={dhcp:['ip,subnet,gateway,dns',1],mb_tcp:['tcp_port,device_id',0],sntp:['sntp_server,sntp_interval',0],mqtt:['mqtt_host,mqtt_port,mqtt_interval,mqtt_qos,mqtt_retain,mqtt_keepalive,mqtt_client,mqtt_user,mqtt_pass,mqtt_topic',0],snmp:['snmp_ver,snmp_v3proto,snmp_trap,trap_ip,snmp_community,snmp_contact,snmp_location',0],snmp_trap:['trap_ip',0]};\n"
+"var GDEP={dhcp:['ip,subnet,gateway,dns',1],mb_tcp:['tcp_port,device_id',0],sntp:['sntp_server,sntp_interval',0],mqtt:['mqtt_host,mqtt_port,mqtt_interval,mqtt_qos,mqtt_retain,mqtt_keepalive,mqtt_client,mqtt_user,mqtt_pass,mqtt_topic',0],snmp:['snmp_ver,snmp_v3proto,snmp_trap,trap_ip,snmp_community,snmp_contact,snmp_location',0],snmp_trap:['trap_ip',0],test_mode:['update_interval',0]};\n"
 "function ctlOf(f){var d=\"data-addr='\"+f.addr+\"' data-type='\"+f.type+\"' data-orig='\"+esc(f.val)+\"' data-k='\"+f.k+\"'\",dis=IS_ADMIN?'':'disabled';\n"
 " if(f.ro)return \"<span class='sv' data-k='\"+f.k+\"'>\"+fmtV(f)+\"</span><span class='rtag'>R</span>\";\n"
 " if(OPT[f.k]){var o=OPT[f.k],s=\"<select \"+d+' '+dis+\" onchange='setMark(this)'>\";for(var k in o)s+=\"<option value='\"+k+\"'\"+((''+k)===(''+f.val)?' selected':'')+((OPTDIS[f.k]&&OPTDIS[f.k][k])?' disabled':'')+'>'+esc(o[k])+'</option>';return s+'</select>';}\n"
@@ -2667,24 +2737,34 @@ static const char INDEX_HTML[] =
    항목이 없는 카드(지금은 3)는 그리지 않는다 */
 "function loadGeneral(){return j('/api/general').then(function(r){if(!r.d.ok){$('setBody').innerHTML=\"<p class='stub'>load error</p>\";return;}\n"
 " var cs=CARDN.map(function(){return [];});r.d.fields.forEach(function(f){cs[f.card].push(f)});var h=\"<div class='setgrid'>\";\n"
-" cs.forEach(function(fs,ci){if(!fs.length)return;h+=\"<div class='setcard'\"+(ci===4?\" id='snmpCard'\":ci===6?\" id='rlCard'\":'')+\"><h3>\"+CARDN[ci]+'</h3>';fs.forEach(function(f){h+=\"<div class='srow'><span class='sk'>\"+esc(f.label)+'</span>'+ctlOf(f)+'</div>';});h+='</div>';});\n"
+/* [26/11/20] 배치: 윗줄 Metering·Communication·MQTT·SNMP, 아랫줄 Device Information·Remote Link(각 2칸 폭, 같은 높이) */
+" [2,1,5,4,0,6].forEach(function(ci){var fs=cs[ci];if(!fs||!fs.length)return;var g=GCARD[ci]||['#3b82f6','i-setup'],pr=0;\n"
+"  h+=\"<div class='setcard gc\"+(ci===0||ci===6?' gwide':'')+\"' style='--gc:\"+g[0]+\"'\"+(ci===4?\" id='snmpCard'\":ci===6?\" id='rlCard'\":'')+\"><h3><span class='gci'><svg><use href='#\"+g[1]+\"'/></svg></span>\"+CARDN[ci]+'</h3>'+(ci===6?\"<div class='rlbody'><div class='rlL'>\":ci===0?\"<div class='gcols'><div>\":'');\n"
+"  fs.forEach(function(f){var r=\"<div class='srow'><span class='sk'>\"+esc(f.label)+'</span>'+ctlOf(f)+'</div>';if(GSECT[f.k])h+=\"<div class='sgrp'>\"+GSECT[f.k]+'</div>';\n"
+/* Device Information: 왼쪽 열 Serial·MAC | 오른쪽 열 HW·FW Version·FW Build (mac 뒤에서 열 바꿈) */
+"   if(GPAIR[f.k]){h+=\"<div class='spair'>\"+r;pr=1;}else if(pr){h+=r+'</div>';pr=0;}else h+=r;if(ci===0&&f.k==='mac')h+='</div><div>';});\n"
+"  if(pr)h+='</div>';h+=(ci===6?\"</div><div class='rlR'></div></div>\":ci===0?'</div></div>':'')+'</div>';});\n"
 " h+='</div>';$('setBody').innerHTML=h;togDeps($('setBody'));sn('Save & Apply.');return loadSnmpStr().then(loadRemoteLog);});}\n"
 /* Remote Link 카드 — 서명링크 설명 + 최근 원격 로그인 기록(admin만, /api/remotelog) */
-"function loadRemoteLog(){var c=$('rlCard');if(!c)return;c.insertAdjacentHTML('beforeend',\"<div class='setnote'>Allows one-time signed links from the remote dashboard server. <b>Off by default.</b> Applies on Save.</div>\");\n"
+/* [26/11/20] Remote Link 2열: 왼쪽(.rlL)=On/Off·설명, 오른쪽(.rlR)=로그인 기록 */
+"function loadRemoteLog(){var c=document.querySelector('#rlCard .rlL')||$('rlCard'),cr=document.querySelector('#rlCard .rlR')||c;if(!c)return;c.insertAdjacentHTML('beforeend',\"<div class='setnote'>Allows one-time signed links from the remote dashboard server. <b>Off by default.</b> Applies on Save.</div>\");\n"
 " if(!IS_ADMIN)return;return j('/api/remotelog').then(function(r){if(!r.d||!r.d.ok)return;var h=\"<table class='settbl'><tr><th>Time</th><th>Account</th><th>From</th><th>Result</th></tr>\";\n"
 "  if(!r.d.log.length)h+=\"<tr><td colspan='4'>No remote login</td></tr>\";\n"
-"  r.d.log.forEach(function(e){h+='<tr><td>'+ts2(e.ts)+'</td><td>'+esc(e.acct)+'</td><td>'+esc(e.ip)+'</td><td>'+(e.ok?'OK':'Bad signature')+'</td></tr>';});\n"
-"  c.insertAdjacentHTML('beforeend',h+\"</table><div class='setnote'>Rejected since boot (format/account/nonce/rate): \"+r.d.rejected+'</div>');}).catch(function(){});}\n"
+/* [26/11/20] 화면은 최근 3건만(Device Information 높이 안에 들어가게). 장비는 REMOTE_LOG_KEEP(20)건 그대로 보관 */
+"  r.d.log.slice(0,3).forEach(function(e){h+='<tr><td>'+ts2(e.ts)+'</td><td>'+esc(e.acct)+'</td><td>'+esc(e.ip)+'</td><td>'+(e.ok?'OK':'Bad signature')+'</td></tr>';});\n"
+"  cr.insertAdjacentHTML('beforeend',h+'</table>');var hd=document.querySelector('#rlCard h3');\n"
+/* 요약은 제목 줄 오른쪽(카드 높이를 늘리지 않게). 거부 = 부팅 후 형식·계정·nonce·횟수 제한으로 버린 요청 */
+"  if(hd)hd.insertAdjacentHTML('beforeend',\"<span class='rlsum' title='Rejected since boot (format/account/nonce/rate)'>latest \"+Math.min(3,r.d.log.length)+'/'+r.d.log.length+' &middot; rejected '+r.d.rejected+'</span>');}).catch(function(){});}\n"
 /* SNMP 문자열(snmp.d) — data-addr 대신 data-snmp. 커뮤니티는 비밀값이라 값을 받지 않고 새로 입력할 때만 저장 */
 "function escA(s){return esc(s).replace(/'/g,'&#39;');}\n"
 "function loadSnmpStr(){return j('/api/snmp').then(function(r){var c=$('snmpCard');if(!c||!r.d||!r.d.ok)return;var dis=IS_ADMIN?'':'disabled';\n"
 " function row(l,k,v,tp,ph){return \"<div class='srow'><span class='sk'>\"+l+\"</span><input type='\"+tp+\"' data-snmp='\"+k+\"' data-k='snmp_\"+k+\"' data-orig='\"+escA(v)+\"' value='\"+escA(v)+\"' maxlength='32' placeholder='\"+ph+\"' \"+dis+\" oninput='setMark(this)'></div>\";}\n"
-" c.insertAdjacentHTML('beforeend',row('Community','community','','password',r.d.commDefault?'public (default) - change!':'(unchanged)')\n"
-"  +row('sysContact','contact',r.d.contact,'text','')+row('sysLocation','location',r.d.location,'text','e.g. Bldg-B 2F MCC-3')\n"
-"  +row('v3 User','v3user',r.d.v3user,'text','')\n"
-"  +row('v3 Auth Password','v3auth','','password',r.d.v3auth?'(set) - type to change':'(not set) 8~32 chars')\n"
-"  +row('v3 Priv Password (AES-128)','v3priv','','password',r.d.v3priv?'(set) - type to change':'(not set) optional, 8~32 chars')\n"
-"  +\"<div class='srow'><span class='sk'></span><span style='color:var(--muted);font-size:12px'>ASCII only, max 32 &middot; v3 password 8~32 &middot; all SNMP settings applied after reboot</span></div>\");\n"
+/* [26/11/20] 2열 묶음(카드 높이를 Communication 수준으로): Community|v3 User, sysContact|sysLocation, v3 Auth|v3 Priv(AES-128) */
+" function pr(a,b){return \"<div class='spair'>\"+a+b+'</div>';}\n"
+" c.insertAdjacentHTML('beforeend',pr(row('Community','community','','password',r.d.commDefault?'public - change!':'(unchanged)'),row('v3 User','v3user',r.d.v3user,'text',''))\n"
+"  +pr(row('sysContact','contact',r.d.contact,'text',''),row('sysLocation','location',r.d.location,'text','e.g. B-2F MCC-3'))\n"
+"  +pr(row('v3 Auth Password','v3auth','','password',r.d.v3auth?'(set) type to change':'(not set) 8~32'),row('v3 Priv Password','v3priv','','password',r.d.v3priv?'(set) type to change':'AES-128 (optional)'))\n"
+"  +\"<div class='setnote' style='margin:6px 0 0'>ASCII only, max 32 &middot; v3 password 8~32 &middot; applied after reboot</div>\");\n"
 " var vs=document.querySelector(\"#setBody select[data-k='snmp_ver']\");if(vs)vs.addEventListener('change',snmpVerDeps);togDeps($('setBody'));});}\n"
 /* SNMP Version에 따른 잠금: v1/v2c → v3 칸 잠금, v3 only → Community 잠금 (SNMP OFF면 모두 잠금) */
 "function snmpVerDeps(){var t=document.querySelector(\"#setBody button.tog[data-k='snmp']\"),s=document.querySelector(\"#setBody select[data-k='snmp_ver']\");if(!t||!s)return;\n"
@@ -2726,18 +2806,29 @@ static const char INDEX_HTML[] =
 " od.forEach(function(g){h+=\"<div class='setcard'><h3>\"+g+'</h3>';var bt=gr[g].filter(function(c){return c.btn;});\n"
 "  if(bt.length)h+=\"<div class='sysbtns'>\"+bt.map(function(c){return \"<button class='sysb \"+c.btn+\"' \"+(IS_ADMIN?'':'disabled')+\" onclick='runCmd(\"+CMDS.indexOf(c)+\")'>\"+SYSICO[c.btn]+esc(c.l)+'</button>';}).join('')+'</div>';\n"
 "  gr[g].forEach(function(c){if(c.btn)return;var gi=CMDS.indexOf(c),id='c'+gi,ctl='';\n"
-"  if(c.utc)ctl=\"<input lang='en-US' type='datetime-local' step='1' id='u_\"+id+\"' style='width:230px'><button class='btn' onclick='pcNow(\"+gi+\")'>PC Time</button>\";else if(c.tgt)ctl=tgtOpts(id);\n"
+/* [26/11/20] Set Time: 24시간 텍스트 입력(datetime-local 은 OS 언어 따라 오전/오후 표시), 입력 한 줄 + [PC Time][⏰ Set Time](SV900) 한 줄 */
+"  if(c.utc){h+=\"<div class='srow tsr'><span class='sk'>\"+c.l+\" <small style='font-weight:400'>(local, 24h)</small></span><input class='tsin' id='u_\"+id+\"' placeholder='YYYY-MM-DD HH:MM:SS' maxlength='19' \"+(IS_ADMIN?'':'disabled')+\">\"\n"
+"   +\"<span class='tsbtns'><button class='btn' \"+(IS_ADMIN?'':'disabled')+\" onclick='pcNow(\"+gi+\")'>PC Time</button><button class='btn primary tsbtn' \"+(IS_ADMIN?'':'disabled')+\" onclick='runCmd(\"+gi+\")'>\"+CLKICO+\"Set Time</button></span></div>\";return;}\n"
+"  if(c.tgt)ctl=tgtOpts(id);\n"
 "  h+=\"<div class='srow'><span class='sk'>\"+c.l+\"</span><span style='display:flex;gap:8px;align-items:center'>\"+ctl+\"<button class='btn\"+(c.danger?' warn':'')+\"' \"+(IS_ADMIN?'':'disabled')+\" onclick='runCmd(\"+gi+\")'>Run</button></span></div>\";});\n"
-/* Set Time 이 있는 카드에만 장비 시계와 SNTP 주의를 붙인다 (GEMS35x Maintenance 와 같은 문구) */
-"  if(gr[g].some(function(c){return c.utc;}))h+=\"<div class='srow'><span class='sk'>Device</span><span class='sv' id='devNow'>-</span></div><div class='setnote'>Sets the device clock (local time). <b>If SNTP is enabled, the next sync overwrites it.</b></div>\";\n"
+/* Set Time 이 있는 카드에만 장비 시계. SNTP 주의는 SNTP 가 켜져 있을 때만(tmLoad 가 /api/general 의 sntp 값으로 표시) */
+"  if(gr[g].some(function(c){return c.utc;}))h+=\"<div class='srow'><span class='sk'>Device <small id='devTz'></small></span><span class='sv' id='devNow'>-</span></div><div class='srow'><span class='sk'>Device (UTC)</span><span class='sv' id='devUtc'>-</span></div><div class='setnote' id='sntpNote' style='display:none'>SNTP is ON &mdash; the next sync will overwrite a manually set time.</div>\";\n"
 "  h+='</div>';});\n"
-" h+=\"<div class='setcard'><h3>System Status</h3>\"+SYSST.map(function(l,k){return \"<div class='srow'><span class='sk'>\"+l+\"</span><span class='sv' id='ss\"+k+\"'>-</span></div>\";}).join('')+'</div>';\n"
 " if(IS_ADMIN)h+=\"<div class='setcard'><h3>Firmware Update</h3><div class='srow'><span class='sk'>File (.bin)</span><span style='display:flex;gap:8px;align-items:center'><input type='file' id='fwFile' accept='.bin' style='display:none' onchange='fwFileSel()'><button class='btn' \"+(IS_ADMIN?'':'disabled')+\" onclick='fwPick()'>Choose File</button><span id='fwFName' style='color:var(--muted)'>No file selected</span></span></div><div class='srow'><span class='sk'>Status</span><span class='sv' id='fwStat'>-</span></div><div class='srow'><span></span><span style='display:flex;gap:8px'><button class='btn' \"+(IS_ADMIN?'':'disabled')+\" onclick='fwUpload()'>Upload</button><button class='btn warn' id='fwApplyBtn' disabled onclick='fwApply()'>Apply &amp; Reboot</button><button class='btn' onclick='fwClear()'>Clear</button></span></div></div>\";\n"
+/* [26/11/20] Test Mode 카드(admin) — Configuration Metering 에서 옮김. 값은 /api/general card 7, 저장은 tmSave */
+" if(IS_ADMIN)h+=\"<div class='setcard' id='tmCard'><h3>Test Mode</h3><div id='tmBody'><p class='stub'>loading...</p></div><div class='srow'><span></span><button class='btn primary' onclick='tmSave()'>Save</button></div><div class='setnote'>Outputs <b>random test data instead of measured values</b>. Applies after reboot &mdash; keep OFF in the field.</div></div>\";\n"
+" h+=\"<div class='setcard'><h3>System Status</h3><div class='sstg'>\"+SYSST.map(function(l,k){return \"<div><span class='sk' title='\"+l+\"'>\"+l+\"</span><span class='sv' id='ss\"+k+\"'>-</span></div>\";}).join('')+'</div></div>';\n"
 /* [26/11/19] 사이드바 로고 변경(SV900 'Change Logo') — PNG/JPG/GIF/WEBP ≤64KB, SVG 제외. 기본=글자 'SV300' */
 " if(IS_ADMIN)h+=\"<div class='setcard'><h3>Sidebar Logo</h3><div class='srow'><span class='sk'>Current</span><span class='lgpv' id='lgPv'></span></div><div class='srow'><span class='sk'>File</span><span style='display:flex;gap:8px;align-items:center'><input type='file' id='lgFile' accept='image/png,image/jpeg,image/gif,image/webp' style='display:none' onchange='lgSel()'><button class='btn' onclick='lgPick()'>Choose File</button><span id='lgName' style='color:var(--muted)'>No file selected</span></span></div><div class='srow'><span class='sk'>Status</span><span class='sv' id='lgStat'>-</span></div><div class='srow'><span></span><span style='display:flex;gap:8px'><button class='btn primary' onclick='lgUp()'>Upload</button><button class='btn' onclick='lgReset()'>Default (Text)</button></span></div><div class='setnote'>PNG, JPG, GIF, WEBP &middot; max 64 KB &middot; shown at the top of the sidebar (height 40 px).</div></div>\";\n"
-" $('mBody').innerHTML=\"<div class='setgrid two'>\"+h+'</div>';$('mNote').textContent=IS_ADMIN?'Reboot/Init.':'Viewer: no execute.';logoSet(LOGO_V);\n"
-" $('mBody').querySelectorAll('[type=datetime-local]').forEach(function(e){e.value=fdt(new Date()).replace(' ','T');});devNow();}\n"
+" $('mBody').innerHTML=\"<div class='setgrid adm'>\"+h+'</div>';$('mNote').textContent=IS_ADMIN?'Reboot/Init.':'Viewer: no execute.';logoSet(LOGO_V);tmLoad();\n"
+" $('mBody').querySelectorAll('.tsin').forEach(function(e){e.value=fdt(new Date());});devNow();}\n"
 /* 로고: LOGO_V=0 이면 글자, 아니면 /api/logo?v=버전(버전이 바뀔 때만 다시 받음). 이미지 실패 시 글자로 */
+/* [26/11/20] Administration Test Mode 카드 — /api/general 의 card 7 항목을 ctlOf 로 그리고, 바뀐 값만 setreg 후 savecfg(7799). 부팅 시 반영 */
+"function tmLoad(){var b=$('tmBody');j('/api/general').then(function(r){if(!r.d||!r.d.ok){if(b)b.innerHTML=\"<p class='stub'>load error</p>\";return;}\n"
+" var sn=r.d.fields.filter(function(f){return f.k==='sntp';})[0],ne=$('sntpNote');if(ne)ne.style.display=sn&&+sn.val?'':'none';if(!b)return;\n"
+" b.innerHTML=r.d.fields.filter(function(f){return f.card===7;}).map(function(f){return \"<div class='srow'><span class='sk'>\"+esc(f.label)+'</span>'+ctlOf(f)+'</div>';}).join('');togDeps(b);}).catch(function(){b.innerHTML=\"<p class='stub'>load error</p>\";});}\n"
+"function tmSave(){var c=[],i=0;document.querySelectorAll('#tmBody [data-addr]').forEach(function(el){if((''+el.value)!==el.getAttribute('data-orig'))c.push(el);});if(!c.length){mRes('No changes');return;}\n"
+" (function nx(){if(i>=c.length){j('/api/savecfg',{method:'POST'}).then(function(){mRes('Test Mode saved - reboot to apply');tmLoad();});return;}var el=c[i++];jp('/api/setreg',{addr:+el.getAttribute('data-addr'),type:'u16',val:+el.value||0}).then(nx);})();}\n"
 "var LOGO_V=0;\n"
 "function logoSet(v){LOGO_V=v;var b=$('sbrand'),p=$('lgPv');if(b)b.innerHTML=v?`<img src='/api/logo?v=${v}' alt='logo' onerror='logoSet(0)'>`:\"<span class='sbtxt'>SV300</span>\";if(p&&b)p.innerHTML=b.innerHTML;}\n"
 "function logoLoad(){return j('/api/logoinfo').then(function(r){logoSet(r.d&&r.d.logo?r.d.v:0);}).catch(function(){});}\n"
@@ -2750,12 +2841,20 @@ static const char INDEX_HTML[] =
 "  .then(function(d){if(d&&d.ok){logoSet(d.v);lgMsg('Logo changed',0);}else{lgMsg('Failed'+(d&&d.error?': '+d.error:''),1);logoLoad();}}).catch(function(){lgMsg('Upload error',1);logoLoad();});}\n"
 "function lgReset(){if(!confirm('Restore the default text logo?'))return;jp('/api/logoreset',{}).then(function(r){if(r.d&&r.d.ok){logoSet(0);lgMsg('Default restored',0);}else lgMsg('Failed',1);});}\n"
 /* 장비 시계 — 맵 @0 의 u32(로컬 epoch). 푸터 시각은 브라우저 것이라 장비가 몇 시로 아는지는 여기서만 보인다 */
-"function devNow(){var e=$('devNow');if(!e)return;j('/api/regs?addr=0&n=2').then(function(r){if(!r.d||!r.d.ok)return;var t=r.d.words[0]+r.d.words[1]*65536;$('devNow').textContent=t?fdtU(new Date(t*1000)):'-';}).catch(function(){});}\n"
-"function pcNow(gi){var e=$('u_c'+gi);if(e)e.value=fdt(new Date()).replace(' ','T');}\n"
+"function devNow(){var e=$('devNow');if(!e)return Promise.resolve();return j('/api/regs?addr=0&n=2').then(function(r){if(!r.d||!r.d.ok)return;$('devTz').textContent='('+tzs()+')';devSet(r.d.words[0]+r.d.words[1]*65536);}).catch(function(){});}\n"
+/* [26/11/20] 장비 시계는 UTC 저장 · 화면은 로컬(+Timezone). 어느 기준인지 보이도록 시간대 표기 */
+"function tzs(){var a=Math.abs(TZ);return 'UTC'+(TZ<0?'-':'+')+p2(Math.floor(a/60))+':'+p2(a%60);}\n"
+"function pcNow(gi){var e=$('u_c'+gi);if(e)e.value=fdt(new Date());}\n"
+"var CLKICO=\"<svg viewBox='0 0 24 24'><circle cx='12' cy='12' r='9'/><path d='M12 7v5l3 2'/></svg>\";\n"
+"function tpToggle(e){e.stopPropagation();var p=$('tpop');p.classList.toggle('open');if(p.classList.contains('open')){$('tpSet').disabled=!IS_ADMIN;tpRef();}}\n"
+"document.addEventListener('click',function(){var p=$('tpop');if(p)p.classList.remove('open');});\n"
+"function tpRef(){j('/api/regs?addr=0&n=2').then(function(r){if(!r.d||!r.d.ok)return;devSet(r.d.words[0]+r.d.words[1]*65536);}).catch(function(){});}\n"
+"function tpSet(){if(!IS_ADMIN){alert('Admin only');return;}var n=new Date();if(!confirm('Set device time to PC time '+fdt(n)+' ?'))return;\n"
+" jp('/api/setreg',{addr:7788,type:'u32',val:Math.floor(n.getTime()/1000)}).then(function(r){if(r.s===403){alert('Admin only');return;}if(!r.d||!r.d.ok){alert('Set Time failed');return;}tpRef();devNow();});}\n"
 "function fwClear(){var fi=$('fwFile');if(fi)fi.value='';fwFileSel();}\n"
 "function mRes(m){$('mRes').textContent=m}\n"
 "function waitReboot(){var tr=0;setTimeout(function pl(){tr++;fetch('/api/me',{cache:'no-store'}).then(function(){location.reload();}).catch(function(){if(tr<40)setTimeout(pl,2000);else location.reload();});},8000);}\n"
-"function cmdDone(r,c){if(r.s===403){alert('Admin only');return;}if(!r.d.ok){alert('Command failed');return;}mRes(c.l+' done');if(c.note==='reboot'){$('mNote').textContent='Rebooting...';waitReboot();}}\n"
+"function cmdDone(r,c){if(r.s===403){alert('Admin only');return;}if(!r.d.ok){alert('Command failed');return;}mRes(c.l+' done');if(c.utc)devNow();if(c.note==='reboot'){$('mNote').textContent='Rebooting...';waitReboot();}}\n"
 "function fwPick(){$('fwFile').click();}\n"
 "function fwFileSel(){var fi=$('fwFile'),n=(fi&&fi.files&&fi.files[0])?fi.files[0].name:'No file selected';$('fwFName').textContent=n;var ab=$('fwApplyBtn');if(ab)ab.disabled=true;var e=$('fwStat');if(e){e.textContent='-';e.style.color='';}}\n"
 "function fwUpload(){if(!IS_ADMIN){alert('Admin only');return;}var fi=$('fwFile'),f=fi&&fi.files&&fi.files[0];if(!f){alert('Select a .bin file');return;}var e=$('fwStat');e.textContent='uploading '+((f.size/1024)|0)+' KB...';e.style.color='';fetch('/api/fwupload',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:f}).then(function(rs){return rs.json().then(function(d){return{s:rs.status,d:d};},function(){return{s:rs.status,d:null};});}).then(function(r){if(r.s===403){e.textContent='Admin only';e.style.color='var(--bad)';return;}var ab=$('fwApplyBtn');if(r.d&&r.d.ok&&r.d.valid){e.textContent='uploaded & valid, '+((r.d.size/1024)|0)+' KB';e.style.color='var(--ok)';if(ab)ab.disabled=false;}else{e.textContent='failed'+(r.d&&r.d.error?': '+r.d.error:'')+(r.d&&r.d.err!==undefined&&r.d.err!==0?' (sign err '+r.d.err+')':'');e.style.color='var(--bad)';if(ab)ab.disabled=true;}}).catch(function(){e.textContent='upload error';e.style.color='var(--bad)';});}\n"
@@ -2808,14 +2907,15 @@ static const char INDEX_HTML[] =
 " }).catch(fErr);}\n"
 /* Channel */
 "var chTabCur='meter',CHN=[{n:1},{n:2},{n:3}];\n"
-"var harmOpt='pv',harmView='table',PCOL=['#8b5cf6','#38bdf8','#84cc16'];\n"
+/* [26/11/20] 상별 색 = SV900 Waveform/Harmonics(Tailwind violet-500·sky-500·lime-500) */
+"var harmOpt='pv',harmView='chart',pqT=0,wvCh=1,PCOL=['#8470FF','#67BFFF','#84cc16'];\n"
 /* 메뉴(그룹)별 탭 묶음 — SV900 사이드바 구성. 탭이 1개뿐이면(Report) 탭 바를 숨긴다. chLast: 그룹별 마지막 탭 */
 "var CHG={meter:{t:'Meter',tabs:['meter','phase','energy','minmax','demand']},pq:{t:'Power Quality',tabs:['harmonics','waveform']},evt:{t:'Alarm / Event',tabs:['alarm','event']},rpt:{t:'Report',tabs:['report']}},chGrp='meter',chLast={};\n"
 "function chEnter(g){var G=CHG[g]||CHG.meter;chGrp=CHG[g]?g:'meter';$('chTitle').textContent=G.t;\n"
 " ['meter','phase','minmax','harmonics','waveform','report','energy','demand','alarm','event'].forEach(function(x){var e=$('ct-'+x);if(e)e.style.display=G.tabs.indexOf(x)>=0?'':'none';});\n"
 " $('chTabs').style.display=G.tabs.length>1?'':'none';chSetTab(chLast[chGrp]||G.tabs[0]);}\n"
-"function chSetTab(t){chTabCur=t;chLast[chGrp]=t;egyEd=0;['meter','phase','minmax','harmonics','waveform','report','energy','demand','alarm','event'].forEach(function(x){var e=$('ct-'+x);if(e)e.className='gp-tab'+(x===t?' on':'');});var cc=$('chctl');if(cc)cc.style.display=(t==='harmonics')?'flex':'none';syncHv();$('chbody').innerHTML=\"<p class='stub'>loading...</p>\";pollLoop();}\n"
-"function chStat(ok){var e=$('chstat');if(e){e.className='ph2 '+(ok?'on':'bad');e.innerHTML=ok?'&#9679; live &#8635; 1s':'&#9679; read error';}}\n"
+"function chSetTab(t){chTabCur=t;pqT=0;chLast[chGrp]=t;egyEd=0;['meter','phase','minmax','harmonics','waveform','report','energy','demand','alarm','event'].forEach(function(x){var e=$('ct-'+x);if(e)e.className='gp-tab'+(x===t?' on':'');});var cc=$('chctl');if(cc)cc.style.display=(t==='harmonics')?'flex':'none';syncHv();$('chbody').innerHTML=\"<p class='stub'>loading...</p>\";pollLoop();}\n"
+"function chStat(ok){var e=$('chstat');if(e){var pq=chTabCur==='harmonics'||chTabCur==='waveform';e.className='ph2 '+(ok?'on':'bad');e.innerHTML=ok?(pq?'&#9679; updated '+fdt(new Date()).slice(11)+' &#8635; 5s':'&#9679; live &#8635; 1s'):'&#9679; read error';}}\n"
 "function chFail(){chStat(false);var b=$('chbody');if(b&&b.innerHTML.indexOf('loading')>=0)b.innerHTML=\"<p class='stub'>read error - retrying...</p>\";}\n"
 "function chCards(list,fn){var h=\"<div class='chgrid'>\";list.forEach(function(x){h+=`<div class='chcard'><div class='chh'>CH${x.n}${x.wiring!==undefined?' '+fbadge(x.wiring):''}</div>${fn(x)}</div>`;});return h+'</div>';}\n"
 "var lastCh=null;\n"
@@ -2857,13 +2957,17 @@ static const char INDEX_HTML[] =
 " for(i=0;i<nn;i++){var v=vals[i]||0;g.fillStyle=(peak>0&&v>=peak-1e-6)?'#ef4444':'rgba(59,130,246,.65)';g.fillRect(pl+i*slot,gy(v),bw,y0-gy(v));}\n"
 " g.fillStyle='#8b9bb0';[0,6,12,18,24].forEach(function(hh){g.fillText(hh+'h',pl+hh*4*slot-4,199);});}\n"
 /* Waveform / Report(EN50160+ITIC) / Monthly */
-"function drawLines(id,series){var cv=$(id);if(!cv)return;var w=cv.clientWidth||300;cv.width=w;cv.height=160;var g=cv.getContext('2d'),pad=30,L=series[0].length,mx=-1e9,mn=1e9,si,k;\n"
-" for(si=0;si<3;si++)for(k=0;k<L;k++){var v=series[si][k];if(v>mx)mx=v;if(v<mn)mn=v;}if(mx===mn){mx+=1;mn-=1;}\n"
-" var rg=mx-mn,dp=rg>=100?0:rg>=10?1:rg>=1?2:rg>=.1?3:4;\n"  /* 범위 작을수록(무부하 전류) 소수점 더 표시 */
-" g.clearRect(0,0,w,160);var gy=function(v){return 160-pad-(v-mn)/(mx-mn)*(160-2*pad);};\n"
-" g.strokeStyle='rgba(128,140,155,.2)';g.fillStyle='#8b9bb0';g.font='8px sans-serif';\n"
-" [0,0.5,1].forEach(function(f){var yv=mn+(mx-mn)*f,y=gy(yv);g.beginPath();g.moveTo(pad,y);g.lineTo(w,y);g.stroke();g.fillText(yv.toFixed(dp),2,y+3);});\n"
-" for(si=0;si<3;si++){g.strokeStyle=PCOL[si];g.lineWidth=1.4;g.beginPath();for(k=0;k<L;k++){var x=pad+(w-pad-6)*k/(L-1),y=gy(series[si][k]);if(k===0)g.moveTo(x,y);else g.lineTo(x,y);}g.stroke();}}\n"
+/* [26/11/20] SV900 Waveform: 0 중심 대칭 Y축(±눈금), X축 샘플 0~160(20 간격), 3상 선 2px */
+"function drawLines(id,series){var cv=$(id);if(!cv)return;var w=cv.clientWidth||300,H=260;cv.width=w;cv.height=H;var g=cv.getContext('2d'),pl=50,pb=22,pt=8,L=series[0].length,mx=0,si,k;\n"
+" for(si=0;si<3;si++)for(k=0;k<L;k++){var a=Math.abs(series[si][k]);if(a>mx)mx=a;}if(!(mx>0))mx=1;\n"
+" var st=nstep(mx/2),top=st*Math.ceil(mx/st),dp=st<0.01?3:st<0.1?2:st<1?1:0,ch=H-pt-pb,Y=function(v){return pt+ch/2-v/top*ch/2;},X=function(k){return pl+(w-pl-10)*k/L;};\n"
+" g.clearRect(0,0,w,H);g.font='10px sans-serif';g.lineWidth=1;\n"
+" for(var q=-top;q<=top+st/2;q+=st){var y=Math.round(Y(q))+.5;g.strokeStyle='rgba(128,140,155,.25)';g.beginPath();g.moveTo(pl,y);g.lineTo(w,y);g.stroke();g.fillStyle='#8b9bb0';g.textAlign='right';g.fillText((Math.abs(q)<st/2?0:q).toFixed(dp),pl-6,y+3);}\n"
+" g.textAlign='center';for(k=0;k<=L;k+=20)g.fillText(k,X(k),H-6);g.textAlign='left';\n"
+" for(si=0;si<3;si++){g.strokeStyle=PCOL[si];g.lineWidth=2;g.lineJoin='round';g.beginPath();for(k=0;k<L;k++){var x=X(k),y=Y(series[si][k]);if(k===0)g.moveTo(x,y);else g.lineTo(x,y);}g.stroke();}}\n"
+"var WLG=\"<div class='wlg'>\"+['L1','L2','L3'].map(function(l,i){return \"<span><i style='border-color:\"+PCOL[i]+\"'></i>\"+l+'</span>';}).join('')+'</div>';\n"
+"function wvTabs(){var h=\"<div class='gp-tabs gp-sub'>\";for(var c=1;c<=NCH;c++)h+=\"<a class='gp-tab\"+(c===wvCh?' on':'')+\"' onclick='wvSel(\"+c+\")'>CH\"+c+'</a>';return h+'</div>';}\n"
+"function wvSel(c){wvCh=c;pqT=0;$('chbody').innerHTML=wvTabs()+\"<p class='stub'>loading...</p>\";pollLoop();}\n"
 "var EN_ROWS=[['Frequency Variation 1','(+1%~-1%),99.5%/Wk',99.5],['Frequency Variation 2','(+4%~-6%),100%/Wk',100],['Voltage Variation 1','(+10%~-10%),95%/Wk',95],['Voltage Variation 2','(+10~-15%),100%/Wk',100],['Voltage Unbalance','(<2%),100%/Wk',100],['THD','(<8%),95%/Wk',95],['Harmonics','(0.5%~6%),95%/Wk',95],['Plt','(1),95%/Wk',95]],EN_INFO=['Voltage Sag','Voltage Swell','Short Interruption','Signaling Volt.'];\n"
 "function passOf(v,thr){var ok=true,any=false,i;for(i=0;i<3;i++){if(v[i]!=null){any=true;if(v[i]<thr)ok=false;}}return (any&&ok)?1:0;}\n"
 "function enNv(v){return (v==null)?'-':Number(v).toFixed(1);}\n"
@@ -2883,13 +2987,17 @@ static const char INDEX_HTML[] =
 " function poly(pp,col){g.strokeStyle=col;g.lineWidth=2;g.beginPath();pp.forEach(function(q,i){var x=X(q[0]),y=Y(q[1]);if(i===0)g.moveTo(x,y);else g.lineTo(x,y);});g.stroke();}\n"
 " poly(ITIC_UP,'#3b82f6');poly(ITIC_LO,'#ef4444');\n"
 " (events||[]).forEach(function(ev){var ds=(ev.dur||0)/1000;if(ds<1e-4)ds=1e-4;if(ds>1e2)ds=1e2;var pc=ev.pct;if(pc==null||isNaN(pc))return;if(pc<0)pc=0;if(pc>500)pc=500;var col=(ev.type===2)?'#ef4444':'#f59e0b';g.beginPath();g.arc(X(ds),Y(pc),4,0,6.2832);g.fillStyle=col;g.fill();g.lineWidth=1;g.strokeStyle='#e8eef5';g.stroke();});}\n"
-"function harmTable(x,ord){var h=\"<table class='ctbl hsm'><tr><th>Ord</th><th>L1</th><th>L2</th><th>L3</th></tr>\";ord.forEach(function(o,k){h+=`<tr><td class='rk'>${o}</td><td>${n(x.ph[0][k],1)}</td><td>${n(x.ph[1][k],1)}</td><td>${n(x.ph[2][k],1)}</td></tr>`;});return h+'</table>';}\n"
-"function drawHarm(id,ph,ord){var cv=$(id);if(!cv)return;var w=cv.clientWidth||300;cv.width=w;cv.height=180;var g=cv.getContext('2d'),pad=22,nn=ord.length,mx=1,i,p;\n"
-" for(p=0;p<3;p++)for(i=0;i<nn;i++){if(ph[p][i]>mx)mx=ph[p][i];}\n"
-" g.clearRect(0,0,w,180);var gw=(w-pad-4)/nn,bw=gw/3;\n"
-" for(i=0;i<nn;i++){for(p=0;p<3;p++){var v=ph[p][i]||0,bh=(180-2*pad)*(v>0?v:0)/mx;g.fillStyle=PCOL[p];g.fillRect(pad+i*gw+p*bw,180-pad-bh,bw>1?bw-0.5:bw,bh);}\n"
-"  if(ord[i]%5===0||ord[i]===2){g.fillStyle='#8b9bb0';g.font='8px sans-serif';g.fillText(ord[i],pad+i*gw,178);}}\n"
-" g.strokeStyle='rgba(128,140,155,.3)';g.beginPath();g.moveTo(pad,180-pad);g.lineTo(w,180-pad);g.stroke();}\n"
+/* [26/11/20] SV900 Harmonics — Table: 16차씩 나눈 표를 가로로, Chart: 상별(L1/L2/L3) 막대 차트 각각 */
+"function harmTables(x,ord,PL){var h=\"<div class='htw'>\",k,s;for(s=0;s<ord.length;s+=16){h+=\"<table class='ctbl hsm'><tr><th>Ord</th><th>\"+PL.join('</th><th>')+'</th></tr>';\n"
+" for(k=s;k<Math.min(s+16,ord.length);k++)h+=`<tr><td class='rk'>${ord[k]}</td><td>${n(x.ph[0][k],2)}</td><td>${n(x.ph[1][k],2)}</td><td>${n(x.ph[2][k],2)}</td></tr>`;h+='</table>';}return h+'</div>';}\n"
+"function nstep(x){if(!(x>0))return .1;var p=Math.pow(10,Math.floor(Math.log10(x))),m=x/p;return (m<=1?1:m<=2?2:m<=5?5:10)*p;}\n"
+"function drawHarm1(id,v,ord,col){var cv=$(id);if(!cv)return;var w=cv.clientWidth||300,H=180;cv.width=w;cv.height=H;var g=cv.getContext('2d'),pl=34,pb=20,pt=8,nn=ord.length,mx=0.3,i;\n"
+" for(i=0;i<nn;i++)if(v[i]>mx)mx=v[i];var st=nstep(mx/3),top=st*Math.ceil(mx/st),dp=st<0.1?2:st<1?1:0,ch=H-pt-pb,Y=function(q){return pt+ch-ch*q/top;};\n"
+" g.clearRect(0,0,w,H);g.font='10px sans-serif';g.lineWidth=1;\n"
+" for(var q=0;q<=top+st/2;q+=st){var y=Math.round(Y(q))+.5;g.strokeStyle='rgba(128,140,155,.25)';g.beginPath();g.moveTo(pl,y);g.lineTo(w,y);g.stroke();g.fillStyle='#8b9bb0';g.textAlign='right';g.fillText(q.toFixed(dp),pl-6,y+3);}\n"
+" var gw=(w-pl-4)/nn,bw=Math.max(1,gw*0.55),ev=gw>=16?1:gw>=8?2:5;g.textAlign='center';\n"
+" for(i=0;i<nn;i++){var x=pl+i*gw,b=Math.max(0,v[i]||0),bh=ch*Math.min(b,top)/top;g.fillStyle=col;g.fillRect(x+(gw-bw)/2,pt+ch-bh,bw,bh);\n"
+"  if(ord[i]%ev===0||ev===1){g.fillStyle='#8b9bb0';g.fillText(ord[i],x+gw/2,H-5);}}g.textAlign='left';}\n"
 "function syncHv(){var a=$('hvt'),b=$('hvc');if(a)a.className='btn'+(harmView==='table'?' primary':'');if(b)b.className='btn'+(harmView==='chart'?' primary':'');}\n"
 /* [26/11/19] Alarm/Event/ITIC 이력 — /api/evlog 로 링버퍼(채널당 1024건)를 최신순 직접 조회.
    Top/Up/Down/Bottom(Modbus 페이지 창 이동) 대신: 1초마다 최신 50건을 받아 목록 위에 합치고,
@@ -2932,6 +3040,8 @@ static const char INDEX_HTML[] =
 "function egyRender(){if(!egyD)return;var b=IS_ADMIN?(egyEd?\"<div class='pgctl'><button class='btn primary' onclick='egyWr()'>Write</button><button class='btn' onclick='egyEd=0;egyRender()'>Cancel</button></div>\":\"<div class='pgctl'><button class='btn' onclick='egyEd=1;egyRender()'>Edit</button></div>\"):'';$('chbody').innerHTML=chCards(egyD.now,function(x){var lg=egyD.log.filter(function(e){return e.n===x.n;})[0];return b+(egyEd?'':clrBtn('clrEnergy',x.n))+bEgyNow(x,egyEd)+(lg?bEgyLog(lg):'');});}\n"
 "function egyWr(){var els=document.querySelectorAll('#chbody .ein'),c=[],i=0,chs={};els.forEach(function(e){if(e.value!==e.getAttribute('data-o'))c.push(e);});if(!c.length){egyEd=0;egyRender();return;}(function w(){if(i>=c.length){Object.keys(chs).forEach(function(ch){wrCmd(7824+parseInt(ch),0x5678);});if(confirm('Save energy edit to FLASH now? (OK=persist via Save Set / Cancel=RAM only, revert on reboot)'))setTimeout(function(){wrCmd(7799,0x1234);},1200);egyEd=0;setTimeout(pollLoop,400);return;}var e=c[i++],v=Math.round(parseFloat(e.value)*10);if(!isFinite(v)||v<0)v=0;var a=+e.getAttribute('data-a');chs[Math.floor(a/10000)+1]=1;jp('/api/setreg',{addr:a,type:'u32',val:v}).then(w).catch(w);})();}\n"
 "function loadChannelTab(){var t=chTabCur;\n"
+/* [26/11/20] 고조파·파형은 5초 주기(SV900 동일) — 파형 캡처(copyModbusWaveData)·큰 JSON 을 매초 만들지 않아 장비 부하·Modbus 경합 감소. 탭/옵션 변경 시 pqT=0 으로 즉시 */
+" if(t==='harmonics'||t==='waveform'){if(Date.now()-pqT<5000)return Promise.resolve();pqT=Date.now();}\n"
 " if(t==='meter'||t==='phase'){var fn=(t==='meter'?bMeter:bPhase);return j('/api/channels').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chErr(fn);return;}chStat(true);lastCh=r.d.ch;$('chbody').innerHTML=chCards(r.d.ch,fn);}).catch(function(){if(chTabCur===t)chErr(fn);});}\n"
 " if(t==='minmax')return j('/api/minmax').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chErr(bMm);return;}chStat(true);lastCh=r.d.ch;$('chbody').innerHTML=chCards(r.d.ch,bMm);}).catch(function(){if(chTabCur==='minmax')chErr(bMm);});\n"
 " if(t==='energy'){if(egyEd)return Promise.resolve();return j('/api/energynow').then(function(r){if(chTabCur!==t||egyEd)return null;if(!r.d.ok){chStat(false);return null;}return j('/api/energylog').then(function(r2){return{now:r.d.ch,log:(r2.d&&r2.d.ok)?r2.d.ch:[]};});}).then(function(d){if(!d||chTabCur!=='energy'||egyEd)return;egyD=d;chStat(true);egyRender();}).catch(chFail);}\n"
@@ -2940,15 +3050,19 @@ static const char INDEX_HTML[] =
 "  r.d.ch.forEach(function(x){drawDemand('dm'+x.n,x.vals,x.peak);});\n"
 " }).catch(chFail);\n"
 " if(t==='harmonics')return j('/api/harmonics?opt='+harmOpt).then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);\n"
-"  if(harmOpt==='cur'){$('chbody').innerHTML=chCards(r.d.ch,function(x){return \"<div class='hsub'>Chart</div><canvas id='hc\"+x.n+\"' class='hcv'></canvas><div class='hsub' style='margin-top:10px'>Table</div>\"+harmTable(x,r.d.orders);});r.d.ch.forEach(function(x){drawHarm('hc'+x.n,x.ph,r.d.orders);});return;}\n"
+"  var ord=r.d.orders,PL=harmOpt==='lv'?['L12','L23','L31']:['L1','L2','L3'];\n"
+"  var body=function(x){if(harmView==='table')return harmTables(x,ord,PL);var s='';for(var p=0;p<3;p++)s+=\"<div class='hph'>\"+PL[p]+\" <small>(%)</small></div><canvas id='hc\"+x.n+'_'+p+\"' class='hcv'></canvas>\";return s;};\n"
+"  var draw=function(x){if(harmView==='chart')for(var p=0;p<3;p++)drawHarm1('hc'+x.n+'_'+p,x.ph[p],ord,PCOL[p]);};\n"
+"  if(harmOpt==='cur'){$('chbody').innerHTML=chCards(r.d.ch,body);r.d.ch.forEach(draw);return;}\n"
 "  var x=r.d.ch.filter(function(c){return c.n===1;})[0];\n"
 "  if(!x){$('chbody').innerHTML=\"<p class='stub'>no data</p>\";return;}\n"
-"  $('chbody').innerHTML=\"<div class='chcard'><div class='chh'>Voltage (common, CH1~3)</div><div class='hsub'>Chart</div><canvas id='hc1' class='hcv'></canvas><div class='hsub' style='margin-top:10px'>Table</div>\"+harmTable(x,r.d.orders)+\"</div>\";\n"
-"  drawHarm('hc1',x.ph,r.d.orders);\n"
+"  $('chbody').innerHTML=\"<div class='chcard'><div class='chh'>Voltage (common, CH1~3)</div>\"+body(x)+\"</div>\";draw(x);\n"
 " }).catch(chFail);\n"
-" if(t==='waveform')return j('/api/waveform').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);\n"
-"  $('chbody').innerHTML=chCards(r.d.channels,function(x){return \"<div class='hsub'>Voltage</div><canvas id='wv\"+x.n+\"' class='wcv'></canvas><div class='hsub'>Current</div><canvas id='wi\"+x.n+\"' class='wcv'></canvas>\";});\n"
-"  r.d.channels.forEach(function(x){drawLines('wv'+x.n,x.v);drawLines('wi'+x.n,x.i);});}).catch(chFail);\n"
+/* [26/11/20] SV900 Waveform: 선택 채널(CH 탭) 1개의 Voltage·Current — /api/waveform?ch=N 로 그 채널만 받음 */
+" if(t==='waveform'){if(wvCh>NCH)wvCh=1;return j('/api/waveform?ch='+wvCh).then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);var x=r.d.channels[0];\n"
+"  if(!x){$('chbody').innerHTML=wvTabs()+\"<p class='stub'>no data</p>\";return;}\n"
+"  $('chbody').innerHTML=wvTabs()+\"<div class='chcard'><div class='hph'>Voltage <small>(V)</small></div>\"+WLG+\"<canvas id='wvV' class='wcv'></canvas><div class='hph'>Current <small>(A)</small></div>\"+WLG+\"<canvas id='wvI' class='wcv'></canvas></div>\";\n"
+"  drawLines('wvV',x.v);drawLines('wvI',x.i);}).catch(chFail);}\n"
 " if(t==='report')return Promise.all([j('/api/en50160'),j('/api/evlog?kind=2&off=0&num=50')]).then(function(a){if(chTabCur!==t)return;var r=a[0],q=a[1];if(!r.d.ok){chStat(false);return;}chStat(true);var x=r.d.ch[0];if(!x)return;\n"
 "  if(!$('rp1')){var s=evSt(2,1);s.rows=[];s.total=0;$('chbody').innerHTML=\"<div class='chcard'><div class='chh'>CH1 · EN50160</div><div id='rp1'></div>\"+ITIC_HDR+\"<div class='hsub'>ITIC List (Voltage)</div>\"+evBox(2,1,'')+'</div>';}\n"
 "  $('rp1').innerHTML=bReport(x);var y=q.d&&q.d.ok&&q.d.ch[0];if(y)evMerge(evSt(2,1),y.rows,y.total);evPaint(2,1);}).catch(chFail);\n"
@@ -2958,7 +3072,7 @@ static const char INDEX_HTML[] =
 "  r.d.ch.forEach(function(x){evMerge(evSt(k,x.n),x.rows,x.total);evPaint(k,x.n);if(k===0)alStat(x);});}).catch(chFail);}\n"
 " return Promise.resolve();}\n"
 "function runCmd(ci){var c=CMDS[ci],id='c'+ci;\n"
-" if(c.utc){var v=$('u_'+id).value;if(!v){alert('Enter time');return;}var m=v.split(/[-T:]/),ep=Math.floor(Date.UTC(+m[0],+m[1]-1,+m[2],+m[3],+m[4],+m[5]||0)/1000);if(!confirm('Set Time to '+v.replace('T',' ')+' ?'))return;jp('/api/setreg',{addr:c.addr,type:'u32',val:ep}).then(function(r){cmdDone(r,c);});return;}\n"
+" if(c.utc){var v=$('u_'+id).value;if(!v){alert('Enter time');return;}var m=v.trim().split(/[-T: ]+/);if(m.length<5||m.some(function(x){return x===''||isNaN(+x);})){alert('Format: YYYY-MM-DD HH:MM:SS (24h)');return;}var ep=Math.floor(Date.UTC(+m[0],+m[1]-1,+m[2],+m[3],+m[4],+m[5]||0)/1000)-TZ*60;if(!confirm('Set Time to '+v.replace('T',' ')+' ?'))return;jp('/api/setreg',{addr:c.addr,type:'u32',val:ep}).then(function(r){cmdDone(r,c);});return;}\n"
 " var addr=c.addr+(c.tgt?(+$('t_'+id).value):0),msg=c.l+' run?';if(c.danger)msg=c.l+' - '+(c.danger==2?'Factory reset':(c.note==='reboot'?'Device will reboot':'Irreversible'))+'. Continue?';\n"
 " if(!confirm(msg))return;if(c.danger==2&&!confirm('Really reset?'))return;\n"
 " jp('/api/setreg',{addr:addr,type:'u16',val:4660}).then(function(r){cmdDone(r,c);});}\n"
@@ -2991,7 +3105,7 @@ static const char INDEX_HTML[] =
 " else if(cur==='feeder'){_busy=true;loadFeeder().catch(function(){}).then(pollFin);}\n"
 " else if(cur==='channel'){_busy=true;loadChannelTab().catch(function(){}).then(pollFin);}\n"
 " else if(cur==='io'){_busy=true;loadIom().catch(function(){}).then(pollFin);}\n"
-" else if(cur==='maint'){_busy=true;sysStat().catch(function(){}).then(pollFin);}\n"
+" else if(cur==='maint'){_busy=true;Promise.all([sysStat().catch(function(){}),(!DEVB||Date.now()-DEVB.at>10000)?devNow():0]).then(pollFin);}\n"
 "}\n"
 "tbtn();clk();setInterval(clk,1000);setInterval(pollLoop,1000);me();\n"
 "</script></body></html>\n";

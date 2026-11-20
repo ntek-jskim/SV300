@@ -1952,7 +1952,11 @@ void ExtRTC_To_UTC(uint8_t *regs, uint32_t *utc) {
 void UTC_To_ExtRTC(uint32_t utc, uint8_t *regs) {
 	struct tm lt;
 	
-	uLocalTime(&utc, &lt);	// month:1~12
+	/* [26/11/20] 외장 RTC 는 UTC 달력으로 보관(읽기 ExtRTC_To_UTC 가 mktime=시간대 없음).
+	 *  uLocalTime 은 이제 +TZ_SEC 하므로 쓰면 RTC 에 로컬이 들어가 재부팅 시 시계가 +TZ 만큼 앞선다 */
+	localtime_r(&utc, &lt);		/* ARM 라이브러리 = gmtime */
+	lt.tm_year += 1900;			/* tm_to_ExtRTC 규약: 전체연도, month 1~12 */
+	lt.tm_mon  += 1;
 	printf("UTC_To_ExtRTC=%04d-%02d-%02d %02d:%02d:%02d\n", 
 		lt.tm_year, lt.tm_mon, lt.tm_mday, lt.tm_hour, lt.tm_min, lt.tm_sec);
 	tm_to_ExtRTC(&lt, regs);

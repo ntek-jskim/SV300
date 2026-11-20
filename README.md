@@ -276,7 +276,7 @@ Channel 1~3 = 미터칩 M0~M2, 각 채널 3상 = Feeder 1~3 / 4~6 / 7~9. 채널 
 
 - 문자열은 1워드 = 2글자, **하위 바이트가 앞 글자**, NUL 종료 (confWebApp 코덱 word_order=big·byte_order=little)
 - 비밀번호(MQTT·SNMPv3)도 Modbus 로 읽고 쓸 수 있다. MQTT TLS 미지원
-- 설정 필드 주소는 `MBAD_SET_FIELD(comm.xxx)`(offsetof) 로 계산 — 메모리맵 `memorymap/SV300 memory map_261119.xlsx`
+- 설정 필드 주소는 `MBAD_SET_FIELD(comm.xxx)`(offsetof) 로 계산 — 메모리맵 `memorymap/SV300 memory map_261120.xlsx`
 
 ---
 

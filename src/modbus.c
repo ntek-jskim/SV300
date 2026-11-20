@@ -1135,7 +1135,8 @@ int   readMemCb(uint16_t address, uint16_t *value)
 	uint16_t offset;
 	uint16_t *psmb;
 
-	pInfo->mBusRxCnt++;		/* Modbus RX 카운트 — TCP 읽기 경로(RTU는 modbusSlvProcFrame에서 별도 증가) */
+	/* [26/11/20] Modbus RX 카운트는 여기서 세지 않는다 — 레지스터 1워드마다 불리고 웹(/api/regs rdReg)도
+	   직접 불러 웹 접속만으로 증가했음. TCP=main.c modbusServerLockCallback(요청 1건당 1회), RTU=modbusSlvProcFrame */
 
 	if (decodeMeterAddress(address, &id, &offset) == 0) {
 		// Wave 데이터를 load 한다 (CH별 offset == MBAD_WV_REG)
@@ -1189,12 +1190,16 @@ int   readMemCb(uint16_t address, uint16_t *value)
    Buffer Ready 전엔 무응답. 게이트를 readMemCb 안이 아니라 여기 두는 이유: 웹(web.c rdReg)은
    계측 유효성과 무관하게 데이터 확인용으로 읽어야 해서 readMemCb를 게이트 없이 직접 호출한다.
    (쓰기 writeMemCb는 계측 초기화 중 설정기록 위험 때문에 웹/Modbus 공통으로 게이트 유지) */
+/* Modbus/TCP 요청 1건 수신 — main.c modbusServerLockCallback (main.c 는 meter.h 미포함) */
+void mbRxCount(void)
+{
+	pInfo->mBusRxCnt++;
+}
+
 int   readMemCbMb(uint16_t address, uint16_t *value)
 {
-	if (!g_meterReady) {
-		pInfo->mBusRxCnt++;	/* 무응답이어도 수신 카운트는 증가(readMemCb 진입 시와 동일) */
-		return -1;
-	}
+	if (!g_meterReady)
+		return -1;		/* 수신 카운트는 modbusServerLockCallback 에서 요청당 1회 */
 	return readMemCb(address, value);
 }
 

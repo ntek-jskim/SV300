@@ -17,7 +17,7 @@
 #define	FW_VER	0005
 #define	FW_BUILD_YEAR 26
 #define	FW_BUILD_MON  11
-#define	FW_BUILD_DAY  19
+#define	FW_BUILD_DAY  20
 
 #define	SQRT_2	 1.414213562 
 
@@ -604,7 +604,7 @@ int initSettings(int id)
 		db.etc.interval = 2;
 		db.etc.Iload = 50;
 		db.etc.autorotation = 2;
-		db.etc.maxminItv = 2;
+		db.etc.maxminItv = 3;	/* 26/11/20 값 재정의: 0=None,1=Daily,2=Weekly,3=Monthly — 기본 Monthly 유지 */
 
 		db.freq = 0;	/* 0:60Hz, 1:50Hz */
 		db.feeder_cnt = METER_CH_COUNT;
@@ -2562,12 +2562,23 @@ void downSampling(WAVE_WINDOW *pww, int hs)
 
 
 
+/* [26/11/20] FFT(THD·고조파) 공급 주기 고정. 종전: WV_QCAP off 라 200ms 창마다, FFT 가 끝나는 즉시 다음 창을
+ *  공급 → FFT_Task 가 쉬지 않고 돎(주석상 CH1 9상 ~1.4s). 3s = IEC 61000-4-7 집계 단위, 웹 표시(5s)보다 짧음.
+ *  fft_average 는 횟수 기반 평균이라 표본 수만 줄고 10분 값은 그대로. 0 이면 종전 동작 */
+#define FFT_PERIOD_MS	3000u
+
 int copyFftData(int id, WAVE_WINDOW *pww,	uint32_t *ptick_10s)
 {
+	static uint64_t fftLastTs[METER_CH_COUNT];	/* 채널별 마지막 공급 창 ts(ms) */
+
 	// FFT task로 1600 sample을 공급한다
 	// [THD ~2.6s화] 기존 10s 스로틀 제거 → FFT가 이전 소비 완료(fr==re)면 매 캡처(~2.6s)마다 공급.
 	//   copyFftData는 Wave_Task 캡처 블록(~2.6s)에서만 호출되므로 자연히 캡처 주기로 갱신.
+	/* 시각이 뒤로 가면(Set Time) 차이가 unsigned 로 커져 즉시 공급 → 멈춤 없음 */
+	if (FFT_PERIOD_MS && (uint64_t)(pww->ts - fftLastTs[id]) < FFT_PERIOD_MS)
+		return 0;
 	if (wbFFT8k[id].fr == wbFFT8k[id].re) {
+		fftLastTs[id] = pww->ts;
 		*ptick_10s = sysTick10s;
 		//printf("ts: %lld\n", pww->ts);
 		// Copy wbCap8k to wbFFT8k
@@ -2934,6 +2945,7 @@ static void trimCaptureGroup(const char *mask, const char *dir,
 	info.fileID = 0;
 	while (ffind(mask, &info) == 0) {
 		const char *nm = (const char *)info.name;
+		FS_FIND_YIELD();
 		if (!capNameInGroup(nm, fx, nfx))
 			continue;
 		count++;
@@ -3494,7 +3506,7 @@ void copyDemandBin() {
 }
 // 00:00 ~ 00:15 분 까지 데이터는 0에 저장
 void putDemandBin(int id, float dd, uint32_t utc) {
-	int sod = utc % 86400;
+	int sod = (utc + TZ_SEC) % 86400;	/* [26/11/20] UTC ts → 로컬 하루 안의 초 */
 	int bin = sod/900;
 	int i;
 	DEMAND *pdm;
@@ -4367,6 +4379,7 @@ static int findOldestEgyArch(char *oldestName, uint32_t *totalSize) {
 	info.fileID = 0;
 	while (ffind(mask, &info) == 0) {
 		unsigned long key = egyArchNameKey((const char *)info.name);
+		FS_FIND_YIELD();
 		if (key == 0)
 			continue;		/* 평면 EFS에서 egy_log* 등이 glob에 걸려도 아카이브 아니면 제외(다른 파일 보호) */
 		*totalSize += info.size;
@@ -5471,6 +5484,8 @@ void Metering_Task(void *arg)
 				calcTHD(id);
 			}
 
+			// Max/Min 자동 초기화 주기 판정(26/11/20) → 아래 rstMaxMin 경로로 지움
+			checkMaxMinItv(id);
 			// demand 지운다
 			if (meter[id].cntl.rstMaxMin == 0x1234) {
 				meter[id].cntl.rstMaxMin = 0;
@@ -5649,44 +5664,59 @@ void resetAlarm(int id) {
 }
 
 
-void initMaxMinItv(int id) {
-	// maxmin reset interval
-	switch (db.etc.maxminItv) {
-		case 0:	// daily
-			meter[id].cntl.maxminTs = meter[id].cntl.tod.tm_mday;
-			break;
-		case 1:	// weekly
-			meter[id].cntl.maxminTs = meter[id].cntl.tod.tm_wday;
-			break;
-		case 2:	// monthly
-			meter[id].cntl.maxminTs = meter[id].cntl.tod.tm_mon;
-			break;
-	}	
+/* [26/11/20] Max/Min 자동 초기화 주기 etc.maxminItv(맵 _261120): 0=None, 1=Daily, 2=Weekly, 3=Monthly.
+ *  종전 함수는 호출처가 없어 무동작이었고 Weekly(요일 변화=매일)·Monthly(기준을 요일로 저장=매초) 버그가 있었음.
+ *  경계는 로컬 달력(UTC+TZ_SEC). Weekly 는 PQ Report Start Day(pqRpt.startDay, 0=일~6=토) 0시.
+ *  주기 키가 바뀌면 rstMaxMin=0x1234 — 수동 Clear(7820+CH)와 같은 경로로 지우고 즉시 저장.
+ *  시각 미설정(LOG_TS_MIN 이전)·부팅 첫 판정·설정 변경 직후는 기준 키만 잡고 지우지 않는다. */
+static uint32_t maxMinKey(int itv)
+{
+	uint32_t d;
+	struct tm t;
+	int sd;
+
+	if (sysTick1s < LOG_TS_MIN)
+		return 0;
+	d = (sysTick1s + (uint32_t)TZ_SEC) / 86400u;	/* 로컬 날짜 번호(1970-01-01 = 0, 목요일 → 요일 = (d+4)%7) */
+	switch (itv) {
+	case 1:	/* Daily — 로컬 날짜 */
+		return d + 1;
+	case 2:	/* Weekly — Start Day 요일 0시마다 바뀌는 주 번호 */
+		sd = meter[0].pqRpt.startDay;
+		if (sd < 0 || sd > 6) sd = 0;
+		return (d + 11u - (uint32_t)sd) / 7u + 1;
+	case 3:	/* Monthly — 로컬 연·월 */
+		uLocalTime(&sysTick1s, &t);
+		return (uint32_t)t.tm_year * 12u + (uint32_t)t.tm_mon;
+	}
+	return 0;	/* 0=None(또는 범위 밖) */
 }
 
+/* 1초마다 채널별 호출(Metering 루프, rstMaxMin 처리 직전). 반환 1 = 이번에 초기화 요청 */
+int checkMaxMinItv(int id)
+{
+	static int8_t lastItv[METER_CH_COUNT] = { -1, -1
+#if METER_CH_COUNT > 2
+		, -1
+#endif
+	};
+	int itv = db.etc.maxminItv;
+	uint32_t k = maxMinKey(itv);
 
-// max, min refresh 주기를 검사하고 flag를 설정한다 
-int checkMaxMinItv(int id) {
-	switch (db.etc.maxminItv) {
-		case 0:	// daily
-			if (meter[id].cntl.maxminTs != meter[id].cntl.tod.tm_mday) {
-				meter[id].cntl.maxminTs = meter[id].cntl.tod.tm_mday;
-				meter[id].cntl.rstMaxMin = 0x1234;
-			}
-			break;
-		case 1:	// weekly
-			if (meter[id].cntl.maxminTs != meter[id].cntl.tod.tm_wday) {
-				meter[id].cntl.maxminTs = meter[id].cntl.tod.tm_wday;
-				meter[id].cntl.rstMaxMin = 0x1234;
-			}
-			break;
-		case 2:	// monthly
-			if (meter[id].cntl.maxminTs != meter[id].cntl.tod.tm_mon) {
-				meter[id].cntl.maxminTs = meter[id].cntl.tod.tm_wday;
-				meter[id].cntl.rstMaxMin = 0x1234;
-			}
-			break;
-	}	
+	if (id < 0 || id >= METER_CH_COUNT)
+		return 0;
+	if (k == 0 || itv != lastItv[id] || meter[id].cntl.maxminTs == 0) {
+		lastItv[id] = (int8_t)itv;
+		meter[id].cntl.maxminTs = k;		/* 기준만 잡음 */
+		return 0;
+	}
+	if (k != meter[id].cntl.maxminTs) {
+		meter[id].cntl.maxminTs = k;
+		meter[id].cntl.rstMaxMin = 0x1234;
+		printf("[MAXMIN] M%d auto reset (itv=%d)\n", id, itv);
+		return 1;
+	}
+	return 0;
 }
 
 #if 0	/* [통합] PostScan_Task는 Metering_Task로 통합됨(롤백 대비 보존). */
@@ -5764,10 +5794,12 @@ void PostScan_Task(void *arg)
 				calcTHD(id);
 			}
 			
-			// demand 지운다 
+			// Max/Min 자동 초기화 주기 판정(26/11/20) → 아래 rstMaxMin 경로로 지움
+			checkMaxMinItv(id);
+			// demand 지운다
 			if (meter[id].cntl.rstMaxMin == 0x1234) {
 				meter[id].cntl.rstMaxMin = 0;
-				
+
 				memset(pmmId, 0, sizeof(MAXMIN));
 				pmmId->rstTime = sysTick1s;
 				storeMaxMin();

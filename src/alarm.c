@@ -1328,6 +1328,7 @@ static int findOldestTrendLog(char *oldestName, uint32_t *oldestSize, uint32_t *
 		const char *name = (const char *)info.name;
 		int key = parseTrendMonthKey(name);
 
+		FS_FIND_YIELD();
 		*totalSize += info.size;
 		/* 금월·전월 trd*는 보호 */
 		if (key >= lastMonthKey) {
@@ -1407,11 +1408,6 @@ void getTrendBackupFile(char *str, int mid, int g) {
 // 2020-4-8, Trend Header와 현재 Trend 설정을 비교하여 다르면 기존파일 이름에 수정날짜 이름 추가하여 변경한다 
 int appendTrendRcrd(int mid, int g) {
 	FILE *fp;
-#ifdef USE_CMSIS_RTOS2
-   fsFileInfo fi;
-#else
-	FINFO fi;
-#endif
 	int j;
 	char fn[64];
 
@@ -1420,9 +1416,14 @@ int appendTrendRcrd(int mid, int g) {
 
 	fsFileLock();
 	getTrendFile(fn, mid, g);
-	
-	fi.fileID = 0;      
-	if (ffind (fn, &fi)) {
+
+	/* [26/11/20] 존재 확인 ffind(NOR EFS 수 초) → fopen("rb"). 크기 출력은 생략.
+	 *  용량 정리(trimTrendLogBudget)는 매 기록이 아니라 trendTick 에서 하루 1회. */
+	fp = fopen(fn, "rb");
+	if (fp != NULL) {
+		fclose(fp);
+	}
+	if (fp == NULL) {
 		printf("createTrendFile(%s) ...\n", fn);
 		fp = fopen(fn, "wb");
 		if (fp) {
@@ -1432,21 +1433,17 @@ int appendTrendRcrd(int mid, int g) {
 			for (j=0; j<16; j++) {
 				trdInf[mid][g].channel[j] = meter[mid].trend[g].chan[j];
 			}								
-			if (fwrite(&trdInf[mid][g], sizeof(trdInf[0][0]), 1, fp) == 1 &&
-				fwrite(&row[mid][g], sizeof(row[0][0]), 1, fp) == 1) {
-				trimTrendLogBudget();
-			}
-			fclose(fp);				
-		}		
+			fwrite(&trdInf[mid][g], sizeof(trdInf[0][0]), 1, fp);
+			fwrite(&row[mid][g], sizeof(row[0][0]), 1, fp);
+			fclose(fp);
+		}
 	}
-	else {	
-		printf("appendTrendFile(%s), m=%d, g=%d, ts=%d, size = %d\n", fn, mid, g, row[mid][g].ts, fi.size);
+	else {
+		printf("appendTrendFile(%s), m=%d, g=%d, ts=%d\n", fn, mid, g, row[mid][g].ts);
 		fp = fopen(fn, "ab");
 		if (fp) {
-			if (fwrite(&row[mid][g], sizeof(TREND_RECORD), 1, fp) == 1) {
-				trimTrendLogBudget();
-			}
-			fclose(fp);				
+			fwrite(&row[mid][g], sizeof(TREND_RECORD), 1, fp);
+			fclose(fp);
 		}
 	}
 	fsFileUnlock();
@@ -1460,7 +1457,7 @@ void checkTrendHeader() {
 	FILE *fp;
 
 	fsFileLock();
-	trimTrendLogBudget();
+	/* [26/11/20] 부팅 시 용량 정리(ffind 전체 검색) 제거 — trendTick 에서 날짜가 바뀔 때 1회 */
 
 	for (mid = 0; mid < ACTIVE_METER_CH_COUNT; mid++) {
 		for (i=0; i<4; i++) {
@@ -1501,6 +1498,7 @@ void checkTrendHeader() {
 void trendTick(void)
 {
 	static int lastmin = -1;		/* 최초 진입 시 tm_min 과 반드시 다르게 → 첫 분에 즉시 1회 */
+	static int trimDay = -1;		/* [26/11/20] 용량 정리 하루 1회. 부팅 직후엔 하지 않고 다음 날짜 변경 때 */
 	int mid, i, itv;
 
 	/* 1분 경과 감지: 같은 분이면 아무것도 하지 않는다(옛 osDelayTask(1000);continue 대체) */
@@ -1508,6 +1506,16 @@ void trendTick(void)
 		return;
 
 	lastmin = pcntl->tod.tm_min;
+
+	if (trimDay < 0) {
+		trimDay = pcntl->tod.tm_mday;
+	}
+	else if (trimDay != pcntl->tod.tm_mday) {
+		trimDay = pcntl->tod.tm_mday;
+		fsFileLock();
+		trimTrendLogBudget();
+		fsFileUnlock();
+	}
 
 	// trend data 생성 (meter CH × trend group)
 	for (mid = 0; mid < ACTIVE_METER_CH_COUNT; mid++) {
@@ -1547,6 +1555,7 @@ void trendTick(void)
 			if (row[mid][i].valid) {
 				appendTrendRcrd(mid, i);
 				row[mid][i].valid = 0;
+				FS_FIND_YIELD();	/* [26/11/20] 그룹 기록 사이 양보(조각 많은 파일 fopen 도 느림) */
 			}
 		}
 	}

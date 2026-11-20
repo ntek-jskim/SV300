@@ -132,7 +132,7 @@ static int findOldestQualLog(char *oldestName, uint32_t *oldestSize, uint32_t *t
 		const char *name = (const char *)info.name;
 		int key = parseDateKey8(name);
 
-		meter[0].cntl.wdtTbl[Tid_Fs].count++;
+		FS_FIND_YIELD();
 		*totalSize += info.size;
 		// PQ 통합 예산에서 금주(현재 주 시작일) ql*는 보호
 		if (key >= currentKey) {
@@ -153,7 +153,7 @@ static int findOldestQualLog(char *oldestName, uint32_t *oldestSize, uint32_t *t
 		const char *name = (const char *)info.name;
 		int key = parseDateKey8(name);
 
-		meter[0].cntl.wdtTbl[Tid_Fs].count++;
+		FS_FIND_YIELD();
 		*totalSize += info.size;
 		if (key >= currentKey) {
 			continue;
@@ -249,12 +249,15 @@ static void trimQualLogs(uint32_t cutoffKey) {
 	}
 }
 
+/* UTC epoch → 로컬 달력(tm_year=전체연도, tm_mon=1~12). [26/11/20] 장치 시계 UTC 운영 — 여기서 TZ_SEC 를 더한다.
+ *  (ARM C 라이브러리 localtime_r 은 시간대가 없어 gmtime 과 같다) */
 void uLocalTime(const uint32_t *utc, struct tm *ptm) {
 	if (*utc == 0) {
 		memset(ptm, 0, sizeof(*ptm));
 	}
 	else {
-		localtime_r(utc, ptm);
+		uint32_t lt = *utc + (uint32_t)TZ_SEC;
+		localtime_r(&lt, ptm);
 		ptm->tm_year += 1900;
 		ptm->tm_mon += 1;
 	}
@@ -625,7 +628,7 @@ void pqIoTick(void) {
 	if (meter[0].cntl.tod.tm_min < 5 || meter[0].cntl.tod.tm_min > 8) {
 		return;
 	}
-	day = sysTick1s / 86400UL;
+	day = (sysTick1s + TZ_SEC) / 86400UL;	/* 로컬 날짜 기준 하루 1회 */
 	if (day != trimDay) {
 		trimDay = day;
 		trimQualLogs(logCutoffKeyDays(QUAL_KEEP_DAYS));
@@ -680,8 +683,8 @@ uint32_t getQualWeekEndTs(CNTL_DATA *pcntl) {
 	ltm.tm_year -= 1900;	// since 1900
 	ltm.tm_mon -= 1;			// 0 ~ 11
 	ltm.tm_hour = ltm.tm_min = ltm.tm_sec = 0;
-	utc = mktime(&ltm);
-	utc += 86400;	// 다음날 
+	utc = mktime(&ltm) - TZ_SEC;	/* 로컬 자정 → UTC */
+	utc += 86400;	// 다음날
 	uLocalTime(&utc, &ltm);
 #else	
 	memcpy(&ltm, &pcntl->tod, sizeof(struct tm));
@@ -689,7 +692,7 @@ uint32_t getQualWeekEndTs(CNTL_DATA *pcntl) {
 	ltm.tm_mon -= 1;			// 0 ~ 11
 	ltm.tm_hour = ltm.tm_min = ltm.tm_sec = 0;
 	
-	utc = mktime(&ltm);
+	utc = mktime(&ltm) - TZ_SEC;	/* 로컬 자정 → UTC (qw.endTs 는 sysTick1s(UTC)와 비교) */
 	{ int sd = meter[0].pqRpt.startDay; if (sd < 0 || sd > 6) sd = 0;	/* 다음 주기 시작일(Start Day 기준) */
 	  utc += (uint32_t)(7 - ((pcntl->tod.tm_wday - sd + 7) % 7)) * 86400; }
 	uLocalTime(&utc, &ltm);

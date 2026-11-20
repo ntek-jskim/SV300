@@ -225,15 +225,17 @@ void tickSet(uint32_t sec,  uint32_t msec, uint32_t mode) {
 	int diff = abs(sysTick1s - sec);
 		
 	if (sec != sysTick1s) {
-		sysTick1s = sec;
+		uint32_t le;
+		sysTick1s = sec;	/* [26/11/20] UTC */
+		le = sysTick1s + (uint32_t)TZ_SEC;	/* 주기 경계(10분·15분)는 로컬 시각 기준 — +5:30 등에서도 정시 정렬 */
 		//sysTick3s  = sysTick1s/3;
-		sysTick10s = sysTick1s/10;	// 10 sec, freq sampling 
+		sysTick10s = le/10;	// 10 sec, freq sampling
 #ifdef _QUAL_TEST
-		sysTick10m = sysTick1s/60;	// 1 minute, volt. averaging
-#else		
-		sysTick10m = sysTick1s/600;	// 10 minute, volt. averaging
-#endif	
-		sysTick15m = sysTick1s/900;	// 15 minute, demand
+		sysTick10m = le/60;	// 1 minute, volt. averaging
+#else
+		sysTick10m = le/600;	// 10 minute, volt. averaging
+#endif
+		sysTick15m = le/900;	// 15 minute, demand
 	
 		sysTick64  = (uint64_t)sec*1000 + msec;
 		sysTick32  = sysTick64;	
@@ -806,7 +808,8 @@ void Shell_Task(void *arg)
 
 	printf("[task shell started ...\n");
 
-	_enableTaskMonitor(Tid_Shell, 50);
+	/* [26/11/20] 50 → 150(15초): LLOW 라 FS_task(LOW) NOR 작업 중 기아 → 11/20 IOM 과 함께 감시 초과(ix=1) */
+	_enableTaskMonitor(Tid_Shell, 150);
 	
 	while (1) {
 		pcntl->wdtTbl[Tid_Shell].count++;
@@ -939,15 +942,18 @@ void tickHandler() {
 			g_idlePerSec = now - prevIdle;
 			prevIdle = now;
 		}
-		sysTick10s = sysTick1s/10;	// 10 sec, freq sampling
+		{	/* [26/11/20] sysTick1s=UTC, 주기 경계(10초·10분·15분·수요)는 로컬 시각 기준 */
+		uint32_t le = sysTick1s + (uint32_t)TZ_SEC;
+		sysTick10s = le/10;	// 10 sec, freq sampling
 #ifdef _QUAL_TEST
-		sysTick10m = sysTick1s/60;	// 1 minute, volt. averaging
-#else		
-		sysTick10m = sysTick1s/600;	// 10 minute, volt. averaging
-#endif		
-		sysTick15m = sysTick1s/900;	// 15 minute, demand
+		sysTick10m = le/60;	// 1 minute, volt. averaging
+#else
+		sysTick10m = le/600;	// 10 minute, volt. averaging
+#endif
+		sysTick15m = le/900;	// 15 minute, demand
 		if (pcntl->dInterval > 0) {
-			sysTickDemand = sysTick1s/(pcntl->dInterval);
+			sysTickDemand = le/(pcntl->dInterval);
+		}
 		}
 		tick = 0;
 		
