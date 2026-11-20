@@ -310,3 +310,7 @@
 2026/11/20 : [Modbus RX 카운트] readMemCb 가 워드마다 증가하고 웹 /api/regs 도 포함되던 것 → modbusServerLockCallback(요청당 1회, mbRxCount), RTU 는 modbusSlvProcFrame 그대로
 2026/11/20 : [FS 감시 초과 무한 리부팅 대응] ffind 반복 루프에 FS_FIND_YIELD(감시 카운트+1 tick 양보), trend 존재확인 ffind→fopen·용량정리 하루 1회, Iom·Shell 감시 50→150(15초)
 2026/11/20 : [내장웹] Configuration General SV900 카드(Metering·Communication·MQTT·SNMP / Device Info·Remote Link, MQTT 용어 통일, Timezone→Metering), Test Mode→Administration, Administration 4열(System·Firmware·Test Mode·System Status 2열, 24h Set Time·SNTP ON 일 때만 주의문), 상단 시계 팝오버(Device Time·Set Time(PC)), 장비 시각 UTC/현지 표시·매초 진행, 해/달 아이콘·로그인 Inter, Power Quality 고조파·파형 5초 주기·SV900 형식(Select Option·Table|Chart·상별 차트, Waveform CH 탭·/api/waveform?ch=), 상 색 #8470FF/#67BFFF/#84cc16, /api/harmonics %.2f
+2026/11/20 : [★FTP 디렉터리 목록 공유 커서 수정] common/fs_port_rtx.c — static FsDir dirTable 1개를 모든 FTP 접속이 공유해 LIST 가 겹치면 ffind 커서를 덮어써 목록 누락·중복(confWebApp PQ 탭 전환 시 qw 파일 1개만 보임, 실장비 동시 LIST 로 재현). 또 fsCloseDir 가 static 을 osFreeMem(free)해 힙 손상 위험 → fsOpenDir 마다 osAllocMem, 실패 시 해제
+2026/11/20 : [EN50160 리포트 상별 값] Quality.c updateQualReport — Volt1/Volt2/VoltThd/VoltHd/Pst/Plt/Svolt[i] 에 배열 첫 원소(L1)를 L1~L3 모두 넣던 것 → &pqw->var.X[i]
+2026/11/20 : [내장웹 Report 주 선택] /api/en50160?wk=1 → rpt[1](전주, 부팅·주 바뀔 때 전주 qw 파일에서 채움), Report 화면 This Week | Last Week
+2026/11/20 : [문서] 웹서버 사용자 매뉴얼 v0.2(화면 개편 반영: Configuration·Administration 경로, 메뉴 표, 24h Set Time·상단 시계, 맵 _261120), README §8 메모리 현황 갱신. SV300_3CH_app_16M 0E/0W, 357,748B(남음 34.6KB)

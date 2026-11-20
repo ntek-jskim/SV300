@@ -40,7 +40,9 @@
 #include "error.h"
 #include "debug.h"
 
-static FsDir dirTable;
+/* [26/11/20] 종전 static FsDir dirTable 1개를 모든 FTP 접속이 공유 → LIST 가 겹치면 ffind 커서(info.fileID)를
+ *  서로 덮어써 항목 누락·중복(confWebApp PQ 탭 전환 시 qw 파일 1개만 보임, 재현 확인). 또 fsCloseDir 가 이 static 을
+ *  osFreeMem(=free) 해 힙 손상 위험. → fsOpenDir 마다 osAllocMem, fsCloseDir 에서 해제 */
 
 
 /**
@@ -584,13 +586,16 @@ error_t fsRemoveDir(const char_t *path)
 
 FsDir *fsOpenDir(const char_t *path)
 {
-   FsDir *dir = &dirTable;
-   FINFO info;
-   int nitem=0;
+   FsDir *dir;
    char *p = (char *)path;
-	
+
 	printf("%s --> %s\n", __FUNCTION__, path);
-   
+
+   dir = osAllocMem(sizeof(FsDir));	/* 접속(LIST/NLST)마다 별도 디렉터리 커서 */
+   if (dir == NULL)
+      return NULL;
+   osMemset(dir, 0, sizeof(FsDir));
+
    // '/' => '\\'로 변환한다
    while (*p != NULL) {
       if(*p == '/') *p = '\\';
@@ -613,9 +618,10 @@ FsDir *fsOpenDir(const char_t *path)
    // directory명으로 ffind를 한 후 결과를 dir에 저장한다
    dir->info.fileID  = 0;
    if (ffind (dir->path, &dir->info) == 0) {
-      return &dirTable;
+      return dir;
    }
    else {
+      osFreeMem(dir);
       return NULL;
    }
 }

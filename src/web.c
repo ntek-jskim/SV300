@@ -1231,7 +1231,8 @@ static error_t apiWaveform(HttpConnection *c)
 	return httpCloseStream(c);
 }
 
-/* GET /api/en50160 — 채널별 EN50160 준수(rpt[0]=금주). 값=compliance%(=raw/100), p=준수여부 */
+/* GET /api/en50160[?wk=1] — 채널별 EN50160 준수(rpt[0]=금주, [26/11/20] wk=1 → rpt[1]=전주: 부팅·주 바뀔 때 전주 qw 파일에서 채움).
+ *  값=compliance%(=raw/100), p=준수여부 */
 static void enEmit(HttpConnection *c, int first, int pass, float v0, float v1, float v2, int nvals)
 {
 	char b[96], s[48];
@@ -1298,11 +1299,13 @@ static error_t apiEn50160(HttpConnection *c)
 {
 	char b[128];
 	int i;
+	int wk = (qparam(c->request.queryString, "wk") == 1) ? 1 : 0;	/* 0=This Week, 1=Last Week */
 
 	if (beginJson(c)) return ERROR_WRITE_FAILED;
-	w(c, "{\"ok\":true,\"ch\":[");
+	snprintf(b, sizeof(b), "{\"ok\":true,\"wk\":%d,\"ch\":[", wk);
+	w(c, b);
 	for (i = 0; i < webNch(); i++) {
-		EN50160 *r = &meter[i].rpt[0];
+		EN50160 *r = &meter[i].rpt[wk];
 		uint32_t cm = r->compliance;
 #define ENP(ri) (((cm >> (ri)) & 1u) ? 0 : 1)   /* 비트 set = FAIL */
 		snprintf(b, sizeof(b), "%s{\"n\":%d,\"start\":%u,\"end\":%u,\"rows\":[",
@@ -2255,7 +2258,7 @@ static const char INDEX_HTML[] =
 ".hcv{width:100%;height:180px;display:block}\n"
 /* [26/11/20] SV900 Harmonics: 상 제목, Table|Chart 붙은 버튼, 표 가로 분할 */
 ".hph{font-size:14px;font-weight:700;margin:14px 0 4px}.hph small{font-size:11px;font-weight:400;color:var(--muted)}\n"
-".hvsw{display:inline-flex}.hvsw .btn{border-radius:0;margin:0}.hvsw .btn:first-child{border-radius:8px 0 0 8px}.hvsw .btn:last-child{border-radius:0 8px 8px 0;margin-left:-1px}\n"
+".chh:has(.rwk){display:flex;align-items:center;gap:8px}.rwk{margin-left:auto}.rwk .btn{padding:4px 12px;font-size:12px}.hvsw{display:inline-flex}.hvsw .btn{border-radius:0;margin:0}.hvsw .btn:first-child{border-radius:8px 0 0 8px}.hvsw .btn:last-child{border-radius:0 8px 8px 0;margin-left:-1px}\n"
 ".htw{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start}.htw table{flex:1 1 170px;min-width:0}\n"
 ".pgctl{display:flex;gap:6px;flex-wrap:wrap;margin:2px 0 10px}.pgctl .btn{padding:3px 9px;font-size:12px}\n"
 /* [26/11/19] 이력 표: 카드 안 스크롤(끝까지 내리면 다음 50건), 머리행 고정 */
@@ -2971,6 +2974,8 @@ static const char INDEX_HTML[] =
 "var EN_ROWS=[['Frequency Variation 1','(+1%~-1%),99.5%/Wk',99.5],['Frequency Variation 2','(+4%~-6%),100%/Wk',100],['Voltage Variation 1','(+10%~-10%),95%/Wk',95],['Voltage Variation 2','(+10~-15%),100%/Wk',100],['Voltage Unbalance','(<2%),100%/Wk',100],['THD','(<8%),95%/Wk',95],['Harmonics','(0.5%~6%),95%/Wk',95],['Plt','(1),95%/Wk',95]],EN_INFO=['Voltage Sag','Voltage Swell','Short Interruption','Signaling Volt.'];\n"
 "function passOf(v,thr){var ok=true,any=false,i;for(i=0;i<3;i++){if(v[i]!=null){any=true;if(v[i]<thr)ok=false;}}return (any&&ok)?1:0;}\n"
 "function enNv(v){return (v==null)?'-':Number(v).toFixed(1);}\n"
+"var rptWk=0;function rwkSync(){[0,1].forEach(function(k){var e=$('rw'+k);if(e)e.className='btn'+(k===rptWk?' primary':'');});}\n"
+"function rptSel(k){rptWk=k;rwkSync();$('rp1').innerHTML=\"<p class='stub'>loading...</p>\";pollLoop();}\n"
 "function bReport(x){var okAll=x.rows.every(function(r,ri){return passOf(r.v,EN_ROWS[ri][2])===1;});\n"
 " var h=`<div class='cmeta'>${ts2(x.start)} ~ ${ts2(x.end)} · <span class='enb ${okAll?'pass':'fail'}'>${okAll?'Compliant':'Non-compliant'}</span></div><table class='ctbl hsm'><tr><th>Parameter</th><th>L1</th><th>L2</th><th>L3</th><th>Comp</th><th>Requirement</th></tr>`;\n"
 " x.rows.forEach(function(r,ri){var p=passOf(r.v,EN_ROWS[ri][2]);h+=`<tr><td class='rk'>${EN_ROWS[ri][0]}</td><td>${enNv(r.v[0])}</td><td>${enNv(r.v[1])}</td><td>${enNv(r.v[2])}</td><td><span class='enb ${p?'pass':'fail'}'>${p?'Pass':'Fail'}</span></td><td class='ph2'>${EN_ROWS[ri][1]}</td></tr>`;});\n"
@@ -3063,9 +3068,10 @@ static const char INDEX_HTML[] =
 "  if(!x){$('chbody').innerHTML=wvTabs()+\"<p class='stub'>no data</p>\";return;}\n"
 "  $('chbody').innerHTML=wvTabs()+\"<div class='chcard'><div class='hph'>Voltage <small>(V)</small></div>\"+WLG+\"<canvas id='wvV' class='wcv'></canvas><div class='hph'>Current <small>(A)</small></div>\"+WLG+\"<canvas id='wvI' class='wcv'></canvas></div>\";\n"
 "  drawLines('wvV',x.v);drawLines('wvI',x.i);}).catch(chFail);}\n"
-" if(t==='report')return Promise.all([j('/api/en50160'),j('/api/evlog?kind=2&off=0&num=50')]).then(function(a){if(chTabCur!==t)return;var r=a[0],q=a[1];if(!r.d.ok){chStat(false);return;}chStat(true);var x=r.d.ch[0];if(!x)return;\n"
-"  if(!$('rp1')){var s=evSt(2,1);s.rows=[];s.total=0;$('chbody').innerHTML=\"<div class='chcard'><div class='chh'>CH1 · EN50160</div><div id='rp1'></div>\"+ITIC_HDR+\"<div class='hsub'>ITIC List (Voltage)</div>\"+evBox(2,1,'')+'</div>';}\n"
-"  $('rp1').innerHTML=bReport(x);var y=q.d&&q.d.ok&&q.d.ch[0];if(y)evMerge(evSt(2,1),y.rows,y.total);evPaint(2,1);}).catch(chFail);\n"
+/* [26/11/20] Report 주 선택(SV900 EN50160 Report 처럼): This Week = rpt[0], Last Week = rpt[1](Modbus 930~). 장비에 있는 두 주만 */
+" if(t==='report')return Promise.all([j('/api/en50160?wk='+rptWk),j('/api/evlog?kind=2&off=0&num=50')]).then(function(a){if(chTabCur!==t)return;var r=a[0],q=a[1];if(!r.d.ok){chStat(false);return;}chStat(true);var x=r.d.ch[0];if(!x)return;\n"
+"  if(!$('rp1')){var s=evSt(2,1);s.rows=[];s.total=0;$('chbody').innerHTML=\"<div class='chcard'><div class='chh'>CH1 · EN50160 <span class='hvsw rwk'><button class='btn' id='rw0' onclick='rptSel(0)'>This Week</button><button class='btn' id='rw1' onclick='rptSel(1)'>Last Week</button></span></div><div id='rp1'></div>\"+ITIC_HDR+\"<div class='hsub'>ITIC List (Voltage)</div>\"+evBox(2,1,'')+'</div>';}\n"
+"  rwkSync();$('rp1').innerHTML=x.start?bReport(x):\"<p class='stub'>No report for this week (file not found).</p>\";var y=q.d&&q.d.ok&&q.d.ch[0];if(y)evMerge(evSt(2,1),y.rows,y.total);evPaint(2,1);}).catch(chFail);\n"
 " if(t==='alarm'||t==='event'){var k=(t==='alarm')?0:1;return j('/api/evlog?kind='+k+'&off=0&num=50').then(function(r){if(chTabCur!==t)return;if(!r.d.ok){chStat(false);return;}chStat(true);\n"
 "  if(!$('evt'+k+'_1')){CHN.forEach(function(x){var s=evSt(k,x.n);s.rows=[];s.total=0;});\n"
 "   $('chbody').innerHTML=chCards(CHN,function(x){return k===0?`<div class='hsub'>Alarm Status <span class='ph2' id='asn${x.n}'></span></div><table class='ctbl' id='ast${x.n}'></table><div class='hsub'>Alarm Log</div>`+evBox(0,x.n,evBtn(x.n,'ackAlarm','clrAlarm')):evBox(1,x.n,evBtn(x.n,'ackEvent','clrEvent'));});}\n"

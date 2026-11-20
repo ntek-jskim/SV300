@@ -9,6 +9,42 @@
 
 ---
 
+# 2026-11-20
+버전: **V00.05**(변경 없음, 빌드일 26/11/20) — 1차 커밋 93f533a 이후 분까지 포함
+
+## 1. ★장치 시계 UTC 운영
+- 내부 시계·기록 시각·Modbus 시각을 UTC 로, 화면·파일 날짜·일/주/월 경계는 Timezone 을 더한 현지 시각
+- 재부팅하면 9시간 앞서던 문제(외장 RTC 를 현지 시각으로 저장) 수정 — 콘솔 `time` 의 app·RTC 일치 확인
+
+## 2. 계측·통신
+- **Max/Min 자동 초기화** 구현: None·Daily·Weekly(PQ Report Start Day)·Monthly(기본) — 종전엔 동작하지 않았음. 맵 _261120
+- **FFT(THD·고조파) 3초 주기 고정**(종전 쉬지 않고 계산) — 웹 고조파·파형은 5초 갱신
+- **Modbus RX 카운트**를 요청 1건당 1회로(웹 접속만으로 늘던 문제)
+- FS 장시간 검색 중 다른 태스크 감시 초과로 무한 리부팅 → 검색 중 양보·감시 15초
+- ★FTP 디렉터리 목록을 접속끼리 공유해 목록이 빠지던 문제(PQ 파일 1개만 보임) + 잘못된 메모리 해제 수정
+- EN50160 리포트 상별(L2·L3) 값에 L1 을 넣던 문제 수정 — 현재 시험 장비는 3상 전압 동일 입력이라 차이 안 보임
+
+## 3. 내장웹 SV900 마무리
+- Configuration: SV900 카드(Metering·Communication·MQTT·SNMP / Device Info·Remote Link), MQTT 용어 통일, Test Mode → Administration
+- Administration: 4열, 24시간 Set Time·장비 시각(현지/UTC), 상단 시계 아이콘에서 시각 맞춤, System Status
+- Power Quality: 고조파 상별 차트·Table/Chart, 파형 CH 탭(한 채널 전압·전류), SV900 상 색
+- Report: **This Week / Last Week** 선택(메모리의 전주 리포트)
+- 해/달 아이콘, 로그인 글꼴
+
+## 4. SV400 · confWebApp 동기화
+- SV400 에 11/18~20 변경 전부 이식(명령·상태 주소 SV400 대응), SV400 메모리맵 _261120, SV400 사용자 매뉴얼 신설
+- confWebApp: UTC 시각 정합·SV900 화면 전체·Calibrate 화면·Report 주 선택(이전 주는 장비 파일)·이력 자동 이어 읽기, 설치 파일(Inno Setup) 배포 준비
+- 사용자 매뉴얼 v0.2(화면 개편 반영)
+
+## 5. 빌드
+- `SV300_3CH_app_16M` 0E/0W, 357,748B(남음 34.6KB)
+
+## 다음
+- 실기: UTC 시각·재부팅 유지, Max/Min 자동 초기화, Modbus RX·COMM LED, SHA-256, Report 상별 값(상마다 다른 전압으로)
+- SV400 최신 소스 빌드·실기, confWebApp 설치판 실행 확인·코드 서명 인증서
+
+---
+
 # 2026-11-19
 버전: **V00.05**(변경 없음, 빌드일 26/11/19) — 11/18 미커밋 작업(SNMPv3 SHA-256) 포함
 

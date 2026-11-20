@@ -27,7 +27,7 @@ CycloneTCP(웹·Modbus TCP·FTP·mDNS·SNMP·MQTT) + RTX, 내장웹(web.c) + 외
 | `memorymap/` | Modbus 메모리맵 엑셀 — **파일명 날짜가 최신인 것이 기준** (코드 주석의 옛 파일명은 무시) |
 | [snmp.md](snmp.md) | **SNMP 프로토콜 개발자료** — 설계·MIB·PEN·시험방법(TC-01~12)·TODO §8 |
 | [mqtt_app.c](src/mqtt_app.c) | MQTT 퍼블리셔 — GEMS35x JSON 배열 페이로드(공통 + `fN_*` 피더), 설정은 §7 |
-| [document/SV300_웹서버_사용자매뉴얼_v0.1.docx](document/) | 납품용 사용자 매뉴얼(간결판) — 첫 접속(자동 IP)·표시등·IP 설정·모니터링 |
+| [document/SV300_웹서버_사용자매뉴얼_v0.2.docx](document/) | 납품용 사용자 매뉴얼(간결판) — 첫 접속(자동 IP)·표시등·IP 설정·모니터링 (v0.2: 26/11/20 화면 개편 반영) |
 | [document/WEBSERVER_종합비교표.pdf](document/) | 내장웹 ↔ confWebApp 지원 현황 표(WEBSERVER_PORTING.md 종합 비교표 출력본) |
 
 ---
@@ -282,7 +282,7 @@ Channel 1~3 = 미터칩 M0~M2, 각 채널 3상 = Feeder 1~3 / 4~6 / 7~9. 채널 
 
 ## 8. 메모리 사용 현황 (일정 마감 시 갱신)
 
-> 기준: **2026-11-19**, 필드 타깃 `SV300_3CH_app_16M`(`SV300_3CH_app` 동일), 11/18~19 마감 커밋 빌드(SNMPv3 SHA-256·내장웹 SV900 템플릿·로고 업로드 포함), 0E/0W.
+> 기준: **2026-11-20**, 필드 타깃 `SV300_3CH_app_16M`(`SV300_3CH_app` 동일), 11/20 마감 커밋 빌드(UTC 시계·FFT 3초·Max/Min·내장웹 SV900 설정·관리·PQ·Report 주 선택 포함), 0E/0W.
 > 수치 출처: `keil/<타깃>.map` 의 Load/Execution Region. NOR 사용량은 장비 콘솔 `DIR`(파일 합계·`bytes free`)로 확인한다.
 
 ### 8.1 내부 메모리 (LPC4357)
@@ -290,20 +290,20 @@ Channel 1~3 = 미터칩 M0~M2, 각 채널 3상 = Feeder 1~3 / 4~6 / 7~9. 채널 
 | 영역 | 주소 | 용도 | 크기 | 사용 | 남음 |
 |---|---|---|---|---|---|
 | Flash Bank A — 부트로더 | 0x1A000000 | `SV300_boot` (약 67KB, 섹터 0~8) | 128KB | 약 67KB | 앱 배치 경계 — 쓰지 않음 |
-| **Flash Bank A — 앱** | 0x1A020000 | 펌웨어 코드·상수·초기값, 내장웹(gzip 32,176B) | 384KB (0x60000) | **353,048B** | **40,168B (39.2KB, 10.2%)** |
+| **Flash Bank A — 앱** | 0x1A020000 | 펌웨어 코드·상수·초기값, 내장웹(gzip 36,122B) | 384KB (0x60000) | **357,748B** | **35,468B (34.6KB, 9.0%)** |
 | Flash Bank B | 0x1B000000 | 미사용 | 512KB | 0 | 512KB — 앱 확장 후보(부트로더·scatter 변경 필요) |
 | EEPROM | 0x20040000 | 교정값 `METER_CAL`(836B, `storeHwSettings`) | 16KB | 836B | 약 15.2KB |
-| SRAM 0x2000 (RW_IRAM1) | 0x20000000 | RW/ZI 변수 | 64KB | 57,288B | 8,248B |
-| SRAM 0x1000 (RW_IRAM2) | 0x10000000 | RW/ZI 변수 | 32KB | 24,524B | 8,244B |
+| SRAM 0x2000 (RW_IRAM1) | 0x20000000 | RW/ZI 변수 | 64KB | 57,296B | 8,240B |
+| SRAM 0x1000 (RW_IRAM2) | 0x10000000 | RW/ZI 변수 | 32KB | 24,528B | 8,240B |
 | SRAM 스택 | 0x10082000 | MSP 스택 | 32KB | 32KB(고정) | — |
 
 ### 8.2 외부 메모리
 
 | 장치 | 용도 | 크기 | 사용 | 남음 |
 |---|---|---|---|---|
-| **SDRAM** (0x28000000) | 힙 1MB(`ARM_LIB_HEAP`) + `RW_RAM1`(EXT_RAM: 파형·FFT·로그 버퍼, meter/iom/소켓/RTX/FS 변수) | 32MB | 힙 1MB + 5,727,584B = **약 6.46MB** | **약 25.5MB** |
+| **SDRAM** (0x28000000) | 힙 1MB(`ARM_LIB_HEAP`) + `RW_RAM1`(EXT_RAM: 파형·FFT·로그 버퍼, meter/iom/소켓/RTX/FS 변수) | 32MB | 힙 1MB + 5,727,080B = **약 6.46MB** | **약 25.5MB** |
 | **SPI NOR** (HWV2 `MX25L12835F`) | RL-FlashFS(EFS) 전체: `settings.dat`, 알람·PQE 정의, PQ 주/일 보고서(`pq_q*`), 에너지 로그(15분·일·월), 트렌드, 파형 캡처, 이벤트 로그, `\system\snmp.d`(engineBoots), 웹 세션키·원격로그인 기록, 웹 사이드바 로고 `\system\logo.d`(최대 64KB, 11/19), FW 업로드 `usrApp.bin`(최대 1MB) | 16MB (구형 `MX25L1636E` 2MB 자동 대응) | 장비별 — 콘솔 `DIR` | 장비별 — 콘솔 `DIR` |
 | **FRAM** (I2C `FM24CL64`) | 에너지 누적 `ENERGY_NVRAM` 교대 2슬롯: #1 0~1167, #2 4096~5263 (seq·쓰기 후 검증). 512(옛 2번째 위치)는 업데이트 첫 부팅 이전만 읽음 | 8KB | 2,336B | 5,856B |
 
 - FRAM 의 수요(`storeDemandNVR` 2048~)·에너지 로그(`storeEnergyLogNVR` 1024~)는 **호출처 없음**(수요·에너지 로그는 NOR 파일로 저장). 다시 쓰면 에너지 #1(0~1167)·#2(4096~)와 겹치므로 위치 재배치가 먼저다.
-- 내부 플래시 여유 추이: 11/16 57.9KB(gzip 적용 직후) → 11/18 45.1KB → 11/19 39.2KB(Feeder·로그 조회 API·로고 업로드·SV900 화면)
+- 내부 플래시 여유 추이: 11/16 57.9KB(gzip 적용 직후) → 11/18 45.1KB → 11/19 39.2KB(Feeder·로그 조회 API·로고 업로드·SV900 화면) → 11/20 34.6KB(설정·관리·PQ 화면 SV900, Report 주 선택)

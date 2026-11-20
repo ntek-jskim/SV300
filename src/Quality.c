@@ -837,14 +837,15 @@ void updateQualReport(int meterIdx, QualWeek *pqw, int pos) {
 	prpt->Fvar2 = getVarPercent(&pqw->var.Freq2);
 	prpt->Voltbal = getVarPercent(&pqw->var.Voltbal);
 	
+	/* [26/11/20] 상별(i) 값 — 종전 pqw->var.Volt1 등 배열 첫 원소(L1)를 L1~L3 모두에 넣던 버그 수정 */
 	for (i=0; i<3; i++) {
-		prpt->Volt1[i] = getVarPercent(pqw->var.Volt1);
-		prpt->Volt2[i] = getVarPercent(pqw->var.Volt2);
-		prpt->VoltThd[i] = getVarPercent(pqw->var.VoltThd);
-		prpt->VoltHd[i] = getVarPercent(pqw->var.VoltHd);
-		prpt->Pst[i] = getVarPercent(pqw->var.Pst);
-		prpt->Plt[i] = getVarPercent(pqw->var.Plt);
-		prpt->Svolt[i] = getVarPercent(pqw->var.Svolt);
+		prpt->Volt1[i] = getVarPercent(&pqw->var.Volt1[i]);
+		prpt->Volt2[i] = getVarPercent(&pqw->var.Volt2[i]);
+		prpt->VoltThd[i] = getVarPercent(&pqw->var.VoltThd[i]);
+		prpt->VoltHd[i] = getVarPercent(&pqw->var.VoltHd[i]);
+		prpt->Pst[i] = getVarPercent(&pqw->var.Pst[i]);
+		prpt->Plt[i] = getVarPercent(&pqw->var.Plt[i]);
+		prpt->Svolt[i] = getVarPercent(&pqw->var.Svolt[i]);
 	}
 		
 	for (i=0; i<4; i++) {
