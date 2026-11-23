@@ -3,8 +3,8 @@
 LPC4330(Cortex-M4) + ADE9000 ×3(M0~M2) 기반 3채널(9피더) 전력품질 계측기.
 CycloneTCP(웹·Modbus TCP·FTP·mDNS·SNMP·MQTT) + RTX, 내장웹(web.c) + 외부 설정툴 confWebApp.
 
-> **main 브랜치 기준**(26/11/10 web 통합, 메모리맵 `_261116`: 통신 설정 7110~7519, 명령 7788~). 2026-11-17 갱신.
-> 2026-10-16~19 교정 수정(§5.5·§5.6) 중 `uGainSel`·1P2W 전력량은 `91ed84c`(11/06)로 반영, `setGainW` V·I/VA 방식도 반영(11/06). **CT_100mA PGA 2x 는 채택하지 않음**(현재 1x).
+> **main 브랜치 기준**(26/11/10 web 통합, 메모리맵 `_261120`: 통신 설정 7110~7519, 명령 7788~, 장치 시계 UTC). 2026-11-23 갱신.
+> 2026-10-16~19 교정 수정(§7.5·§7.6) 중 `uGainSel`·1P2W 전력량은 `91ed84c`(11/06)로 반영, `setGainW` V·I/VA 방식도 반영(11/06). **CT_100mA PGA 2x 는 채택하지 않음**(현재 1x).
 
 ---
 
@@ -24,9 +24,9 @@ CycloneTCP(웹·Modbus TCP·FTP·mDNS·SNMP·MQTT) + RTX, 내장웹(web.c) + 외
 | [WEBSERVER_PORTING.md](WEBSERVER_PORTING.md) | 내장웹(web.c) ↔ confWebApp 역할 분담·제한 원칙·지원 현황 |
 | [document/SV300_쓰레드구조_분석.md](document/SV300_쓰레드구조_분석.md) | RTOS 태스크 구조·우선순위 |
 | [document/ADE9000_멀티쓰레딩_구조.md](document/ADE9000_멀티쓰레딩_구조.md) · [ADE9000_단일스레드_전환설계.md](document/ADE9000_단일스레드_전환설계.md) · [ADE9000_리팩토링_작업로그.md](document/ADE9000_리팩토링_작업로그.md) | ADE9000 버스/스레드 설계 |
-| `memorymap/` | Modbus 메모리맵 엑셀 — **파일명 날짜가 최신인 것이 기준** (코드 주석의 옛 파일명은 무시) |
+| `memorymap/` | Modbus 메모리맵 엑셀 — **파일명 날짜가 최신인 것이 기준** (코드 주석의 옛 파일명은 무시). `ext_<파일명>` = ToDo&Log 시트를 뺀 외부 배포용 사본(26/11/23~, 맵 수정 시 함께 생성) |
 | [snmp.md](snmp.md) | **SNMP 프로토콜 개발자료** — 설계·MIB·PEN·시험방법(TC-01~12)·TODO §8 |
-| [mqtt_app.c](src/mqtt_app.c) | MQTT 퍼블리셔 — GEMS35x JSON 배열 페이로드(공통 + `fN_*` 피더), 설정은 §7 |
+| [mqtt_app.c](src/mqtt_app.c) | MQTT 퍼블리셔 — GEMS35x JSON 배열 페이로드(공통 + `fN_*` 피더), 설정은 §9 |
 | [document/SV300_웹서버_사용자매뉴얼_v0.2.docx](document/) | 납품용 사용자 매뉴얼(간결판) — 첫 접속(자동 IP)·표시등·IP 설정·모니터링 (v0.2: 26/11/20 화면 개편 반영) |
 | [document/WEBSERVER_종합비교표.pdf](document/) | 내장웹 ↔ confWebApp 지원 현황 표(WEBSERVER_PORTING.md 종합 비교표 출력본) |
 
@@ -60,13 +60,82 @@ CycloneTCP(웹·Modbus TCP·FTP·mDNS·SNMP·MQTT) + RTX, 내장웹(web.c) + 외
 | `METER_TEST_DATA` | 시험 데이터 (구형 타깃) |
 
 - 흐름: **SV300_3CH_16M 에서 개발·디버깅 → SV300_3CH_app_16M 으로 시험/출하**
+- `_WDT_EN` 빌드는 태스크 감시로 리셋한다 — 감시 한도·NOR 파일 작업 배치 규칙은 §4.2
 - app 프로젝트는 디버그보다 최적화가 높다(uvproj `Optim` 2 vs 1). ISR 이 갱신하는 변수는 반드시 `volatile` (2026-10-07 부팅 홀딩 사례)
 - `src/fft.c` 는 **CP949** — UTF-8 로 저장하면 한글 주석이 깨진다
 - 커밋 시 [FWUPDATE](FWUPDATE) 에 `YYYY/MM/DD : 내용` 추가 (CLAUDE.md 규칙). FW 버전·빌드일은 [meter.c](src/meter.c#L15) `FW_VER` / `FW_BUILD_*`
 
 ---
 
-## 3. 펌웨어 업데이트
+## 3. 메모리 사용 현황 (일정 마감 시 갱신)
+
+> 기준: **2026-11-20**, 필드 타깃 `SV300_3CH_app_16M`(`SV300_3CH_app` 동일), 11/20 마감 커밋 빌드(UTC 시계·FFT 3초·Max/Min·내장웹 SV900 설정·관리·PQ·Report 주 선택 포함), 0E/0W.
+> 수치 출처: `keil/<타깃>.map` 의 Load/Execution Region. NOR 사용량은 장비 콘솔 `DIR`(파일 합계·`bytes free`)로 확인한다.
+
+### 3.1 내부 메모리 (LPC4357)
+
+| 영역 | 주소 | 용도 | 크기 | 사용 | 남음 |
+|---|---|---|---|---|---|
+| Flash Bank A — 부트로더 | 0x1A000000 | `SV300_boot` (약 67KB, 섹터 0~8) | 128KB | 약 67KB | 앱 배치 경계 — 쓰지 않음 |
+| **Flash Bank A — 앱** | 0x1A020000 | 펌웨어 코드·상수·초기값, 내장웹(gzip 36,122B) | 384KB (0x60000) | **357,748B** | **35,468B (34.6KB, 9.0%)** |
+| Flash Bank B | 0x1B000000 | 미사용 | 512KB | 0 | 512KB — 앱 확장 후보(부트로더·scatter 변경 필요) |
+| EEPROM | 0x20040000 | 교정값 `METER_CAL`(836B, `storeHwSettings`) | 16KB | 836B | 약 15.2KB |
+| SRAM 0x2000 (RW_IRAM1) | 0x20000000 | RW/ZI 변수 | 64KB | 57,296B | 8,240B |
+| SRAM 0x1000 (RW_IRAM2) | 0x10000000 | RW/ZI 변수 | 32KB | 24,528B | 8,240B |
+| SRAM 스택 | 0x10082000 | MSP 스택 | 32KB | 32KB(고정) | — |
+
+### 3.2 외부 메모리
+
+| 장치 | 용도 | 크기 | 사용 | 남음 |
+|---|---|---|---|---|
+| **SDRAM** (0x28000000) | 힙 1MB(`ARM_LIB_HEAP`) + `RW_RAM1`(EXT_RAM: 파형·FFT·로그 버퍼, meter/iom/소켓/RTX/FS 변수) | 32MB | 힙 1MB + 5,727,080B = **약 6.46MB** | **약 25.5MB** |
+| **SPI NOR** (HWV2 `MX25L12835F`) | RL-FlashFS(EFS) 전체: `settings.dat`, 알람·PQE 정의, PQ 주/일 보고서(`pq_q*`), 에너지 로그(15분·일·월), 트렌드, 파형 캡처, 이벤트 로그, `\system\snmp.d`(engineBoots), 웹 세션키·원격로그인 기록, 웹 사이드바 로고 `\system\logo.d`(최대 64KB, 11/19), FW 업로드 `usrApp.bin`(최대 1MB) | 16MB (구형 `MX25L1636E` 2MB 자동 대응) | 장비별 — 콘솔 `DIR` | 장비별 — 콘솔 `DIR` |
+| **FRAM** (I2C `FM24CL64`) | 에너지 누적 `ENERGY_NVRAM` 교대 2슬롯: #1 0~1167, #2 4096~5263 (seq·쓰기 후 검증). 512(옛 2번째 위치)는 업데이트 첫 부팅 이전만 읽음 | 8KB | 2,336B | 5,856B |
+
+- FRAM 의 수요(`storeDemandNVR` 2048~)·에너지 로그(`storeEnergyLogNVR` 1024~)는 **호출처 없음**(수요·에너지 로그는 NOR 파일로 저장). 다시 쓰면 에너지 #1(0~1167)·#2(4096~)와 겹치므로 위치 재배치가 먼저다.
+- 내부 플래시 여유 추이: 11/16 57.9KB(gzip 적용 직후) → 11/18 45.1KB → 11/19 39.2KB(Feeder·로그 조회 API·로고 업로드·SV900 화면) → 11/20 34.6KB(설정·관리·PQ 화면 SV900, Report 주 선택)
+
+---
+
+## 4. 태스크 구조 · 우선순위
+
+> RTX(RL-ARM) — `OS_TICK` 1ms, **`OS_ROBIN=0`**(같은 우선순위끼리 시간을 나누지 않음: 실행 중인 태스크가 대기·양보해야 다음 태스크가 돈다), 스택은 `stackSize` 인자와 무관하게 **모든 태스크 `OS_STKSIZE` 640워드(2.5KB) 고정**, `OS_TASKCNT` 30 ([RTX_Conf_CM.c](src/RTX_Conf_CM.c)).
+> 생성: [app_main.c](src/app_main.c) `app_init()`(계측·FS·IOM·LED 등), [main.c](src/main.c)(네트워크 서버). 통합 이력·상세 분석: [document/SV300_쓰레드구조_분석.md](document/SV300_쓰레드구조_분석.md). 기준 2026-11-23.
+
+### 4.1 우선순위 (숫자가 클수록 높음)
+| 우선순위 | 태스크 | 역할 | 감시 한도 |
+|---|---|---|---|
+| **REALTIME (6)** | `meter` (Meter0_Task) | M0 ADE9000(SSP0) 계측 읽기 | 5초 |
+| | `meter12` (Meter12_Task) | M1·M2 ADE9000(SSP1 공유) 계측 읽기 — 한 태스크만 SSP1 접근 | 5초 |
+| **HHIGH (5)** | `wave` (Wave_Task) | 파형 캡처(WFB, DMA) | 5초 |
+| | `LED` (ledTask) | 100ms 하트비트 + **`taskMonitor()`(WDT 클리어)** | 5초 |
+| | CycloneTCP net 태스크 | TCP/IP 스택·RSTP(`NET_TASK_PRIORITY`) | — |
+| **HIGH (4)** | `metering` (Metering_Task) | RMS 로그·PostScan·에너지 통합 + 알람 판정(`alarmProc`)·Max/Min 자동 초기화 | 5초 |
+| **NORMAL (3)** | `cmd` (CmdProc_Task) | Modbus 명령(78xx) 처리 | 5초 |
+| | Modbus TCP 서버 · SNMP 에이전트(사용 시) | CycloneTCP 기본값 | — |
+| | `IpScan` · `Proxy` | IP 검색 응답 · 프록시 | — |
+| **LOW (2)** | `FS` (FS_task) | 파일 I/O 큐(`fsQ`), 설정 저장, 트렌드(`trendTick`)·PQ(`pqIoTick`)·에너지(`egyIoTick`) 기록, 로그 용량 정리 | **25초** |
+| | `iom` (IOM_Task) | DI·키·온도, 1ms 주기. 1초 넘게 못 돌면 `[LOWLAG]` 출력 | **15초**(11/20) |
+| | **웹서버**(web.c, CycloneTCP HTTP :80) — 리스너 1 + 커넥션 2(`HTTP_SERVER_MAX_CONNECTIONS`) | 내장웹·API 응답, 로그인 세션, 원격 서명링크(검증 중만 LLOW) | 감시 안 함 |
+| | FTP 서버 · `MQTT` · `snmpTrap`(사용 시) | 네트워크 서비스 | — |
+| **LLOW (1)** | `shell` (Shell_Task) | UART 콘솔 | **15초**(11/20) |
+| | `fft` (FFT_Task) | THD·고조파, 3초 주기(11/20) | 감시 안 함 |
+| | `SNTP`(사용 시) | 시각 동기(기본 우선순위) | — |
+
+- 시험 모드(`etc.testMode`=1)는 `TMODE`(LOW)·FS·Metering·cmd 만 만들고 meter·wave·fft 는 만들지 않는다
+- 원격 서명링크 검증(Ed25519) 동안 웹 커넥션은 잠시 LLOW 로 내려 계측·FS 를 방해하지 않는다
+
+### 4.2 감시(워치독)와 작업 배치 규칙
+- `_WDT_EN` 빌드: LED 태스크가 100ms 마다 `taskMonitor()` — 등록 태스크의 루프 카운트가 한도 동안 0 이면 `@@ wdtError, ix=<Tid>` 를 찍고 WDT 클리어를 멈춰 리셋. `ix` 는 [meter.h](src/meter.h) `Tid_*`(1=Shell, 3=Wave, 5=Metering, 7=Meter, 8=Meter2, 9=Fs, 11=Iom, 13=CmdProc, 14=Led)
+- 한도 = `_enableTaskMonitor(id, n)` 의 n×100ms. `errCnt` 가 uint8 이라 **최대 250(25초)**
+- **같은 우선순위 기아**: `OS_ROBIN=0` 이라 LOW 태스크가 오래 돌면 같은 LOW(IOM·웹·FTP)와 LLOW(Shell·FFT)가 멈춘다 — 웹 응답 끊김·감시 초과 리셋의 원인
+- **NOR 파일 작업은 FS_task 에서만**. REALTIME·HIGH 태스크는 스냅샷·플래그만 세우고 FS_task 가 기록한다(Meter0 에서 `ffind` 로 25초 정지했던 사례, 11/05 이관)
+- NOR EFS `ffind` 는 1회 수 초 → 반복 루프마다 `FS_FIND_YIELD()`(감시 카운트 + 1 tick 양보), 존재 확인은 `fopen("rb")`, 용량 정리는 하루 1회(11/20 트렌드 저장으로 무한 리부팅 사례)
+- 부하 확인: 콘솔 `CPU`(부하율 + 태스크별 호출 누적), 기아 확인: `[LOWLAG]` 로그
+
+---
+
+## 5. 펌웨어 업데이트
 | 방법 | 절차 |
 |---|---|
 | **내장웹** | Administration > Firmware Update → `.bin` 선택 → Upload → Apply & Reboot (admin) |
@@ -78,9 +147,9 @@ CycloneTCP(웹·Modbus TCP·FTP·mDNS·SNMP·MQTT) + RTX, 내장웹(web.c) + 외
 
 ---
 
-## 4. 기본 설정 · 접속
+## 6. 기본 설정 · 접속
 
-### 4.1 공장초기화 기본값
+### 6.1 공장초기화 기본값
 | 항목 | 값 |
 |---|---|
 | DHCP | **ON**(7110=1). DHCP 응답이 15초 안에 없으면 **AutoIP 169.254.x.x** 로 동작(DHCP 는 계속 재시도, 받으면 AutoIP 해제) — PC 1:1·데이지체인 첫 접속용(11/17) |
@@ -88,10 +157,12 @@ CycloneTCP(웹·Modbus TCP·FTP·mDNS·SNMP·MQTT) + RTX, 내장웹(web.c) + 외
 | DNS | 168.126.63.1 |
 | Modbus TCP | ON(7150) / 502 |
 | MQTT · SNMP · Remote Link(7420) | OFF |
+| Timezone(7402) | 540분(서울) — 장치 시계는 UTC, 화면·파일 날짜·일/주/월 경계에만 더한다(§8) |
+| Max/Min 자동 초기화(7752) | **3 = Monthly**(0=None, 1=Daily, 2=Weekly = PQ Report Start Day 기준) — 11/20 구현, 종전엔 동작 안 함 |
 | 호스트명(mDNS) | `sv300-<SN>.local` (SN 9자리, 예 `sv300-250102003`) — sysName·DHCP·LLMNR 동일. 제품 라벨 접속 주소 |
 | 현재 IP 확인 | 내장웹 Setup > General > Communication **Current IP**(실제 사용 주소, AutoIP 는 "(Auto IP)") — 아래 IP Address 칸은 고정 IP 설정값 |
 
-### 4.2 계정
+### 6.2 계정
 | 대상 | 계정 | 권한 |
 |---|---|---|
 | 내장웹 | `ntek` / `0300` | admin (설정·명령·FW 업데이트) |
@@ -101,13 +172,13 @@ CycloneTCP(웹·Modbus TCP·FTP·mDNS·SNMP·MQTT) + RTX, 내장웹(web.c) + 외
 > 웹 세션은 서명 쿠키라 장비를 재부팅해도 재로그인이 필요 없다.
 > 원격 대시보드 **서명링크**(Ed25519 + 장비 nonce, `/auth/remoteNonce`·`/dashboard/`)는 7420=1 일 때만 동작(기본 OFF). 계정 ntek/sv300 동일 권한, 접속 기록은 General 'Remote Link' 카드
 
-### 4.3 설정 저장 규칙
+### 6.3 설정 저장 규칙
 - 웹/Modbus 로 설정을 쓰면 RAM 에만 반영된다 → **Save Settings(holding 7799 = 0x1234)** 로 flash 영속화
 - 일부 설정(네트워크, Modbus TCP 사용, MQTT 사용, SNMP 사용 여부·버전 등)은 **재부팅 후 반영**
 - **Init Settings(7814)** / 콘솔 `INITDB` = settings.dat 공장초기화 후 리셋. **교정값(FRAM METER_CAL)·알람설정·PQ 이벤트 정의·에너지는 보존**
 - 설정 백업/복원: confWebApp Maintenance > Config Import / Export (Main+Channel 레지스터 블록 JSON)
 
-### 4.4 디버그 콘솔 (UART 115200 8N1)
+### 6.4 디버그 콘솔 (UART 115200 8N1)
 | 명령 | 용도 |
 |---|---|
 | `DEVINFO` · `HWVER <n>` | 장치정보 / HW 버전 설정 |
@@ -128,19 +199,19 @@ CycloneTCP(웹·Modbus TCP·FTP·mDNS·SNMP·MQTT) + RTX, 내장웹(web.c) + 외
 | `ETH` · `ETHRST` | 이더넷 수신 누락 프레임 통계 (11/17) / PHY(KSZ8863) 리셋 핀 펄스 |
 | `TRVTRG` · `TRCTRG` | 파형 캡처 수동 트리거(전압 / 전류) |
 | `DEBUG <n>` · `FDON` / `FDOFF` | 디버그 출력 레벨 / 게이트웨이 디버그 출력 켬·끔 |
-| `DIR` · `TYPE` · `DEL` · `REN` · `COPY` · `FORMAT` | 파일시스템 (`DIR` 끝줄 = NOR 남은 용량, §8.2) |
-| `VG` · `IG` · `PH` · `WG` · `CLRVG` · `CLRIG` · `CLRPH` · `CLRWG` · `DCOS` · `CLROS` | 콘솔 교정·초기화(아래 §5 웹 교정 권장) |
+| `DIR` · `TYPE` · `DEL` · `REN` · `COPY` · `FORMAT` | 파일시스템 (`DIR` 끝줄 = NOR 남은 용량, §3.2) |
+| `VG` · `IG` · `PH` · `WG` · `CLRVG` · `CLRIG` · `CLRPH` · `CLRWG` · `DCOS` · `CLROS` | 콘솔 교정·초기화(아래 §7 웹 교정 권장) |
 
 - 종전 `WVF`(파형 스파이크 추적)는 제거됨. `BL+`/`BL-`(LCD 백라이트)는 SV300 LCD 없음 — 동작 안 함
 
 ---
 
-## 5. 교정(튜닝)
+## 7. 교정(튜닝)
 
 confWebApp **Calibration** 화면(SUPER ADMIN)에서 **채널 단위**로 교정한다.
 Channel 1~3 = 미터칩 M0~M2, 각 채널 3상 = Feeder 1~3 / 4~6 / 7~9. 채널 안의 상(L1~L3)은 각자 따로 보정값을 계산한다.
 
-### 5.1 레지스터 · 명령 코드
+### 7.1 레지스터 · 명령 코드
 | 레지스터 | 내용 |
 |---|---|
 | 7800 / 7801~7803 | 교정 명령 ALL / Channel 1~3 (값 = code) |
@@ -161,7 +232,7 @@ Channel 1~3 = 미터칩 M0~M2, 각 채널 3상 = Feeder 1~3 / 4~6 / 7~9. 채널 
 - CAL MODE ON(code 0) 상태에서만 1~10·13~18 이 동작한다. 교정 결과는 RAM → code 12 로 저장
 - confWebApp **WRITE** = 7810~7813 기록 + code 0 (Cali/Init 전송 시 자동 선행), **SAVE** = code 12 + code 11
 
-### 5.2 보정값이 저장되는 단위 (절차의 근거)
+### 7.2 보정값이 저장되는 단위 (절차의 근거)
 | 보정 | 저장 단위 | 의미 |
 |---|---|---|
 | 전압 VGAIN | 채널 × 상 × **전압입력 L1/L2/L3** × PT2 범위 | 같은 상 채널이라도 L1·L2·L3 입력마다 따로 → **1P2W(L1)/(L2)/(L3) 3회 교정** |
@@ -173,14 +244,14 @@ Channel 1~3 = 미터칩 M0~M2, 각 채널 3상 = Feeder 1~3 / 4~6 / 7~9. 채널 
 - PT2 ≥150 / <150 은 별도 게인표다 — 현장에서 쓰는 PT2 범위로 교정한다(둘 다 쓰면 둘 다)
 - 3P4W 는 상 j 에 Lj 입력 → 1P2W 3회 교정으로 함께 커버된다
 
-### 5.3 준비
+### 7.3 준비
 - 정전압·정전류 소스 3상: 전압 정격(예 110V), 전류 정격(예 1A), **전류 위상 60° 지상**(I 가 V 보다 늦음)
   - RCJB-903S 는 **−60°** 로 입력. 소스 표기는 장비마다 다르므로 아래 위상 확인으로 판단한다
   - 소스는 교정 내내 이 상태로 둔다 (전압·전류 교정은 위상과 무관)
 - 소스 주파수 = 장비 FREQ 설정(7520), CT 설정(CT1·CT2 종류)이 실제와 같을 것
 - CT_100mA 전류 PGA 는 **1x**(10/19 검토한 2x 안은 채택하지 않음)
 
-### 5.4 절차
+### 7.4 절차
 > ★ 장비의 CAL MODE·기준값은 RAM 이라 **재부팅하면 지워진다**. confWebApp 은 기준값을 **브라우저에 저장**해 두고
 > Cali/Init/ALL CLEAR 를 누를 때마다 **기준값 + CAL MODE ON 을 자동으로 다시 보낸다** — 재부팅 후 WRITE 를 따로 누를 필요 없다.
 > (WRITE 는 기준값 확인용. 다른 PC·브라우저에서는 기준값을 다시 입력)
@@ -224,7 +295,7 @@ Channel 1~3 = 미터칩 M0~M2, 각 채널 3상 = Feeder 1~3 / 4~6 / 7~9. 채널 
 - Temp: 실온에서 Cali (기준온도 = Temp-ref)
 - 마지막에 **REPORT** 로 엑셀 성적서
 
-### 5.5 검토: 상별(L1~L3) 튜닝값 저장 (2026-10-16)
+### 7.5 검토: 상별(L1~L3) 튜닝값 저장 (2026-10-16)
 단상 피더는 채널의 어느 CT 슬롯에든 L1·L2·L3 중 아무 전압이나 물릴 수 있으므로, 전압 보정값을 입력 상(L1~L3)별로 나눠 둔다.
 
 **저장 — 정상**
@@ -239,7 +310,7 @@ Channel 1~3 = 미터칩 M0~M2, 각 채널 3상 = Feeder 1~3 / 4~6 / 7~9. 채널 
 2. **1P2W 2·3번 슬롯 전력·전력량 복구**: 1P2W 를 '미터 1개 = 피더 1개'로 보던 옛 코드의 `i != 0` 지움을 삭제([ade9000.c](src/ade9000.c) 전력, [meter.c](src/meter.c) energy_scan) → 피더 2·3·5·6·8·9 의 W·VAR·VA·전력량·수요 표시
    - ※ 이 수정 이전 펌웨어로 운용한 1P2W 피더 2·3·5·6·8·9 의 누적 전력량은 0 이었다
 
-### 5.6 검토: Power 교정이 필요한 이유 (2026-10-19 검토 — `setGainW` VA 방식은 11/06 반영, 누적은 미채택·PGA 2x 미채택)
+### 7.6 검토: Power 교정이 필요한 이유 (2026-10-19 검토 — `setGainW` VA 방식은 11/06 반영, 누적은 미채택·PGA 2x 미채택)
 - 위상 교정 후에도 W·VAR·VA 가 모두 약 **−2.3%** 였다. 실제 위상각 atan(VAR/W) 은 60.0±0.06° 로 정상 → 위상이 아니라 **전력 크기** 문제
 - 전력 레지스터는 PWR_TIME+1 = 8000 샘플 누적을 8192 로 나눈 값으로 보이며(8000/8192 = 0.977), 이를 보정하는 `*8192/8000` 이 `scalePowerAcc`·`scaleEnergy` 에서 주석 처리돼 있다(GEMS7100 도 동일). 이 차이를 **Power Cali(APGAIN)** 가 흡수한다 — 전력량도 함께 맞는다
 - `setGainW` 를 V·I/W(PF=1 전용) → **V·I/VA(위상 무관)** 로 변경해 60° 상태에서 바로 교정한다(11/06 반영, 덮어쓰기 유지)
@@ -247,10 +318,10 @@ Channel 1~3 = 미터칩 M0~M2, 각 채널 3상 = Feeder 1~3 / 4~6 / 7~9. 채널 
 
 ---
 
-## 6. 주요 명령 레지스터 (holding, 값 0x1234)
+## 8. 주요 명령 레지스터 (holding, 값 0x1234)
 | 주소 | 명령 | 비고 |
 |---|---|---|
-| 7788 | UTC Time | uint32, 로컬시각을 epoch 처럼 기록(장비 RTC = 로컬) |
+| 7788 | UTC Time | uint32, **UTC epoch**(11/20~, 장비 RTC 도 UTC) |
 | 7798 | Reboot | |
 | 7799 | Save Settings | |
 | 7814 | Init Settings | 공장초기화 |
@@ -258,12 +329,13 @@ Channel 1~3 = 미터칩 M0~M2, 각 채널 3상 = Feeder 1~3 / 4~6 / 7~9. 채널 
 | 7828~ / 7832~ | Clear alarm / event | |
 | 7844~ / 7848~ | Alarm / Event Ack | |
 
-> 시각 규약: 장치는 시간을 **로컬(KST) epoch** 로 저장한다. 표시는 브라우저 tz 미적용(getUTC*). SNTP 동기 시에만 Timezone(7402) 사용.
+> 시각 규약(26/11/20~): 장치 시계·기록 시각·Modbus 시각은 **UTC epoch**. 화면·파일 날짜·일/주/월 경계는 UTC + Timezone(7402).
+> 코드: epoch→현지 날짜는 `uLocalTime()`(+`TZ_SEC`), 현지 날짜→epoch 는 `mktime() - TZ_SEC`. 외장 RTC 변환에는 `uLocalTime` 을 쓰지 않는다(재부팅 +9h 사례). 11/20 이전 장비는 SNTP·시각 설정 1회로 정상화.
 > 주소는 `MBAD_SET_TS`(7788) 기준 고정 — [meter.h](src/meter.h) 컴파일 타임 검사(`mbad_cmds_check`)로 구조체가 밀리면 빌드 에러.
 
 ---
 
-## 7. 통신 설정 (holding 7110~7519, 2026-10-28 재배치)
+## 9. 통신 설정 (holding 7110~7519, 2026-10-28 재배치)
 | 주소 | 묶음 | 주요 항목 |
 |---|---|---|
 | 7110~7149 | Ethernet | DHCP 7110, IP 7111, Subnet 7115, Gateway 7119, DNS 7123, 호스트명 7127(16워드) |
@@ -277,33 +349,3 @@ Channel 1~3 = 미터칩 M0~M2, 각 채널 3상 = Feeder 1~3 / 4~6 / 7~9. 채널 
 - 문자열은 1워드 = 2글자, **하위 바이트가 앞 글자**, NUL 종료 (confWebApp 코덱 word_order=big·byte_order=little)
 - 비밀번호(MQTT·SNMPv3)도 Modbus 로 읽고 쓸 수 있다. MQTT TLS 미지원
 - 설정 필드 주소는 `MBAD_SET_FIELD(comm.xxx)`(offsetof) 로 계산 — 메모리맵 `memorymap/SV300 memory map_261120.xlsx`
-
----
-
-## 8. 메모리 사용 현황 (일정 마감 시 갱신)
-
-> 기준: **2026-11-20**, 필드 타깃 `SV300_3CH_app_16M`(`SV300_3CH_app` 동일), 11/20 마감 커밋 빌드(UTC 시계·FFT 3초·Max/Min·내장웹 SV900 설정·관리·PQ·Report 주 선택 포함), 0E/0W.
-> 수치 출처: `keil/<타깃>.map` 의 Load/Execution Region. NOR 사용량은 장비 콘솔 `DIR`(파일 합계·`bytes free`)로 확인한다.
-
-### 8.1 내부 메모리 (LPC4357)
-
-| 영역 | 주소 | 용도 | 크기 | 사용 | 남음 |
-|---|---|---|---|---|---|
-| Flash Bank A — 부트로더 | 0x1A000000 | `SV300_boot` (약 67KB, 섹터 0~8) | 128KB | 약 67KB | 앱 배치 경계 — 쓰지 않음 |
-| **Flash Bank A — 앱** | 0x1A020000 | 펌웨어 코드·상수·초기값, 내장웹(gzip 36,122B) | 384KB (0x60000) | **357,748B** | **35,468B (34.6KB, 9.0%)** |
-| Flash Bank B | 0x1B000000 | 미사용 | 512KB | 0 | 512KB — 앱 확장 후보(부트로더·scatter 변경 필요) |
-| EEPROM | 0x20040000 | 교정값 `METER_CAL`(836B, `storeHwSettings`) | 16KB | 836B | 약 15.2KB |
-| SRAM 0x2000 (RW_IRAM1) | 0x20000000 | RW/ZI 변수 | 64KB | 57,296B | 8,240B |
-| SRAM 0x1000 (RW_IRAM2) | 0x10000000 | RW/ZI 변수 | 32KB | 24,528B | 8,240B |
-| SRAM 스택 | 0x10082000 | MSP 스택 | 32KB | 32KB(고정) | — |
-
-### 8.2 외부 메모리
-
-| 장치 | 용도 | 크기 | 사용 | 남음 |
-|---|---|---|---|---|
-| **SDRAM** (0x28000000) | 힙 1MB(`ARM_LIB_HEAP`) + `RW_RAM1`(EXT_RAM: 파형·FFT·로그 버퍼, meter/iom/소켓/RTX/FS 변수) | 32MB | 힙 1MB + 5,727,080B = **약 6.46MB** | **약 25.5MB** |
-| **SPI NOR** (HWV2 `MX25L12835F`) | RL-FlashFS(EFS) 전체: `settings.dat`, 알람·PQE 정의, PQ 주/일 보고서(`pq_q*`), 에너지 로그(15분·일·월), 트렌드, 파형 캡처, 이벤트 로그, `\system\snmp.d`(engineBoots), 웹 세션키·원격로그인 기록, 웹 사이드바 로고 `\system\logo.d`(최대 64KB, 11/19), FW 업로드 `usrApp.bin`(최대 1MB) | 16MB (구형 `MX25L1636E` 2MB 자동 대응) | 장비별 — 콘솔 `DIR` | 장비별 — 콘솔 `DIR` |
-| **FRAM** (I2C `FM24CL64`) | 에너지 누적 `ENERGY_NVRAM` 교대 2슬롯: #1 0~1167, #2 4096~5263 (seq·쓰기 후 검증). 512(옛 2번째 위치)는 업데이트 첫 부팅 이전만 읽음 | 8KB | 2,336B | 5,856B |
-
-- FRAM 의 수요(`storeDemandNVR` 2048~)·에너지 로그(`storeEnergyLogNVR` 1024~)는 **호출처 없음**(수요·에너지 로그는 NOR 파일로 저장). 다시 쓰면 에너지 #1(0~1167)·#2(4096~)와 겹치므로 위치 재배치가 먼저다.
-- 내부 플래시 여유 추이: 11/16 57.9KB(gzip 적용 직후) → 11/18 45.1KB → 11/19 39.2KB(Feeder·로그 조회 API·로고 업로드·SV900 화면) → 11/20 34.6KB(설정·관리·PQ 화면 SV900, Report 주 선택)

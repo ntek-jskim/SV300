@@ -2,12 +2,78 @@
 
 > 운영 규칙: 끝낸 항목은 이 목록에서 **삭제**하고, 결과는 [WORKLOG.md](WORKLOG.md)·[FWUPDATE](FWUPDATE) 에 남긴다.
 > 출처: 2026-10-16 위상교정 조사, 08/28 차주 계획, FWUPDATE 의 "실기 검증 필요/예정/보류" 표기, [snmp.md](snmp.md) §8.
-> 기준 코드: main `47fd006`(26/11/16 마감2) + 11/17 미커밋(AutoIP·Current IP·COMM LED·PQ Report 설정 UI). confWebApp 할 일은 [../confWebApp/TODO.md](../confWebApp/TODO.md)
+> 기준 코드: main `ab9b36a`(26/11/20 마감). 26/11/23 실기 A단계 합격(UTC 시계·정적파일 404·PQ Report UI·Modbus RX·COMM LED(Modbus/SNMP)·SNMPv3 SHA-256·AutoIP) → 해당 항목 삭제. confWebApp 할 일은 [../confWebApp/TODO.md](../confWebApp/TODO.md)
 >
 > 항목 형식: **상태**(지금 어디까지 됐나) · **현상**(겉으로 보이는 증상) · **문제**(원인) · **해결**(고칠 방법) · **시험 방법**(고친 뒤 확인 절차)
 >
 > 교정 명령 코드(공통): Modbus 교정 명령 레지스터에 아래 **코드 값**을 쓴다(confWebApp Calibration 화면이 같은 동작).
 > `0`=교정 시작(잠금 해제) · `1`=전압 · `2`=전류 · `3`=전력 · `4`=위상 · `5~8`=전압/전류/전력/위상 보정값 지움 · `11`=교정 종료 · `12`=보정값 저장(FRAM)
+
+---
+
+## ★ 진행 순서 (26/11/23 작성 — 위에서부터 진행, 끝나면 `[x]` 후 아래 해당 절 삭제)
+
+결선 변경이 적은 순서. 세부 절차·판정은 오른쪽 절 번호 참조. A단계(신호 없이 확인)는 26/11/23 모두 합격.
+
+### 0. 시작 전 (10분)
+- [ ] 현재 교정값 백업 (confWebApp Calibration REPORT 또는 화면 캡처) — B단계에서 보정값을 덮어쓰고 지움
+- [ ] `SV300_3CH_app_16M` 다운로드, 부팅 로그 빌드일 확인, 콘솔 로그 저장 켜기(F단계까지 계속)
+
+### 1순위 — B. 교정 (3P4W 220V·5A·60Hz, 2~3시간, **이 순서대로**)
+- [ ] B1 전압 가드: 기준 110 입력 → `vg : … skip` → 220 으로 정상 교정 (3.10-4·5)
+- [ ] B2 V·I 반복 교정: PF 1, `1`·`2` 4~5회 반복해도 보정값이 한쪽으로 계속 변하지 않음 (3.6-1~3)
+- [ ] B3 위상 반복: PF 0.5 지상 `4` → 2초 뒤 한 번 더, err≈0·total 유지 (3.7-1, 3.6-4)
+- [ ] B4 위상 안전장치: 진상 / 한 상 CT 역결선 / 한 상 전류 없음 / PF 1 → 보정값(old) 변화 없음 (3.7-2~5)
+- [ ] B5 PF 0.5 지상 상태로 되돌려 `12` 저장 → 재부팅 → 오차 유지 (3.6-5)
+- [ ] B6 보정값 지움(`5`·`6`·`8`) → 2초 → 교정 1회 → 종전과 같은 결과 (3.6-6)
+- [ ] B7 Calibration 표 W ≈ 550W 판정, 한 상 전류 빼면 그 피더만 빨간색 (3.10-1·2)
+- [ ] B8 AUTO CAL 13단계 끝까지 → 마지막 REPORT **PASS** (3.3, 3.10-3)
+
+### 2순위 — C. 3P4W 신호 그대로 계측·화면 (1시간)
+- [ ] C1 `FFTTEST` 993/493/294/1147·GZ≈7ms, `CPU` 부하, 웹 Harmonics (3.12)
+- [ ] C2 평형 5A 에서 In calc ≈ 0 (3.9-2)
+- [ ] C3 Dashboard CH1~3·Imp. kWh·알람 버튼 색·768px (3.8)
+- [ ] C4 알람 설정 재부팅 없이 적용 1~6 + SNMP Trap (3.4)
+- [ ] C5 `[EGY] spike` 없음, `SPICRC` fail 증가 없음 (3.14-1·4)
+
+### 3순위 — D. 결선 변경 (반나절)
+- [ ] D1 3P3W(QZ3CT): 한 선 ZCT 밖 → Ig ≈ 그 선 전류, 2A 넘어도 안 잘림 (3.9-4-1)
+- [ ] D2 피더별 다른 상: `vg:` (L1)/(L2)/(L3) = 결선, 3P3W 도 1회 (3.2) — 시험 장비는 3상 전압 동일이라 표시·오차만 판정
+- [ ] D3 1P2W × 9: Feeder #1~#9·위상 0/0/0 → 3P4W 복귀 회귀 없음 (3.11)
+- [ ] D4 1P2W × 3 피더 1/2/3A: 1시간 전력량·15분 수요·합계 (3.1), Ig 표시 (3.9-4-2·6)
+- [ ] D 끝: 3.1·3.2 합격이면 `stash@{1}` 삭제 (1.1)
+
+### 4순위 — E. 50Hz (1시간, 교정 끝난 뒤 맨 마지막)
+- [ ] 50Hz Save → 재부팅 → `ACCMODE = 0 (50Hz)` → 오차·위상 교정·THD (3.5-1~5)
+- [ ] ★60Hz 로 되돌린 뒤 PF 0.5 지상 `4` 위상 재교정 → `12` 저장 → 3.5-6 (50Hz 위상 교정이 보정값을 덮어씀)
+
+### 5순위 — F. 장시간 운전 (저녁 시작, 24시간 이상)
+- [ ] 3P4W 정상 입력, **Max/Min 초기화 = Daily**, 콘솔 로그 켠 채
+- [ ] 다음 날: `program FAIL` 뒤 모두 `verified ok`/`retry ok` (4.1) · 00:03 `FSLAG energy` 수 초 이하 (4.2) · 자정에 Max/Min 초기화 · `store Energy @0/@4096` 교대·재부팅 후 유지 (3.14-3) · 리셋·`ZX timeout` 0
+
+### 6순위 — SV400 실기 (빌드 26/11/23 0E/2W·플래시 남음 29.7KB 확인)
+- [ ] UTC 시계·재부팅 유지, Max/Min 자동 초기화, 내장웹 SV900 화면
+- [ ] 정적파일 404 (로그인 없이 `/system/websec.d`), Modbus RX·SNMPv3 SHA-256
+- [ ] ★COMM LED 가 계속 켜져 있었음(26/11/23 관찰, 당시 Modbus 요청 유무 불명) → Modbus 요청 중 토글 여부 확인
+
+### 장비·환경이 있을 때
+- [ ] EN50160 리포트 상별(L2·L3) 값 — 상마다 다른 전압을 낼 수 있는 전원 필요
+- [ ] MQTT 발행 시 COMM LED (3.15) — 브로커 필요
+- [ ] 2CH 온도 (3.13) — `SV300_app` 2CH 빌드·2CH 보드 필요
+- [ ] ZCT Type 2 (3.9-8) — 200mA:1.5mA ZCT 필요
+
+### 결정 필요 (코드 수정 여부)
+- [ ] Feeder↔Channel 혼합 제약: 3상 먼저·단상 뒤 순서만 안전 — 고칠지 (11/19 미결)
+- [ ] RS-485 RTU Modbus RX 가 **다른 장치 ID 프레임까지 셈**([smb_rtu.c](src/smb_rtu.c) → `modbusSlvProcFrame`) — 이 장비 앞 요청만 셀지. 사내망 연결 시 RX 초당 ~5.7 증가는 RS-485/다른 PC 중 어느 쪽인지 미구분
+- [ ] 콘솔 `SNMPCFG` 가 v3 Auth/Priv 비밀번호를 평문 출력([FS.c](src/FS.c) `snmpcfgPrint`) — 출하 전 가릴지
+- [ ] [board.c](lpc_board/boards_43xx/board.c) LED 초기화 루프 `i<4` 인데 `LED_GPIO` 는 3개 — 배열 밖 값으로 임의 핀을 출력 설정(기존 버그, 증상 없음)
+- [ ] MQTT 최소 주기 10초(7162, [meter.c](src/meter.c) 정규화) — 더 짧게 할 필요 있는지
+
+### 기능 (일정 협의)
+- [ ] 원격 서명링크 Ed25519 FW 구현 (PC 검증 완료, FW 미착수)
+- [ ] SNMP 자사 계측 MIB·`SV300-MIB.mib` (5.1, [snmp.md](snmp.md) §8)
+- [ ] confWebApp 설치판 실행 확인·코드 서명 인증서 ([../confWebApp/TODO.md](../confWebApp/TODO.md))
+- [ ] 보류: 플리커 Pst/Plt (5.2), M1/M2 크로스토크·GEMS THD 비교 (6)
 
 ---
 
@@ -193,24 +259,9 @@
   3. 부팅 로그 `Energy loaded from FRAM @x (seq=n)` — 저장마다 `store Energy @0/@4096` 교대·seq 증가, 재부팅 후 값 유지
   4. `SPICRC`: 부팅 직후 fail 칩당 약 5(부팅 시 반복값을 보내지 않는 init 레지스터)·이후 증가 없음, ZX timeout 로그 증가 없음
 
-### 3.15 첫 접속 — DHCP 실패 시 AutoIP + Current IP 표시 (26/11/17, 미커밋)
-- **상태**: SV300·SV400 빌드 0E/0W. **PC 1:1(PC 자동 IP)로 `sv300-<SN>.local` 접속 확인(11/17)**. 나머지 미확인
-- **해결(반영됨)**: [net_config.h](src/net_config.h) `IPV4_ADDR_LIST_SIZE 2`·`AUTO_IP_SUPPORT`, [main.c](src/main.c) DHCP 15초 시간 초과 → AutoIP(주소 슬롯 1), DHCP 할당 시 AutoIP 해제·mDNS 재공지, [web.c](src/web.c) Communication 카드 **Current IP**
-- **시험 방법**
-  1. 장비 여러 대 데이지체인 + 체인 끝에 PC → 각 라벨 주소 접속, Current IP 가 장비마다 다름
-  2. AutoIP 상태에서 공유기 연결 → 콘솔 `AutoIP stopped (DHCP bound)`, Current IP 가 DHCP 주소 하나만
-  3. 케이블 뽑았다 꽂기·재부팅 후 다시 접속, DHCP OFF(고정 IP) 장비는 종전과 같음
-  4. IpScan(멀티캐스트 검색) 응답 IP 가 AutoIP 주소
-
-### 3.16 COMM LED — Modbus TCP·SNMP·MQTT 송신 시 토글 (26/11/17, 미커밋)
-- **상태**: SV300·SV400 빌드 0E/0W, 실기 미확인
-- **현상(수정 전)**: COMM LED 가 부팅 후 계속 켜짐(토글 코드가 옛 RL-TCPnet·W5500 경로에만 있었음)
-- **해결(반영됨)**: [app_main.c](src/app_main.c) `commLedPulse()` — Modbus TCP `modbusServerUnlockCallback`(요청당 1회), SNMP 응답(`snmp_agent.c` 송신 직후, 라이브러리 수정)·Trap 송신 성공, MQTT 발행 성공
-- **시험 방법**: Modbus 폴링 중 깜빡임 / `snmpget`·Trap 발생 시 반전 / MQTT 주기마다 반전 / 웹만 접속 시 변화 없음
-
-### 3.17 내장웹 PQ Report 설정 — Start Day 드롭다운·CH1 만 표시 (26/11/17, 미커밋)
-- **상태**: SV300·SV400 빌드 0E/0W, 내장 JS 문법 검사 통과. 브라우저 화면 미확인
-- **시험 방법**: Setup > Channel Setting > PQ Report → CH1 카드만, Start Day 가 Sun~Sat 선택, 바꿔 Save 후 레지스터 6845(CH1) 값이 0~6 으로 저장, 다른 탭(PQ Event·Trend 등)은 채널 카드 종전과 같음
+### 3.15 COMM LED — MQTT 발행 시 토글 (3.16 의 남은 부분)
+- **상태**: Modbus TCP 요청·SNMPv3 응답 시 토글은 실기 합격(26/11/23). MQTT 는 브로커 연결 환경에서 미확인
+- **시험 방법**: MQTT ON(Publish Interval 최소 10초) → 발행 주기마다 COMM LED 반전, 콘솔 `[MQTT] publish failed` 없음
 
 ---
 
